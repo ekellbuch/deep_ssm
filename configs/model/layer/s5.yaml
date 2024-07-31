@@ -1,0 +1,42 @@
+_name_: s5
+ssm_size: 384
+blocks: 3
+bidirectional: true
+C_init: lecun_normal
+clip_eigs: true
+batchnorm: true
+conj_sym: true
+
+# did not integrate yet
+#lr_factor: 4.5
+#opt_config: BfastandCdecay
+#ssm_lr_base: 0.001
+#ssm_size_base: 384
+#warmup_end: 1
+#weight_decay: 0.07
+
+
+
+
+# original
+#C_init: lecun_normal
+#batchnorm: true
+#bidirectional: true
+#blocks: 3
+#clip_eigs: True
+
+#bsz: 50
+#d_model: 512
+#epochs: 250
+#dataset: lra-cifar-classification
+#jax_seed: 16416
+#p_dropout: 0.1
+#n_layers: 6
+
+
+#lr_factor: 4.5
+#opt_config: BfastandCdecay
+#ssm_lr_base: 0.001
+#ssm_size_base: 384
+#warmup_end: 1
+#weight_decay: 0.07
