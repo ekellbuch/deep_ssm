@@ -224,7 +224,9 @@ class S5SSM(torch.nn.Module):
       C_init = lecun_normal()
       # C_shape = (H, local_P, 2)
     elif self.C_init in ["complex_normal"]:
-      C_init = torch.normal(0, 0.5 ** 0.5, (H, P, 2), dtype=torch.complex)
+      C1 = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
+      C2 = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
+      C_init = torch.complex(C1, C2)
     else:
       raise NotImplementedError(
         "C_init method {} not implemented".format(self.C_init))
