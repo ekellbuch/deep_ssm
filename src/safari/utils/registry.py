@@ -38,7 +38,6 @@ layer = {
     "hyena": "safari.models.sequence.hyena.HyenaOperator",
     "hyena-filter": "safari.models.sequence.hyena.HyenaFilter",
     "vit": "safari.models.sequence.mha.VitAttention",
-    "s5": "deep_ssm.models"
 }
 
 callbacks = {
