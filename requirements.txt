@@ -1,0 +1,10 @@
+datasets==2.4.0
+omegaconf==2.2.3
+ml-collections==0.1.1
+hydra-core==1.2.0
+pandas
+pytorch-lightning==2.3.3
+scikit-learn==1.5.1
+transformers==4.42.4
+wandb
+torchtyping
