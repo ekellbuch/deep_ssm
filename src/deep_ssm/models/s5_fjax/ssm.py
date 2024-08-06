@@ -85,10 +85,10 @@ def apply_ssm(
   C_tilde: TensorType["num_features", "num_states"],
   D: TensorType["num_features"],
   input_sequence: TensorType["seq_length", "num_features"],
-  prev_state: TensorType["num_states"],
   conj_sym: bool = False,
   bidirectional: bool = False,
-) -> Tuple[TensorType["seq_length", "num_features"], TensorType["num_states"]]:
+) -> Tuple[TensorType["seq_length", "num_features"],
+    TensorType["num_states"]]:
   """
   Apply a linear state-space model to an input sequence x_t and return y_{t+1}:
     x_{t+1} = A x_t + B u
@@ -99,7 +99,6 @@ def apply_ssm(
   :param C_tilde: output matrix
   :param D: feedthrough matrix
   :param input_sequence:
-  :param prev_state:
   :param conj_sym:
   :param bidirectional:
   :return:  y, state
@@ -118,10 +117,6 @@ def apply_ssm(
 
   if Lambda_bars.ndim == 1:  # Repeat for associative_scan
     Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
-
-  # initialize the state with the prev_state
-  if prev_state is not None:
-    Bu_elements[0] = Bu_elements[0] + prev_state * Lambda_bars[0]
 
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u
   _, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
@@ -299,22 +294,28 @@ class S5SSM(torch.nn.Module):
   # NOTE: can only be used as RNN OR S5(MIMO) (no mixing)
   def forward(self,
               signal: TensorType["batch_size", "seq_length", "num_features"],
-              prev_state: TensorType["batch_size", "num_states"],
+              prev_state: Optional[TensorType["batch_size", "num_states"]] = None,
               step_rescale: Union[float, torch.Tensor] = 1.0):
 
+    # get complex B and C
     B_tilde, C_tilde = self.get_BC_tilde()
+
+    # get lambda
     Lambda = self.get_lambda()
 
+    # set discretization step
     if not torch.is_tensor(step_rescale) or step_rescale.ndim == 0:
       step_scale = step_rescale * torch.exp(self.log_step)
     else:
       # TODO: include invididual steps for discretize
       step_scale = step_rescale[:, None] * torch.exp(self.log_step)
 
+    # discretize A, B
     Lambda_bar, B_bar = self.discretize(Lambda, B_tilde, step_scale)
 
+    # calculate y
     return apply_ssm(
-      Lambda_bar, B_bar, C_tilde, self.D, signal, prev_state, conj_sym=self.conj_sym, bidirectional=self.bidirectional
+      Lambda_bar, B_bar, C_tilde, self.D, signal, conj_sym=self.conj_sym, bidirectional=self.bidirectional
     )
 
   def step(self,
@@ -407,14 +408,19 @@ class S5(torch.nn.Module):
   def forward(self,
               signal: TensorType["batch_size", "seq_length", "num_features"],
               prev_state: Optional[TensorType["batch_size", "num_states"]] = None,
-              ):
-    # TODO: include step_rescale?
-    if prev_state is None:
-      prev_state = self.initial_state(signal.shape[0]).to(signal.device)
-    return torch.vmap(lambda s, ps: self.seq(s, prev_state=ps))(
-      signal, prev_state
-    )
+              rate: Union[float, torch.Tensor] = 1.0):
 
+    if prev_state is None:
+      return torch.vmap(lambda s: self.seq(s, step_rescale=rate))(signal)
+    else:
+      return torch.vmap(lambda s, ps: self.seq(s, prev_state=ps, step_rescale=rate))(signal, prev_state)
+
+  def step(self,
+        signal: TensorType["batch_size", "seq_length", "num_features"],
+        prev_state: Optional[TensorType["batch_size", "num_states"]] = None,
+        rate: Union[float, torch.Tensor] = 1.0):
+
+    return self.seq(signal, prev_state, step_rescale=rate)
 
 class GEGLU(torch.nn.Module):
   def forward(self, x):
@@ -511,20 +517,20 @@ class S5Layer(torch.nn.Module):
       state = self.seq.initial_state(x.shape[0])
 
     # Apply sequence model
-    x, new_state = self.seq(x, state)
+    x, new_state = self.seq(signal=x, prev_state=state, **kwargs)
 
     x = self.apply_activation(x)
 
     return x, new_state
 
-  def step(self, x, state):
+  def step(self, x, state, **kwargs):
     """
     Step as a recurrent model, and apply continuously
 
     """
     # pass through step:
     # unroll
-    x, new_state = self.seq(x, state)
+    x, new_state = self.seq.step(x, state, **kwargs)
     x = self.apply_activation(x)
 
     return x, new_state
