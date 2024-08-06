@@ -30,8 +30,11 @@ def discretize_bilinear(Lambda: TensorType["num_states"],
   # TODO: check complex vs real
   # Lambda = torch.view_as_complex(Lambda)
   Identity = torch.ones(Lambda.shape[0], device=Lambda.device)
+  # compute bilinear transform
   BL = 1 / (Identity - (Delta / 2.0) * Lambda)
+  # discretize the state matrix
   Lambda_bar = BL * (Identity + (Delta / 2.0) * Lambda)
+  # discretize the input matrix
   B_bar = (BL * Delta)[..., None] * B_tilde
 
   # Lambda_bar = torch.view_as_real(Lambda_bar)
@@ -85,10 +88,10 @@ def apply_ssm(
 ) -> Tuple[TensorType["seq_length", "num_features"], TensorType["num_states"]]:
   """
   Apply a linear state-space model to an input sequence.
-  :param Lambda_bars (torch.Tensor):
-  :param B_bars:
-  :param C_tilde:
-  :param D:
+  :param Lambda_bars: diagonal state matrix
+  :param B_bars: input matrix
+  :param C_tilde: output matrix
+  :param D: feedthrough matrix
   :param input_sequence:
   :param prev_state:
   :param conj_sym:
@@ -99,6 +102,7 @@ def apply_ssm(
     Lambda_bars.dtype
   )  # Cast to correct complex type
 
+  # compute Bu elements
   if B_bars.ndim == 3:
     # Dynamic timesteps (significantly more expensive)
     Bu_elements = torch.vmap(lambda B_bar, u: B_bar @ u)(B_bars, cinput_sequence)
@@ -109,11 +113,12 @@ def apply_ssm(
   if Lambda_bars.ndim == 1:  # Repeat for associative_scan
     Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
 
-  # TODO: use prev_state?
-  #if prev_state is not None:
+  # initialize the state with the prev_state
+  if prev_state is not None:
+    Bu_elements[0] = Bu_elements[0] + prev_state * Lambda_bars[0]
 
+  # compute state sequence using associative scan: x_{t+1} = A x_t + Bu
   _, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
-
 
   if bidirectional:
     _, xs2 = associative_scan(
@@ -121,14 +126,17 @@ def apply_ssm(
     )
     xs = torch.cat((xs, xs2), axis=-1)
 
+  # compute the feedthrough matrix:
   Du = torch.vmap(lambda u: D * u)(input_sequence)
 
   # TODO: the last element of xs (non-bidir) is the hidden state, allow returning it
-  if conj_sym:
-    return torch.vmap(lambda x: 2 * (C_tilde @ x).real)(xs) + Du, xs[-1]
-  else:
-    return torch.vmap(lambda x: (C_tilde @ x).real)(xs) + Du, xs[-1]
 
+  # compute SSM output sequence y = C_tilde x + Du
+  if conj_sym:
+    y = torch.vmap(lambda x: 2 * (C_tilde @ x).real)(xs) + Du
+  else:
+    y = torch.vmap(lambda x: (C_tilde @ x).real)(xs) + Du
+  return y, xs[-1]
 
 def as_complex(t: torch.Tensor, dtype=torch.complex64):
   assert t.shape[-1] == 2, "as_complex can only be done on tensors with shape=(...,2)"
