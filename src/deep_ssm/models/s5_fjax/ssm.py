@@ -43,7 +43,10 @@ def discretize_bilinear(Lambda: TensorType["num_states"],
   return Lambda_bar, B_bar
 
 
-def discretize_zoh(Lambda, B_tilde, Delta):
+def discretize_zoh(Lambda: TensorType["num_states"],
+                   B_tilde: TensorType["num_states", "num_features"],
+                   Delta: TensorType["num_states"]
+                   ) -> Tuple[TensorType["num_states"], TensorType["num_states", "num_features"]]:
   """Discretize a diagonalized, continuous-time linear SSM
   using zero-order hold method.
   Args:
@@ -87,7 +90,10 @@ def apply_ssm(
   bidirectional: bool = False,
 ) -> Tuple[TensorType["seq_length", "num_features"], TensorType["num_states"]]:
   """
-  Apply a linear state-space model to an input sequence.
+  Apply a linear state-space model to an input sequence x_t and return y_{t+1}:
+    x_{t+1} = A x_t + B u
+    y_{t+1} = C_tilde x_{t+1} + D u
+
   :param Lambda_bars: diagonal state matrix
   :param B_bars: input matrix
   :param C_tilde: output matrix
@@ -96,7 +102,7 @@ def apply_ssm(
   :param prev_state:
   :param conj_sym:
   :param bidirectional:
-  :return:
+  :return:  y, state
   """
   cinput_sequence = input_sequence.type(
     Lambda_bars.dtype
@@ -117,7 +123,7 @@ def apply_ssm(
   if prev_state is not None:
     Bu_elements[0] = Bu_elements[0] + prev_state * Lambda_bars[0]
 
-  # compute state sequence using associative scan: x_{t+1} = A x_t + Bu
+  # compute state sequence using associative scan: x_{t+1} = A x_t + B u
   _, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
 
   if bidirectional:
@@ -129,22 +135,14 @@ def apply_ssm(
   # compute the feedthrough matrix:
   Du = torch.vmap(lambda u: D * u)(input_sequence)
 
-  # TODO: the last element of xs (non-bidir) is the hidden state, allow returning it
+  # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it
 
-  # compute SSM output sequence y = C_tilde x + Du
+  # compute SSM output sequence y = C_tilde x + D u
   if conj_sym:
     y = torch.vmap(lambda x: 2 * (C_tilde @ x).real)(xs) + Du
   else:
     y = torch.vmap(lambda x: (C_tilde @ x).real)(xs) + Du
   return y, xs[-1]
-
-def as_complex(t: torch.Tensor, dtype=torch.complex64):
-  assert t.shape[-1] == 2, "as_complex can only be done on tensors with shape=(...,2)"
-  nt = torch.complex(t[..., 0], t[..., 1])
-  if nt.dtype != dtype:
-    nt = nt.type(dtype)
-  return nt
-
 
 Initialization = Literal["complex_normal", "lecun_normal", "truncate_standard_normal"]
 
@@ -255,7 +253,7 @@ class S5SSM(torch.nn.Module):
         C_real = torch.cat((C1[..., 0], C2[..., 0]), axis=-1)
         C_imag = torch.cat((C1[..., 1], C2[..., 1]), axis=-1)
 
-        C = torch.stack((C_real, C_imag), axis=-1, )
+        C = torch.stack((C_real, C_imag), axis=-1,)
         # has to be
         self.C = torch.nn.Parameter(C)
       else:
