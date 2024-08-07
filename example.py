@@ -219,8 +219,57 @@ class S5Model(nn.Module):
 
         return x
 
+def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_per_epoch):
+  """
+  S4 requires a specific optimizer setup.
 
-def setup_optimizer(model, lr, weight_decay, epochs):
+  The S4 layer (A, B, C, dt) parameters typically
+  require a smaller learning rate (typically 0.001), with no weight decay.
+
+  The rest of the model can be trained with a higher learning rate (e.g. 0.004, 0.01)
+  and weight decay (if desired).
+  """
+  # follow BfastandCdecay:
+  ssm_fn_list = ["Lambda_re", "Lambda_im", "log_step","norm"]
+  not_optim = []
+
+  lr = lr_factor * ssm_lr_base
+  ssm_lr = ssm_lr_base
+
+  def ssm_fn(param):
+    if any(keyword in param[0] for keyword in ssm_fn_list):
+      return 'ssm'
+    elif any(keyword in param[0] for keyword in not_optim):
+      return 'none'
+    else:
+      return 'regular'
+
+  # Separate parameter groups based on function
+  params = list(model.named_parameters())
+  param_groups = {'none': [], 'ssm': [], 'regular': []}
+  param_groups_names = {'none': [], 'ssm': [], 'regular': []}
+  for param in params:
+    group = ssm_fn(param)
+    param_groups[group].append(param[1])
+    param_groups_names[group].append(param[0])
+
+  # Define different optimizers for each group
+  optimizer = torch.optim.AdamW([
+    {'params': param_groups['none'], 'lr': 0.0, 'weight_decay': 0.0},
+    {'params': param_groups['ssm'], 'lr': ssm_lr, 'weight_decay': 0.0},
+    {'params': param_groups['regular'], 'lr': lr, 'weight_decay': weight_decay},
+  ])
+
+  # Create a lr scheduler
+  scheduler1 = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1/steps_per_epoch, total_iters=steps_per_epoch)
+  scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
+  scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[2])
+
+
+  return optimizer, scheduler
+
+
+def setup_optimizer_s4(model, lr, weight_decay, epochs):
   """
   S4 requires a specific optimizer setup.
 
@@ -290,18 +339,20 @@ def train():
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        #tqdm.write(
-        #    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-        #    (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
-        #)
+        if wandb.run:
+            wandb.log({"Train Loss": train_loss / (batch_idx + 1), "Train Accuracy": 100. * correct / total})
 
-        wandb.log({"Train Loss": train_loss / (batch_idx + 1), "Train Accuracy": 100. * correct / total})
+            # Log gradient norms
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    grad_norm = param.grad.norm().item()
+                    wandb.log({f"grad_norm/{name}": grad_norm})
+        else:
+            tqdm.write(
+            'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+            (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
+        )
 
-        # Log gradient norms
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                grad_norm = param.grad.norm().item()
-                wandb.log({f"grad_norm/{name}": grad_norm})
 
 
 def eval(epoch, dataloader, checkpoint=False):
@@ -321,12 +372,14 @@ def eval(epoch, dataloader, checkpoint=False):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            #tqdm.write(
-            #    'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-            #    (batch_idx, len(dataloader), eval_loss/(batch_idx+1), 100.*correct/total, correct, total)
-            #)
+            if wandb.run:
+                wandb.log({"Eval Loss": eval_loss / (batch_idx + 1), "Eval Accuracy": 100. * correct / total})
+            else:
+                tqdm.write(
+                  'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                  (batch_idx, len(dataloader), eval_loss/(batch_idx+1), 100.*correct/total, correct, total)
+              )
 
-            wandb.log({"Eval Loss": eval_loss / (batch_idx + 1), "Eval Accuracy": 100. * correct / total})
 
     # Save checkpoint.
     if checkpoint:
@@ -349,8 +402,9 @@ if __name__ == "__main__":
 
   parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
   # Optimizer
-  parser.add_argument('--lr', default=0.01, type=float, help='Learning rate')
-  parser.add_argument('--weight_decay', default=0.01, type=float, help='Weight decay')
+  parser.add_argument('--lr_factor', default=4.5, type=float, help='Learning rate factor')
+  parser.add_argument('--ssm_lr_base', default=0.001, type=float, help='SSM LR rate')
+  parser.add_argument('--weight_decay', default=0.07, type=float, help='Weight decay')
   # Scheduler
   # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
   parser.add_argument('--epochs', default=100, type=float, help='Training epochs')
@@ -378,8 +432,6 @@ if __name__ == "__main__":
 
   # Data
   print(f'==> Preparing {args.dataset} data..')
-
-
 
 
   if args.dataset == 'cifar10':
@@ -478,16 +530,22 @@ if __name__ == "__main__":
       start_epoch = checkpoint['epoch']
 
 
+  # steps_per_epoch
+  steps_per_epoch = len(trainloader)
   criterion = nn.CrossEntropyLoss()
   optimizer, scheduler = setup_optimizer(
-      model, lr=args.lr, weight_decay=args.weight_decay, epochs=args.epochs
+      model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay, epochs=args.epochs,
+      steps_per_epoch=steps_per_epoch,
   )
 
   for epoch in tqdm(range(start_epoch, args.epochs)):
       if epoch == 0:
           pass #tqdm.write('Epoch: %d' % (epoch))
       else:
-        wandb.log({"epoch": epoch, "Val Acc": val_acc})
+        if wandb.run:
+            wandb.log({"epoch": epoch, "Val Acc": val_acc})
+        else:
+            tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
       train()
       val_acc = eval(epoch, valloader, checkpoint=True)
       eval(epoch, testloader)
