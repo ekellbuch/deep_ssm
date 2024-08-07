@@ -355,7 +355,7 @@ def train():
 
 
 
-def eval(epoch, dataloader, checkpoint=False):
+def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
     global best_acc
     model.eval()
     eval_loss = 0
@@ -373,10 +373,10 @@ def eval(epoch, dataloader, checkpoint=False):
             correct += predicted.eq(targets).sum().item()
 
             if wandb.run:
-                wandb.log({"Eval Loss": eval_loss / (batch_idx + 1), "Eval Accuracy": 100. * correct / total})
+                wandb.log({f"{log_name} Loss": eval_loss / (batch_idx + 1), f"{log_name} Accuracy": 100. * correct / total})
             else:
                 tqdm.write(
-                  'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                  'Batch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
                   (batch_idx, len(dataloader), eval_loss/(batch_idx+1), 100.*correct/total, correct, total)
               )
 
@@ -547,7 +547,6 @@ if __name__ == "__main__":
         else:
             tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
       train()
-      val_acc = eval(epoch, valloader, checkpoint=True)
-      eval(epoch, testloader)
+      val_acc = eval(epoch, valloader, checkpoint=False, log_name='Val')
       scheduler.step()
-      # print(f"Epoch {epoch} learning rate: {scheduler.get_last_lr()}")
+  eval(epoch, testloader)
