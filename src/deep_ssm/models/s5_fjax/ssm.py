@@ -513,8 +513,8 @@ class S5Layer(torch.nn.Module):
               state: Optional[TensorType["batch_size", "num_states"]] = None,
               **kwargs):
 
-    if state is None:
-      state = self.seq.initial_state(x.shape[0])
+    #if state is None:
+    #  state = self.seq.initial_state(x.shape[0])
 
     # Apply sequence model
     x, new_state = self.seq(signal=x, prev_state=state, **kwargs)
