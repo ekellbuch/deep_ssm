@@ -297,6 +297,12 @@ def train():
 
         wandb.log({"Train Loss": train_loss / (batch_idx + 1), "Train Accuracy": 100. * correct / total})
 
+        # Log gradient norms
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                wandb.log({f"grad_norm/{name}": grad_norm})
+
 
 def eval(epoch, dataloader, checkpoint=False):
     global best_acc
