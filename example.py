@@ -339,19 +339,23 @@ def train():
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        if wandb.run:
-            wandb.log({"Train Loss": train_loss / (batch_idx + 1), "Train Accuracy": 100. * correct / total})
+    if wandb.run:
+        wandb.log({"Train Loss": train_loss / (batch_idx + 1), "Train Accuracy": 100. * correct / total})
 
-            # Log gradient norms
-            for name, param in model.named_parameters():
-                if param.grad is not None:
-                    grad_norm = param.grad.norm().item()
-                    wandb.log({f"grad_norm/{name}": grad_norm})
-        else:
-            tqdm.write(
-            'Batch Idx: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-            (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
-        )
+        # Log gradient norms
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                wandb.log({f"grad_norm/{name}": grad_norm})
+
+        # Log LR:
+        for i, param_group in enumerate(optimizer.param_groups):
+          wandb.log({f"lr/group_{i}": param_group['lr']})
+    else:
+        tqdm.write(
+        'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+        (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
+    )
 
 
 
@@ -372,18 +376,19 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            if wandb.run:
-                wandb.log({f"{log_name} Loss": eval_loss / (batch_idx + 1), f"{log_name} Accuracy": 100. * correct / total})
-            else:
-                tqdm.write(
-                  'Batch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
-                  (batch_idx, len(dataloader), eval_loss/(batch_idx+1), 100.*correct/total, correct, total)
-              )
+    acc = 100. * correct / total
+    eval_loss = eval_loss / (batch_idx + 1)
 
+    if wandb.run:
+      wandb.log({f"{log_name} Loss": eval_loss, f"{log_name} Accuracy": acc, "epoch": epoch})
+    else:
+      tqdm.write(
+        'Epoch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
+        (epoch, len(dataloader), eval_loss, acc, correct, total)
+      )
 
     # Save checkpoint.
     if checkpoint:
-        acc = 100.*correct/total
         if acc > best_acc:
             state = {
                 'model': model.state_dict(),
