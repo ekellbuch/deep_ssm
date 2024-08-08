@@ -265,7 +265,6 @@ def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_p
   scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
   scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[2])
 
-
   return optimizer, scheduler
 
 
@@ -356,8 +355,7 @@ def train():
         #tqdm.write(
         #'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
         #(batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
-    )
-
+    return
 
 
 def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
@@ -402,7 +400,7 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
             torch.save(state, './checkpoint/ckpt.pth')
             best_acc = acc
 
-        return acc
+    return acc
 
 
 if __name__ == "__main__":
@@ -519,8 +517,6 @@ if __name__ == "__main__":
       bidirectional=True,
       blocks=3,
       clip_eigs=True,
-
-
   )
 
   model = model.to(device)
@@ -545,7 +541,7 @@ if __name__ == "__main__":
       steps_per_epoch=steps_per_epoch,
   )
 
-  for epoch in tqdm(range(start_epoch, args.epochs)):
+  for epoch in tqdm(range(start_epoch, args.epochs), desc="Running ", unit="epoch"):
       if epoch == 0:
           pass #tqdm.write('Epoch: %d' % (epoch))
       else:
