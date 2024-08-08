@@ -517,6 +517,7 @@ if __name__ == "__main__":
       bidirectional=True,
       blocks=3,
       clip_eigs=True,
+      dropout=0.1,
   )
 
   model = model.to(device)
