@@ -518,6 +518,7 @@ if __name__ == "__main__":
       blocks=3,
       clip_eigs=True,
       dropout=0.1,
+      discretization="zoh",
   )
 
   model = model.to(device)
