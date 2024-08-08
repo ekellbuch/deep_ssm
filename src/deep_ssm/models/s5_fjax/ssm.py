@@ -57,7 +57,7 @@ def discretize_zoh(Lambda: TensorType["num_states"],
       discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
   """
   # Identity = torch.ones(Lambda.shape[0], device=Lambda.device) # (replaced by -1)
-  Lambda_bar = torch.exp(Lambda * Delta, device=Lambda.device)
+  Lambda_bar = torch.exp(Lambda * Delta)
   B_bar = (1 / Lambda * (Lambda_bar - 1))[..., None] * B_tilde
   return Lambda_bar, B_bar
 
