@@ -326,7 +326,7 @@ def train():
     train_loss = 0
     correct = 0
     total = 0
-    for batch_idx, (inputs, targets) in enumerate(tqdm(trainloader, desc="Training", unit="batch")):
+    for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = model(inputs)
@@ -352,9 +352,10 @@ def train():
         for i, param_group in enumerate(optimizer.param_groups):
           wandb.log({f"lr/group_{i}": param_group['lr']})
     else:
-        tqdm.write(
-        'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-        (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
+        pass
+        #tqdm.write(
+        #'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+        #(batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
     )
 
 
@@ -366,7 +367,7 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
     correct = 0
     total = 0
     with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(tqdm(dataloader, desc="Evaluating", unit="batch")):
+        for batch_idx, (inputs, targets) in enumerate(dataloader):#, desc="Evaluating", unit="batch")):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = model(inputs)
             loss = criterion(outputs, targets)
@@ -382,10 +383,11 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
     if wandb.run:
       wandb.log({f"{log_name} Loss": eval_loss, f"{log_name} Accuracy": acc, "epoch": epoch})
     else:
-      tqdm.write(
-        'Epoch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
-        (epoch, len(dataloader), eval_loss, acc, correct, total)
-      )
+      pass
+      #tqdm.write(
+      #  'Epoch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
+      #  (epoch, len(dataloader), eval_loss, acc, correct, total)
+      #)
 
     # Save checkpoint.
     if checkpoint:
