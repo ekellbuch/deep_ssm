@@ -412,7 +412,7 @@ if __name__ == "__main__":
   parser.add_argument('--weight_decay', default=0.07, type=float, help='Weight decay')
   # Scheduler
   # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
-  parser.add_argument('--epochs', default=100, type=float, help='Training epochs')
+  parser.add_argument('--epochs', default=250, type=float, help='Training epochs')
   # Dataset
   parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10'], type=str, help='Dataset')
   parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
