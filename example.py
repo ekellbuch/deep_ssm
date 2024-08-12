@@ -320,7 +320,7 @@ def setup_optimizer_s4(model, lr, weight_decay, epochs):
 ###############################################################################
 
 # Training
-def train():
+def train(epoch):
     model.train()
     train_loss = 0
     correct = 0
@@ -338,8 +338,11 @@ def train():
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
+    avg_loss = train_loss / (batch_idx + 1)
+    accuracy = 100. * correct / total
+
     if wandb.run:
-        wandb.log({"Train Loss": train_loss / (batch_idx + 1), "Train Accuracy": 100. * correct / total})
+        wandb.log({"Train Loss": avg_loss, "Train Accuracy": accuracy, "epoch": epoch})
 
         # Log gradient norms
         for name, param in model.named_parameters():
@@ -355,7 +358,7 @@ def train():
         #tqdm.write(
         #'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
         #(batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
-    return
+    return avg_loss, accuracy
 
 
 def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
@@ -551,7 +554,7 @@ if __name__ == "__main__":
             wandb.log({"epoch": epoch, "Val Acc": val_acc})
         else:
             tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
-      train()
+      train_loss, train_acc = train(epoch)
       val_acc = eval(epoch, valloader, checkpoint=False, log_name='Val')
       scheduler.step()
   eval(epoch, testloader)
