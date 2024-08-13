@@ -29,7 +29,7 @@ def discretize_bilinear(Lambda: TensorType["num_states"],
   """
   # TODO: check complex vs real
   # Lambda = torch.view_as_complex(Lambda)
-  Identity = torch.ones(Lambda.shape[0])
+  Identity = torch.ones_like(Lambda)
   # compute bilinear transform
   BL = 1 / (Identity - (Delta / 2.0) * Lambda)
   # discretize the state matrix
