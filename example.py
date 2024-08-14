@@ -1,9 +1,9 @@
 '''
-Train an S4 model on sequential CIFAR10 / sequential MNIST with PyTorch for demonstration purposes.
-This code borrows heavily from https://github.com/kuangliu/pytorch-cifar.
+Train an S5 model on sequential CIFAR10 / sequential MNIST with PyTorch for demonstration purposes.
+This code borrows heavily from https://github.com/state-spaces/s4.
 
-This file only depends on the standalone S4 layer
-available in /models/s4/
+This file only depends on the standalone S5 layer
+available in srd/deep_ssm/models/ssm.py
 
 * Train standard sequential CIFAR:
     python -m example --wandb
@@ -12,14 +12,13 @@ available in /models/s4/
 * Train MNIST:
     python -m example --dataset mnist --d_model 256 --weight_decay 0.0
 
-The `S4Model` class defined in this file provides a simple backbone to train S4 models.
+The `S5Model` class defined in this file provides a simple backbone to train S5 models.
 This backbone is a good starting point for many problems, although some tasks (especially generation)
 may require using other backbones.
 
 The default CIFAR10 model trained by this file should get
-89+% accuracy on the CIFAR10 test set in 80 epochs.
+88+% accuracy on the CIFAR10 test set in 250 epochs.
 
-Each epoch takes approximately 7m20s on a T4 GPU (will be much faster on V100 / A100).
 '''
 import torch
 import torch.nn as nn
