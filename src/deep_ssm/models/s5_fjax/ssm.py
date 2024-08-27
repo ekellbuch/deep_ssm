@@ -14,18 +14,22 @@ from torchtyping import TensorType
 
 
 # Discretization functions
-def discretize_bilinear(Lambda: TensorType["num_states"],
-                        B_tilde: TensorType["num_states", "num_features"],
-                        Delta: TensorType["num_states"]
-                        ) -> Tuple[TensorType["num_states"], TensorType["num_states", "num_features"]]:
+def discretize_bilinear(Lambda: torch.Tensor,
+                        B_tilde: torch.Tensor,
+                        Delta: torch.Tensor,
+                        ) -> Tuple[torch.Tensor, torch.Tensor]:
   """Discretize a diagonalized, continuous-time linear SSM
   using bilinear transform method.
   Args:
       Lambda (complex64): diagonal state matrix              (P,)
+          TensorType["num_states"]
       B_tilde (complex64): input matrix                      (P, H)
+          TensorType["num_states", "num_features"]
       Delta (float32): discretization step sizes             (P,)
+          TensorType["num_states"]
   Returns:
       discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+        Tuple[TensorType["num_states"], TensorType["num_states", "num_features"]]
   """
   # TODO: check complex vs real
   # Lambda = torch.view_as_complex(Lambda)
@@ -43,18 +47,22 @@ def discretize_bilinear(Lambda: TensorType["num_states"],
   return Lambda_bar, B_bar
 
 
-def discretize_zoh(Lambda: TensorType["num_states"],
-                   B_tilde: TensorType["num_states", "num_features"],
-                   Delta: TensorType["num_states"]
-                   ) -> Tuple[TensorType["num_states"], TensorType["num_states", "num_features"]]:
+def discretize_zoh(Lambda: torch.Tensor,
+                   B_tilde: torch.Tensor,
+                   Delta: torch.Tensor
+                   ) -> Tuple[torch.Tensor, torch.Tensor]:
   """Discretize a diagonalized, continuous-time linear SSM
   using zero-order hold method.
   Args:
       Lambda (complex64): diagonal state matrix              (P,)
+        TensorType["num_states"]
       B_tilde (complex64): input matrix                      (P, H)
+        TensorType["num_states", "num_features"]
       Delta (float32): discretization step sizes             (P,)
+        TensorType["num_states"]
   Returns:
       discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+        Tuple[TensorType["num_states"], TensorType["num_states", "num_features"]]
   """
   # Identity = torch.ones(Lambda.shape[0], device=Lambda.device) # (replaced by -1)
   Lambda_bar = torch.exp(Lambda * Delta)
@@ -80,28 +88,28 @@ def binary_operator(
 
 
 def apply_ssm(
-  Lambda_bars: TensorType["num_states"],
-  B_bars: TensorType["num_states", "num_features"],
-  C_tilde: TensorType["num_features", "num_states"],
-  D: TensorType["num_features"],
-  input_sequence: TensorType["seq_length", "num_features"],
+  Lambda_bars: torch.Tensor,
+  B_bars: torch.Tensor,
+  C_tilde: torch.Tensor,
+  D: torch.Tensor,
+  input_sequence: torch.Tensor,
   conj_sym: bool = False,
   bidirectional: bool = False,
-) -> Tuple[TensorType["seq_length", "num_features"],
-    TensorType["num_states"]]:
+) -> Tuple[torch.Tensor,torch.Tensor]:
   """
   Apply a linear state-space model to an input sequence x_t and return y_{t+1}:
     x_{t+1} = A x_t + B u
     y_{t+1} = C_tilde x_{t+1} + D u
 
-  :param Lambda_bars: diagonal state matrix
-  :param B_bars: input matrix
-  :param C_tilde: output matrix
-  :param D: feedthrough matrix
-  :param input_sequence:
+  :param Lambda_bars: diagonal state matrix: TensorType["num_states"]
+  :param B_bars: input matrix: TensorType["num_states", "num_features"]
+  :param C_tilde: output matrix: TensorType["num_features", "num_states"]
+  :param D: feedthrough matrix: TensorType["num_features"]
+  :param input_sequence:TensorType["seq_length", "num_features"]
   :param conj_sym:
   :param bidirectional:
-  :return:  y, state
+  :return:  y, state:
+    TensorType["seq_length", "num_features"], TensorType["num_states"]
   """
   cinput_sequence = input_sequence.type(
     Lambda_bars.dtype
@@ -225,9 +233,7 @@ class S5SSM(torch.nn.Module):
       C_init = lecun_normal()
       # C_shape = (H, local_P, 2)
     elif self.C_init in ["complex_normal"]:
-      C1 = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
-      C2 = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
-      C_init = torch.complex(C1, C2)
+      C_init = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
     else:
       raise NotImplementedError(
         "C_init method {} not implemented".format(self.C_init))
@@ -249,7 +255,6 @@ class S5SSM(torch.nn.Module):
         C_imag = torch.cat((C1[..., 1], C2[..., 1]), axis=-1)
 
         C = torch.stack((C_real, C_imag), axis=-1,)
-        # has to be
         self.C = torch.nn.Parameter(C)
       else:
         C = init_CV(C_init, (H, local_P), V)
@@ -293,10 +298,18 @@ class S5SSM(torch.nn.Module):
 
   # NOTE: can only be used as RNN OR S5(MIMO) (no mixing)
   def forward(self,
-              signal: TensorType["batch_size", "seq_length", "num_features"],
-              prev_state: Optional[TensorType["batch_size", "num_states"]] = None,
-              step_rescale: Union[float, torch.Tensor] = 1.0):
+              signal: torch.Tensor,
+              prev_state: Optional[torch.Tensor] = None,
+              step_rescale: Union[float, torch.Tensor] = 1.0)-> Tuple[torch.Tensor,torch.Tensor]:
+    """
 
+    Args:
+      signal: TensorType["seq_length", "num_features"]
+      prev_state: Optional[TensorType["num_states"]] = None
+      step_rescale:
+
+    Returns:
+    """
     # get complex B and C
     B_tilde, C_tilde = self.get_BC_tilde()
 
@@ -304,25 +317,28 @@ class S5SSM(torch.nn.Module):
     Lambda = self.get_lambda()
 
     # set discretization step
-    if not torch.is_tensor(step_rescale) or step_rescale.ndim == 0:
+    if isinstance(step_rescale, torch.Tensor):
+      # TODO: check dim in step_rescale has ndim > 0
       step_scale = step_rescale * torch.exp(self.log_step)
     else:
-      # TODO: include invididual steps for discretize
-      step_scale = step_rescale[:, None] * torch.exp(self.log_step)
+      step_scale = torch.tensor(step_rescale) * torch.exp(self.log_step)
 
     # discretize A, B
     Lambda_bar, B_bar = self.discretize(Lambda, B_tilde, step_scale)
 
     # calculate y
-    return apply_ssm(
-      Lambda_bar, B_bar, C_tilde, self.D, signal, conj_sym=self.conj_sym, bidirectional=self.bidirectional
-    )
+    ys, state = apply_ssm(Lambda_bar, B_bar, C_tilde, self.D, signal, conj_sym=self.conj_sym, bidirectional=self.bidirectional)
+    return ys, state
 
   def step(self,
-            signal: TensorType["batch_size", "seq_length", "num_features"],
-            prev_state: TensorType["batch_size", "num_states"],
+            signal: torch.Tensor,
+            prev_state: torch.Tensor,
             step_rescale: Union[float, torch.Tensor] = 1.0):
+    """
+    signal: TensorType["batch_size", "seq_length", "num_features"],
+    prev_state: TensorType["batch_size", "num_states"],
 
+    """
     B_tilde, C_tilde = self.get_BC_tilde()
     Lambda = self.get_lambda()
 
@@ -347,9 +363,9 @@ class S5(torch.nn.Module):
     dt_min: float = 0.001,
     dt_max: float = 0.1,
     bidirectional: bool = False,
-    C_init: str = "complex_normal",
+    C_init: str = "lecun_normal",
     bandlimit: Optional[float] = None,
-    conj_sym: bool = False,
+    conj_sym: bool = True,
     clip_eigs: bool = False,
     step_rescale: float = 1.0,
     discretization: Optional[str] = "bilinear",
@@ -362,6 +378,8 @@ class S5(torch.nn.Module):
 
     # init S5SSM
     block_size = ssm_size // blocks
+
+    # Initialize state matrix A using approximation to HiPPO-LegS matrix
     Lambda, _, B, V, B_orig = make_DPLR_HiPPO(block_size)
 
     if conj_sym:
@@ -373,17 +391,14 @@ class S5(torch.nn.Module):
       (Lambda, B, V, B_orig),
     )
 
-    if blocks > 1:
-      Lambda = Lambda[:block_size]
-      V = V[:, :block_size]
-      Vc = V.conj().T
+    Lambda = Lambda[:block_size]
+    V = V[:, :block_size]
+    Vc = V.conj().T
 
-      # If initializing state matrix A as block-diagonal, put HiPPO approximation
-      Lambda = (Lambda * torch.ones((blocks, block_size))).ravel()
-      V = torch.block_diag(*([V] * blocks))
-      Vinv = torch.block_diag(*([Vc] * blocks))
-    else:
-      Vinv = V.conj().T
+    # If initializing state matrix A as block-diagonal, put HiPPO approximation
+    Lambda = (Lambda * torch.ones((blocks, block_size))).ravel()
+    V = torch.block_diag(*([V] * blocks))
+    Vinv = torch.block_diag(*([Vc] * blocks))
 
     self.seq = S5SSM(
       H=d_model,
@@ -402,24 +417,41 @@ class S5(torch.nn.Module):
       step_rescale=step_rescale,
       bandlimit=bandlimit)
 
-  def initial_state(self, batch_size: Optional[int] = None):
+  def initial_state(self, batch_size: Optional[int] = None) -> torch.Tensor:
     return self.seq.initial_state(batch_size)
 
-  def forward(self,
-              signal: TensorType["batch_size", "seq_length", "num_features"],
-              prev_state: Optional[TensorType["batch_size", "num_states"]] = None,
-              rate: Union[float, torch.Tensor] = 1.0):
+  def apply_seq_without_state(self, s, rate):
+    return self.seq(s, step_rescale=rate)
 
-    if prev_state is None:
-      return torch.vmap(lambda s: self.seq(s, step_rescale=rate))(signal)
-    else:
-      return torch.vmap(lambda s, ps: self.seq(s, prev_state=ps, step_rescale=rate))(signal, prev_state)
+  def apply_seq_with_state(self, s, ps, rate):
+    return self.seq(s, prev_state=ps, step_rescale=rate)
+
+  def forward(self,
+              signal: torch.Tensor,
+              prev_state: Optional[torch.Tensor] = None,
+              rate: Union[float, torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
+    """
+    Args:
+      signal: TensorType["batch_size", "seq_length", "num_features"]
+      prev_state:  Optional[TensorType["batch_size", "num_states"]] = None
+      rate:
+    Returns:
+
+    """
+    # rate can be a float or a tensor
+    apply_s5_batch = torch.vmap(lambda signal, rate: self.seq(signal, step_rescale=rate), in_dims=(0, None), out_dims=(0,0))
+    return apply_s5_batch(signal, rate)
 
   def step(self,
-        signal: TensorType["batch_size", "seq_length", "num_features"],
-        prev_state: Optional[TensorType["batch_size", "num_states"]] = None,
+        signal: torch.Tensor,
+        prev_state: Optional[torch.Tensor] = None,
         rate: Union[float, torch.Tensor] = 1.0):
-
+    """
+    Args:
+      signal: TensorType["batch_size", "seq_length", "num_features"]
+      prev_state: TensorType["batch_size", "num_states"]
+      rate:
+    """
     return self.seq(signal, prev_state, step_rescale=rate)
 
 class GEGLU(torch.nn.Module):
@@ -447,8 +479,7 @@ class S5Layer(torch.nn.Module):
     step_rescale: float = 1.0,
     bandlimit: Optional[float] = None,
     discretization: Optional[str] = "bilinear",
-    #transposed=True,  # axis ordering (B, L, D) or (B, D, L)
-    **kwargs,
+    # transposed=True,  # axis ordering (B, L, D) or (B, D, L)
   ):
     super().__init__()
     self.d_model = d_model
@@ -472,10 +503,10 @@ class S5Layer(torch.nn.Module):
     )
 
     if self.activation in ["full_glu"]:
-      self.out1 = torch.nn.Linear(d_model)
-      self.out2 = torch.nn.Linear(d_model)
+      self.out1 = torch.nn.Linear(d_model, d_model)
+      self.out2 = torch.nn.Linear(d_model, d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
-      self.out2 = torch.nn.Linear(d_model)
+      self.out2 = torch.nn.Linear(d_model, d_model)
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -511,26 +542,22 @@ class S5Layer(torch.nn.Module):
   def forward(self,
               x: TensorType["batch_size", "seq_length", "num_features"],
               state: Optional[TensorType["batch_size", "num_states"]] = None,
-              **kwargs):
-
-    #if state is None:
-    #  state = self.seq.initial_state(x.shape[0])
+              rate: Optional[Union[float, torch.Tensor]] = 1.0):
 
     # Apply sequence model
-    x, new_state = self.seq(signal=x, prev_state=state, **kwargs)
+    x, new_state = self.seq(signal=x, prev_state=state, rate=rate)
 
     x = self.apply_activation(x)
 
     return x, new_state
 
-  def step(self, x, state, **kwargs):
+  def step(self, x, state, rate=None):
     """
     Step as a recurrent model, and apply continuously
 
     """
     # pass through step:
-    # unroll
-    x, new_state = self.seq.step(x, state, **kwargs)
+    x, new_state = self.seq.step(x, state, rate)
     x = self.apply_activation(x)
 
     return x, new_state
@@ -573,7 +600,7 @@ if __name__ == "__main__":
   hparams = {
     "d_model": 32,
     "ssm_size": 32,
-    "block_count": 1,
+    "blocks": 1,
   }
 
   model = S5(**hparams)
