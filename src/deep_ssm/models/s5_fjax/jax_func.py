@@ -452,9 +452,46 @@ def test_variance_scaling():
     print("Variance scaling working as expected!")
 
 
+def time_jax_associative_scan(nested_func, jx, repeats=100):
+    import jax
+    start_time = time.time()
+    for _ in range(repeats):
+        jax.lax.associative_scan(nested_func, (jx, jx))
+    end_time = time.time()
+    return (end_time - start_time) / repeats
+
+
+def time_torch_associative_scan(nested_func, tx, repeats=100):
+    start_time = time.time()
+    for _ in range(repeats):
+        associative_scan(nested_func, (tx, tx))
+    end_time = time.time()
+    return (end_time - start_time) / repeats
+
+
+def compare_associative_scan_timing(shape=(1, 24, 24), repeats=100):
+    import jax
+    x = np.random.randn(*shape)
+    jx = jax.numpy.array(x)
+    tx = torch.tensor(x, dtype=torch.float32)
+
+    def nested_func(a, b):
+        a_i, b_i = a
+        a_j, b_j = b
+        return a_j * a_i, a_j * b_i + b_j
+
+    jax_time = time_jax_associative_scan(nested_func, jx, repeats)
+    torch_time = time_torch_associative_scan(nested_func, tx, repeats)
+
+    print(f"JAX associative_scan average time: {jax_time:.6f} seconds")
+    print(f"PyTorch associative_scan average time: {torch_time:.6f} seconds")
+
+
 if __name__ == "__main__":
     test_variance_scaling()
     test_interleave()
     test_associative_scan()
     test_associative_scan(shape=(2, 256, 24))
     test_associative_scan(shape=(360, 96))
+    import time
+    compare_associative_scan_timing(shape=(2,256,24), repeats=5)
