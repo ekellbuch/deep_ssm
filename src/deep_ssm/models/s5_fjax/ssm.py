@@ -91,20 +91,18 @@ def apply_ssm(
   Lambda_bars: torch.Tensor,
   B_bars: torch.Tensor,
   C_tilde: torch.Tensor,
-  D: torch.Tensor,
   input_sequence: torch.Tensor,
   conj_sym: bool = False,
   bidirectional: bool = False,
 ) -> Tuple[torch.Tensor,torch.Tensor]:
   """
-  Apply a linear state-space model to an input sequence x_t and return y_{t+1}:
+  Apply a linear state-space model to an input sequence x_t and return cs:
     x_{t+1} = A x_t + B u
-    y_{t+1} = C_tilde x_{t+1} + D u
-
+    cs: C_tilde x{t+1} 
+    
   :param Lambda_bars: diagonal state matrix: TensorType["num_states"]
   :param B_bars: input matrix: TensorType["num_states", "num_features"]
   :param C_tilde: output matrix: TensorType["num_features", "num_states"]
-  :param D: feedthrough matrix: TensorType["num_features"]
   :param input_sequence:TensorType["seq_length", "num_features"]
   :param conj_sym:
   :param bidirectional:
@@ -134,16 +132,13 @@ def apply_ssm(
     )
     xs = torch.cat((xs, xs2), axis=-1)
 
-  # compute the feedthrough matrix:
-  Du = torch.vmap(lambda u: D * u)(input_sequence)
+  # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
 
-  # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it
-
-  # compute SSM output sequence y = C_tilde x + D u
+  # compute SSM output sequence y = C_tilde x{t+1}
   if conj_sym:
-    y = torch.vmap(lambda x: 2 * (C_tilde @ x).real)(xs) + Du
+    y = torch.vmap(lambda x: 2 * (C_tilde @ x).real)(xs)
   else:
-    y = torch.vmap(lambda x: (C_tilde @ x).real)(xs) + Du
+    y = torch.vmap(lambda x: (C_tilde @ x).real)(xs)
   return y, xs[-1]
 
 Initialization = Literal["complex_normal", "lecun_normal", "truncate_standard_normal"]
@@ -321,8 +316,14 @@ class S5SSM(torch.nn.Module):
     # discretize A, B
     Lambda_bar, B_bar = self.discretize(Lambda, B_tilde, step_scale)
 
-    # calculate y
-    ys, state = apply_ssm(Lambda_bar, B_bar, C_tilde, self.D, signal, conj_sym=self.conj_sym, bidirectional=self.bidirectional)
+    # calculate C_tilde x_{t+1}
+    ys, state = apply_ssm(Lambda_bar, B_bar, C_tilde, signal, conj_sym=self.conj_sym, bidirectional=self.bidirectional)
+
+    # compute the feedthrough matrix:
+    Du = torch.vmap(lambda u: self.D * u)(signal)
+
+    #y_{t+1} = C_tilde x_{t+1} + D u
+    ys  = ys + Du
     return ys, state
 
   def step(self,
@@ -436,7 +437,7 @@ class S5(torch.nn.Module):
     # rate can be a float or a tensor
     if not isinstance(rate, torch.Tensor):
       # Duplicate across batch dimension
-      rate = torch.ones(signal.shape[0]) * rate
+      rate = torch.ones(signal.shape[0], device=signal.device) * rate
     return torch.vmap(lambda s, r: self.seq(s, step_rescale=r), in_dims=(0, 0))(signal, rate)
 
   def step(self,
