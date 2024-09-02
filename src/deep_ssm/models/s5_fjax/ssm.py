@@ -111,9 +111,8 @@ def apply_ssm(
   :return:  y, state:
     TensorType["seq_length", "num_features"], TensorType["num_states"]
   """
-  cinput_sequence = input_sequence.type(
-    Lambda_bars.dtype
-  )  # Cast to correct complex type
+  # Cast to correct complex type
+  cinput_sequence = input_sequence.type(Lambda_bars.dtype)
 
   # compute Bu elements
   if B_bars.ndim == 3:
@@ -260,10 +259,10 @@ class S5SSM(torch.nn.Module):
         C = init_CV(C_init, (H, local_P), V)
         self.C = torch.nn.Parameter(C)
     # Initialize feedthrough (D) matrix
-    self.D = torch.nn.Parameter(torch.rand(H, ))
+    self.D = torch.nn.Parameter(torch.normal(0, 1, (H, )))
 
     # Initialize learnable discretization timescale value
-    self.log_step = torch.nn.Parameter(init_log_steps(P, dt_min, dt_max))
+    self.log_step = torch.nn.Parameter(init_log_steps(P, dt_min, dt_max)[:, None])
 
     if discretization == "zoh":
       self.discretize = discretize_zoh
@@ -273,7 +272,7 @@ class S5SSM(torch.nn.Module):
       raise ValueError(f"Unknown discretization {discretization}")
 
     if self.bandlimit is not None:
-      step = step_rescale * torch.exp(self.log_step)
+      step = step_rescale * torch.exp(self.log_step[...,0])
       freqs = step / step_rescale * Lambda[:, 1].abs() / (2 * math.pi)
       mask = torch.where(freqs < bandlimit * 0.5, 1, 0)  # (64, )
       self.C = torch.nn.Parameter(
@@ -300,7 +299,7 @@ class S5SSM(torch.nn.Module):
   def forward(self,
               signal: torch.Tensor,
               prev_state: Optional[torch.Tensor] = None,
-              step_rescale: Union[float, torch.Tensor] = 1.0)-> Tuple[torch.Tensor,torch.Tensor]:
+              step_rescale: Optional[torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
 
     Args:
@@ -317,11 +316,7 @@ class S5SSM(torch.nn.Module):
     Lambda = self.get_lambda()
 
     # set discretization step
-    if isinstance(step_rescale, torch.Tensor):
-      # TODO: check dim in step_rescale has ndim > 0
-      step_scale = step_rescale * torch.exp(self.log_step)
-    else:
-      step_scale = torch.tensor(step_rescale) * torch.exp(self.log_step)
+    step_scale = step_rescale * torch.exp(self.log_step[..., 0])
 
     # discretize A, B
     Lambda_bar, B_bar = self.discretize(Lambda, B_tilde, step_scale)
@@ -342,7 +337,7 @@ class S5SSM(torch.nn.Module):
     B_tilde, C_tilde = self.get_BC_tilde()
     Lambda = self.get_lambda()
 
-    step_scale = step_rescale * torch.exp(self.log_step)
+    step_scale = step_rescale * torch.exp(self.log_step[...,0])
 
     Lambda_bar, B_bar = self.discretize(Lambda, B_tilde, step_scale)
 
@@ -439,8 +434,10 @@ class S5(torch.nn.Module):
 
     """
     # rate can be a float or a tensor
-    apply_s5_batch = torch.vmap(lambda signal, rate: self.seq(signal, step_rescale=rate), in_dims=(0, None), out_dims=(0,0))
-    return apply_s5_batch(signal, rate)
+    if not isinstance(rate, torch.Tensor):
+      # Duplicate across batch dimension
+      rate = torch.ones(signal.shape[0]) * rate
+    return torch.vmap(lambda s, r: self.seq(s, step_rescale=r), in_dims=(0, 0))(signal, rate)
 
   def step(self,
         signal: torch.Tensor,
@@ -540,10 +537,16 @@ class S5Layer(torch.nn.Module):
     return x
 
   def forward(self,
-              x: TensorType["batch_size", "seq_length", "num_features"],
-              state: Optional[TensorType["batch_size", "num_states"]] = None,
+              x: torch.Tensor, #,
+              state: Optional[torch.Tensor] = None,
               rate: Optional[Union[float, torch.Tensor]] = 1.0):
+    """
 
+    Args:
+      x: TensorType["batch_size", "seq_length", "num_features"]
+      state: TensorType["batch_size", "num_states"]
+      rate:
+    """
     # Apply sequence model
     x, new_state = self.seq(signal=x, prev_state=state, rate=rate)
 
