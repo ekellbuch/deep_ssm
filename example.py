@@ -58,7 +58,7 @@ def view_transform(img, grayscale=False):
     return img.view(3, 1024).t()
 
 def view_transform_gs(img, grayscale=True):
-  # tqdm has compatibility when calling functions using lambda 
+  # tqdm has compatibility when calling functions using lambda
   if grayscale:
     return img.view(1, 1024).t()
   else:
@@ -109,10 +109,10 @@ class SequenceLayer(torch.nn.Module):
     )
 
     if self.activation in ["full_glu"]:
-      self.out1 = torch.nn.Linear(d_model)
-      self.out2 = torch.nn.Linear(d_model)
+      self.out1 = torch.nn.Linear(d_model,d_model)
+      self.out2 = torch.nn.Linear(d_model,d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
-      self.out2 = torch.nn.Linear(d_model)
+      self.out2 = torch.nn.Linear(d_model,d_model)
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -146,20 +146,19 @@ class SequenceLayer(torch.nn.Module):
     return x
 
   def forward(self,
-              x: TensorType["batch_size", "seq_length", "num_features"],
-              state: Optional[TensorType["batch_size", "num_states"]] = None,
-              **kwargs):
+              x: torch.Tensor,
+              state: torch.Tensor,
+              rate: torch.Tensor):
 
     skip = x
     if self.prenorm:
       if self.batchnorm:
-        x
         x = self.norm(x.transpose(-2, -1)).transpose(-2,-1)
       else:
         x = self.norm(x)
 
     # Apply sequence model
-    x, new_state = self.seq(signal=x, prev_state=state, **kwargs)
+    x, new_state = self.seq(signal=x, prev_state=state, rate=rate)
 
     x = self.apply_activation(x)
 
@@ -198,7 +197,10 @@ class S5Model(nn.Module):
         # Linear decoder
         self.decoder = nn.Linear(d_model, d_output)
 
-    def forward(self, x):
+    def forward(self,
+                x: torch.Tensor,
+                prev_state: torch.Tensor,
+                rate: torch.Tensor):
         """
         Input x is shape (B, L, d_input)
         """
@@ -206,15 +208,14 @@ class S5Model(nn.Module):
 
         for layer in self.layers:
             # Each iteration of this loop will map (B, d_model, L) -> (B, d_model, L)
-            x, _ = layer(x)
-
+            x, new_state = layer(x, prev_state, rate)
         # Pooling: average pooling over the sequence length
         x = x.mean(dim=1)
 
         # Decode the outputs
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
 
-        return x
+        return x, new_state
 
 def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_per_epoch):
   """
@@ -278,8 +279,15 @@ def train(epoch):
     total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
         inputs, targets = inputs.to(device), targets.to(device)
-        optimizer.zero_grad()
-        outputs = model(inputs)
+        if batch_idx == 0 or batch_idx == len(trainloader)-1:
+          batch_size = inputs.shape[0]
+          state_size = model.layers[0].seq.seq.C.shape[-2]
+          prev_state = torch.zeros((batch_size,state_size), device=device)
+          rate = torch.ones((batch_size,1), device=device)
+        #model.zero_grad()
+        for param in model.parameters():
+          param.grad = None
+        outputs, prev_state = model(inputs, prev_state, rate)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
@@ -318,12 +326,17 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
     eval_loss = 0
     correct = 0
     total = 0
+
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(dataloader):#, desc="Evaluating", unit="batch")):
             inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
+            if batch_idx == 0 or batch_idx == len(dataloader) -1:
+              batch_size = inputs.shape[0]
+              state_size = model.layers[0].seq.seq.C.shape[-2]
+              prev_state = torch.zeros((batch_size, state_size), device=device)
+              rate = torch.ones((batch_size, 1), device=device)
+            outputs, prev_state = model(inputs, prev_state, rate)
             loss = criterion(outputs, targets)
-
             eval_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
@@ -366,7 +379,7 @@ if __name__ == "__main__":
   parser.add_argument('--weight_decay', default=0.07, type=float, help='Weight decay')
   # Scheduler
   # parser.add_argument('--patience', default=10, type=float, help='Patience for learning rate scheduler')
-  parser.add_argument('--epochs', default=250, type=float, help='Training epochs')
+  parser.add_argument('--epochs', default=250, type=int, help='Training epochs')
   # Dataset
   parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10'], type=str, help='Dataset')
   parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
@@ -457,6 +470,11 @@ if __name__ == "__main__":
   testloader = torch.utils.data.DataLoader(
       testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
+
+  # debugging:
+  #trainloader = [next(iter(trainloader)),next(iter(trainloader)),next(iter(trainloader))] # Only 1 batch
+  #valloader = [next(iter(valloader)),next(iter(valloader)),next(iter(valloader))] # Only 1 batch
+  #testloader = [next(iter(testloader)),next(iter(testloader)),next(iter(testloader))] # Only 1 batch
 
   # Model
   print('==> Building model..')

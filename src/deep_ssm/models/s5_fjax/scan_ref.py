@@ -1,11 +1,10 @@
 import math
-from typing import Callable
-
 import torch
+from typing import Tuple
 
 
-
-def split(x: torch.Tensor) -> torch.Tensor:
+@torch.jit.script
+def split(x: torch.Tensor) -> Tuple[torch.Tensor,torch.Tensor]:
     """
     Take a sequence of inputs that represents a tree level,
     and return all left children and all right children.
@@ -24,9 +23,7 @@ def split(x: torch.Tensor) -> torch.Tensor:
     return x[:, :, 0, :], x[:, :, 1, :]
 
 
-
-
-
+@torch.jit.script
 def merge(lefts: torch.Tensor, rights: torch.Tensor) -> torch.Tensor:
     """
     Take sequences of all left children and sequences of all right children and merge them
@@ -49,13 +46,41 @@ def merge(lefts: torch.Tensor, rights: torch.Tensor) -> torch.Tensor:
     return x.view(B, half*2, C)
 
 
+@torch.jit.ignore
+def scan1(
+    gates: torch.Tensor,
+    tokens: torch.Tensor,
+    level: int,
+    reverse: bool = False
+):
+    if reverse:
+        right_gates, left_gates = split(gates)
+        right_x, left_x = split(tokens)
+    else:
+        left_gates, right_gates = split(gates)
+        left_x, right_x = split(tokens)
+
+    # up: sum together
+    gates = torch.mul(left_gates, right_gates)
+    tokens = torch.add(torch.mul(right_gates, left_x), right_x)
+
+    if level == 1:
+        root_gates, root_x = torch.ones_like(tokens), torch.zeros_like(tokens)
+    else:
+        root_gates, root_x = scan1(gates, tokens, level=level-1, reverse=reverse)
+
+    if reverse:
+        # down: right is root, left is left (+) right
+        return merge(torch.mul(root_gates, left_gates), root_gates), merge(torch.add(torch.mul(root_x, left_gates), left_x), root_x)
+    else:
+        # down: left is root, right is left (+) right
+        return merge(root_gates, torch.mul(root_gates, left_gates)), merge(root_x, torch.add(torch.mul(root_x, left_gates), left_x))
+
+
+@torch.jit.ignore
 def scan(
     gates: torch.Tensor,
     tokens: torch.Tensor,
-    mul: Callable = torch.mul,
-    add: Callable = torch.add,
-    zeros_like: Callable = torch.zeros_like,
-    ones_like: Callable = torch.ones_like,
     reverse: bool = False
 ) -> torch.Tensor:
     """Solve a first-order recurrence relation using a reference torch implementation:
@@ -68,51 +93,12 @@ def scan(
     Arguments:
         gates (torch.Tensor): shape (B, T, C), must be contiguous.
         tokens (torch.Tensor): shape (B, T, C), must be contiguous.
-        mul (callable): multiplication function, defaults to torch.mul
-        add (callable): addition function, defaults to torch.add
-        zeros_like (callable): function to create a tensor of zeros like the input, defaults to torch.zeros_like
-        ones_like (callable): function to create a tensor of ones like the input, defaults to torch.ones_like
         reverse (bool): whether to solve the recurrence in reverse order, defaults to False
 
     Returns:
         (torch.Tensor): shape (B, T, C)
     """
     B, T, C = tokens.size()
-    level = int(math.log2(T))
-    _, x = scan1(gates, tokens, mul, add, zeros_like, ones_like, level=level, reverse=reverse)
-    return add(mul(x, gates), tokens)
-
-
-def scan1(
-    gates: torch.Tensor,
-    tokens: torch.Tensor,
-    mul: Callable,
-    add: Callable,
-    zeros_like: Callable,
-    ones_like: Callable,
-    level: int,
-    reverse: bool = False
-):
-    if reverse:
-        right_gates, left_gates = split(gates)
-        right_x, left_x = split(tokens)
-    else:
-        left_gates, right_gates = split(gates)
-        left_x, right_x = split(tokens)
-
-    # up: sum together
-    gates = mul(left_gates, right_gates)
-    tokens = add(mul(right_gates, left_x), right_x)
-
-    if level == 1:
-        root_gates, root_x = ones_like(tokens), zeros_like(tokens)
-    else:
-        root_gates, root_x = scan1(gates, tokens, mul, add, zeros_like, ones_like, level=level-1, reverse=reverse)
-
-    if reverse:
-        # down: right is root, left is left (+) right
-        return merge(mul(root_gates, left_gates), root_gates), merge(add(mul(root_x, left_gates), left_x), root_x)
-    else:
-        # down: left is root, right is left (+) right
-        return merge(root_gates, mul(root_gates, left_gates)), merge(root_x, add(mul(root_x, left_gates), left_x))
-
+    level = int(torch.log2(torch.tensor(T, dtype=torch.float32)).item())
+    _, x = scan1(gates, tokens, level=level, reverse=reverse)
+    return torch.add(torch.mul(x, gates), tokens)
