@@ -84,7 +84,7 @@ class SequenceLayer(torch.nn.Module):
     activation: str = "gelu",
     prenorm: bool = False,
     batchnorm: bool = False,
-    bn_momentum: float = 0.9,
+    bn_momentum: float = 0.95,
     **kwargs,
   ):
     super().__init__()
@@ -277,7 +277,9 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
-    for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
+    #for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
+    for batch_idx, batch in enumerate(tqdm(trainloader, total=len(trainloader), desc="Training", unit="batch")):
+        inputs, targets = batch
         inputs, targets = inputs.to(device), targets.to(device)
         if batch_idx == 0 or batch_idx == len(trainloader)-1:
           batch_size = inputs.shape[0]
@@ -384,8 +386,8 @@ if __name__ == "__main__":
   parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10'], type=str, help='Dataset')
   parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
   # Dataloader
-  parser.add_argument('--num_workers', default=4, type=int, help='Number of workers to use for dataloader')
-  parser.add_argument('--batch_size', default=64, type=int, help='Batch size')
+  parser.add_argument('--num_workers', default=16, type=int, help='Number of workers to use for dataloader')
+  parser.add_argument('--batch_size', default=50, type=int, help='Batch size')
   # Model
   parser.add_argument('--n_layers', default=4, type=int, help='Number of layers')
   parser.add_argument('--d_model', default=512, type=int, help='Model dimension')
@@ -491,8 +493,12 @@ if __name__ == "__main__":
       clip_eigs=True,
       dropout=0.1,
       discretization="zoh",
+      activation = "half_glu1",
+      conj_sym=True,
+      prenorm=True,
   )
 
+  #compiled_model = torch.jit.script(model)
   model = model.to(device)
   if device == 'cuda':
       cudnn.benchmark = True
