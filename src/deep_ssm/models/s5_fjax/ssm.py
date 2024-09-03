@@ -10,6 +10,7 @@ import math
 from deep_ssm.models.s5_fjax.jax_func import associative_scan, lecun_normal
 from deep_ssm.models.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps, make_DPLR_HiPPO, \
   trunc_standard_normal
+from deep_ssm.models.s5_fjax.scan_ref import scan as scan_ref
 from torchtyping import TensorType
 
 
@@ -94,12 +95,12 @@ def apply_ssm(
   input_sequence: torch.Tensor,
   conj_sym: bool = False,
   bidirectional: bool = False,
-) -> Tuple[torch.Tensor,torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
   """
   Apply a linear state-space model to an input sequence x_t and return cs:
     x_{t+1} = A x_t + B u
-    cs: C_tilde x{t+1} 
-    
+    cs: C_tilde x{t+1}
+
   :param Lambda_bars: diagonal state matrix: TensorType["num_states"]
   :param B_bars: input matrix: TensorType["num_states", "num_features"]
   :param C_tilde: output matrix: TensorType["num_features", "num_states"]
@@ -124,12 +125,10 @@ def apply_ssm(
     Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
 
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u
-  _, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
+  xs = scan_ref(Lambda_bars[None,...], Bu_elements[None,...])[0]
 
   if bidirectional:
-    _, xs2 = associative_scan(
-      binary_operator, (Lambda_bars, Bu_elements), reverse=True
-    )
+    xs2 = scan_ref(Lambda_bars[None,...], Bu_elements[None,...])[0]
     xs = torch.cat((xs, xs2), axis=-1)
 
   # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
@@ -140,6 +139,7 @@ def apply_ssm(
   else:
     y = torch.vmap(lambda x: (C_tilde @ x).real)(xs)
   return y, xs[-1]
+
 
 Initialization = Literal["complex_normal", "lecun_normal", "truncate_standard_normal"]
 
