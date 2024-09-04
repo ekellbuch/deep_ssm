@@ -353,7 +353,6 @@ class S5SSM(torch.nn.Module):
 
     # calculate C_tilde x_{t+1}
     ys = self.apply_ssm_helper(Lambda_bar, B_bar, C_tilde, signal, self.D)
-
     return ys
 
 
@@ -609,11 +608,11 @@ if __name__ == "__main__":
   ssm_size = 64
   x = torch.rand([batch_size, seq_length, input_dim])
   model = S5(d_model, ssm_size, )
-  print("A", tensor_stats(model.seq.get_lambda().data))
+  #print("A", tensor_stats(model.seq.get_lambda().data))
   B, C_tilde = model.seq.get_BC_tilde()
-  print("B", tensor_stats(B.data))
-  print("C", tensor_stats(C_tilde.data))
-  print("D", tensor_stats(model.seq.D.data))
+  #print("B", tensor_stats(B.data))
+  #print("C", tensor_stats(C_tilde.data))
+  #print("D", tensor_stats(model.seq.D.data))
 
   state = model.initial_state(batch_size)
   res = model(x, prev_state=state)
@@ -645,5 +644,4 @@ if __name__ == "__main__":
 
   outputs = res[0]
   assert outputs.shape == (b, t, data['input_size'])
-
 
