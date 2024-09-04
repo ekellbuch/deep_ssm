@@ -284,16 +284,18 @@ def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_p
 
   # Define different optimizers for each group
   optimizer = torch.optim.AdamW([
-    {'params': param_groups['none'], 'lr': 0.0, 'weight_decay': 0.0},
-    {'params': param_groups['ssm'], 'lr': ssm_lr, 'weight_decay': 0.0},
-    {'params': param_groups['regular'], 'lr': lr, 'weight_decay': weight_decay},
+
+    {'params': param_groups['ssm'], 'lr': torch.tensor(ssm_lr), 'weight_decay': torch.tensor(0.0)},
+    {'params': param_groups['regular'], 'lr': torch.tensor(lr), 'weight_decay': torch.tensor(weight_decay)},
   ])
 
   # Create a lr scheduler
+  # include warmup
   scheduler1 = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1/steps_per_epoch, total_iters=steps_per_epoch)
-  scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
-  scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[2])
-
+  # then move on to optimization
+  scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = epochs*steps_per_epoch, last_epoch=-1)
+  scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[steps_per_epoch])
+  
   return optimizer, scheduler
 
 
@@ -303,14 +305,12 @@ def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_p
 ###############################################################################
 
 # Training
-def train(epoch):
-
-    model.train()
+def train(epoch, vmap_model,dataloader ):
     train_loss = 0
     correct = 0
     total = 0
-    for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
-    #for batch_idx, (inputs, targets) in enumerate(tqdm(trainloader, total=len(trainloader), desc="Training", unit="batch")):
+    for batch_idx, (inputs, targets) in enumerate(tqdm(dataloader, total=len(dataloader), desc="Training", unit="batch")):
+    #for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
         inputs, targets = inputs.to(device), targets.to(device)
 
         optimizer.zero_grad()
@@ -320,7 +320,7 @@ def train(epoch):
             loss = loss.mean()  # Ensure the loss is a scalar
 
         loss.backward()
-        optimizer.step()
+        update_gradient()
 
         train_loss += loss.item()
         _, predicted = outputs.max(1)
@@ -350,9 +350,8 @@ def train(epoch):
     return avg_loss, accuracy
 
 
-def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
+def eval(epoch, vmap_model, dataloader, checkpoint=False, log_name='Eval'):
     global best_acc
-    model.eval()
     eval_loss = 0
     correct = 0
     total = 0
@@ -491,7 +490,7 @@ if __name__ == "__main__":
 
   # Dataloaders
   trainloader = torch.utils.data.DataLoader(
-      trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True)
+      trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True, pin_memory=True)
   valloader = torch.utils.data.DataLoader(
       valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
   testloader = torch.utils.data.DataLoader(
@@ -552,15 +551,33 @@ if __name__ == "__main__":
   steps_per_epoch = len(trainloader)
   criterion = nn.CrossEntropyLoss()
 
-  def compute_loss(input, target):
-    return criterion(input, target)
-  batched_loss_fn = torch.func.vmap(compute_loss, in_dims=(0, 0))
-
-
   optimizer, scheduler = setup_optimizer(
       model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay, epochs=args.epochs,
       steps_per_epoch=steps_per_epoch,
   )
+ 
+  # Setup logging to view recompiles
+  torch._logging.set_logs(recompiles=True)
+
+  def compute_loss(input, target):
+    return criterion(input, target)
+  batched_loss_fn = torch.func.vmap(compute_loss, in_dims=(0, 0))
+
+  # Step into both the optimizer and scheduler
+  #@torch.compile(fullgraph=False)
+  def update_gradient():
+    optimizer.step()
+    scheduler.step()
+
+  # Warmup runs to compile the function
+  num_epochs = args.epochs
+  total_steps = (num_epochs+1)*steps_per_epoch
+
+  for ii in range(args.epochs*steps_per_epoch):
+    update_gradient()
+    print(optimizer.param_groups[0]["lr"])
+    if ii == steps_per_epoch:
+      print("Finished warmup")
 
   for epoch in tqdm(range(start_epoch, args.epochs), desc="Running ", unit="epoch"):
       if epoch == 0:
@@ -570,7 +587,9 @@ if __name__ == "__main__":
             wandb.log({"epoch": epoch, "Val Acc": val_acc})
         else:
             tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
-      train_loss, train_acc = train(epoch)
-      val_acc = eval(epoch, valloader, checkpoint=False, log_name='Val')
-      scheduler.step()
-  eval(epoch, testloader)
+      model.train()
+      train_loss, train_acc = train(epoch, vmap_model, trainloader)
+      model.eval()
+      val_acc = eval(epoch, vmap_model, valloader, checkpoint=False, log_name='Val')
+  model.eval()
+  eval(epoch, vmap_model, testloader)
