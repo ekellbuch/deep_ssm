@@ -309,9 +309,8 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
-    #for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
-    for batch_idx, batch in enumerate(tqdm(trainloader, total=len(trainloader), desc="Training", unit="batch")):
-        inputs, targets = batch
+    for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
+    #for batch_idx, (inputs, targets) in enumerate(tqdm(trainloader, total=len(trainloader), desc="Training", unit="batch")):
         inputs, targets = inputs.to(device), targets.to(device)
 
         optimizer.zero_grad()
@@ -363,6 +362,8 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = vmap_model(inputs)
             loss = batched_loss_fn(outputs, targets)
+            if loss.dim() > 0:
+              loss = loss.mean()  # Ensure the loss is a scalar
             eval_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
