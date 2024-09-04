@@ -304,6 +304,7 @@ def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_p
 
 # Training
 def train(epoch):
+
     model.train()
     train_loss = 0
     correct = 0
@@ -312,11 +313,13 @@ def train(epoch):
     for batch_idx, batch in enumerate(tqdm(trainloader, total=len(trainloader), desc="Training", unit="batch")):
         inputs, targets = batch
         inputs, targets = inputs.to(device), targets.to(device)
-        #model.zero_grad()
-        for param in model.parameters():
-          param.grad = None
+
+        optimizer.zero_grad()
         outputs = vmap_model(inputs)
-        loss = criterion(outputs, targets)
+        loss = batched_loss_fn(outputs, targets)
+        if loss.dim() > 0:
+            loss = loss.mean()  # Ensure the loss is a scalar
+
         loss.backward()
         optimizer.step()
 
@@ -359,7 +362,7 @@ def eval(epoch, dataloader, checkpoint=False, log_name='Eval'):
         for batch_idx, (inputs, targets) in enumerate(dataloader):#, desc="Evaluating", unit="batch")):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = vmap_model(inputs)
-            loss = criterion(outputs, targets)
+            loss = batched_loss_fn(outputs, targets)
             eval_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
@@ -487,7 +490,7 @@ if __name__ == "__main__":
 
   # Dataloaders
   trainloader = torch.utils.data.DataLoader(
-      trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+      trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True)
   valloader = torch.utils.data.DataLoader(
       valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
   testloader = torch.utils.data.DataLoader(
@@ -525,8 +528,11 @@ if __name__ == "__main__":
   model = model.to(device)
 
   # compile model and vmap
-  scripted_model = torch.jit.script(model)
-  vmap_model = torch.func.vmap(scripted_model, in_dims=0, randomness='same')
+  @torch.jit.script
+  def vectorized_forward(x):
+      return model(x)
+  
+  vmap_model = torch.func.vmap(vectorized_forward, in_dims=0, randomness='different')
 
   if device == 'cuda':
       cudnn.benchmark = True
@@ -544,6 +550,12 @@ if __name__ == "__main__":
   # steps_per_epoch
   steps_per_epoch = len(trainloader)
   criterion = nn.CrossEntropyLoss()
+
+  def compute_loss(input, target):
+    return criterion(input, target)
+  batched_loss_fn = torch.func.vmap(compute_loss, in_dims=(0, 0))
+
+
   optimizer, scheduler = setup_optimizer(
       model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay, epochs=args.epochs,
       steps_per_epoch=steps_per_epoch,
