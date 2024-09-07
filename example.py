@@ -524,9 +524,17 @@ if __name__ == "__main__":
       prenorm=True,
       bn_momentum=0.95,
   )
-
   model = model.to(device)
+  # seq length
+  batch = next(iter(trainloader))[0].to(device)
+  #bsz_, len_, dim_ = batch.shape
+  #dummy_input = torch.randn((bsz_, len_, dim_)).to(device)
+  # Option 1: Use torch.compile for model optimization
+  compiled_model = torch.compile(model)
 
+  # Forward pass with compiled model
+  output = compiled_model(batch)
+  exit()
   # compile model and vmap
   @torch.jit.script
   def vectorized_forward(x):

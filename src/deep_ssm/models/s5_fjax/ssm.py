@@ -10,7 +10,12 @@ import math
 from deep_ssm.models.s5_fjax.jax_func import associative_scan, lecun_normal
 from deep_ssm.models.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps, make_DPLR_HiPPO, \
   trunc_standard_normal
-from deep_ssm.models.s5_fjax.scan_ref import scan as scan_ref
+#from deep_ssm.models.s5_fjax.scan_ref import scan as scan_ref
+from deep_ssm.models.s5_fjax.p_scan import pscan, pscan_rev
+import torch._dynamo
+
+# Enable capture of functional transforms, including torch.vmap
+torch._dynamo.config.capture_func_transforms = True
 
 # Discretization functions
 def discretize_bilinear(Lambda: torch.Tensor,
@@ -72,7 +77,7 @@ def discretize_zoh(Lambda: torch.Tensor,
 @torch.jit.script
 def binary_operator(
   q_i: Tuple[torch.Tensor, torch.Tensor], q_j: Tuple[torch.Tensor, torch.Tensor]
-):
+) -> Tuple[torch.Tensor, torch.Tensor]:
   """Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
   Args:
       q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
@@ -86,7 +91,9 @@ def binary_operator(
   return A_j * A_i, torch.addcmul(b_j, A_j, b_i)
 
 
-@torch.jit.ignore
+#@torch.jit.disable(recursive=True)
+#@torch.jit.ignore
+#@torch.compiler.disable
 def apply_ssm(
   Lambda_bars: torch.Tensor,
   B_bars: torch.Tensor,
@@ -94,8 +101,7 @@ def apply_ssm(
   input_sequence: torch.Tensor,
   conj_sym: bool = False,
   bidirectional: bool = False,
-  return_state: bool = False,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
   """
   Apply a linear state-space model to an input sequence x_t and return cs:
     x_{t+1} = A x_t + B u
@@ -110,49 +116,43 @@ def apply_ssm(
   :return:  y, state:
     ["seq_length", "num_features"], ["num_states"]
   """
-  # Cast to correct complex type
-  if not isinstance(Lambda_bars, torch.Tensor):
-    raise ValueError(f"Expected Lambda_bars to be a tensor, but got {type(Lambda_bars)}")
-
-  if not isinstance(input_sequence, torch.Tensor):
-    raise ValueError(f"Expected input_sequence to be a tensor, but got {type(input_sequence)}")
 
   cinput_sequence = input_sequence.type(Lambda_bars.dtype)
 
   # compute Bu elements
   if B_bars.ndim == 3:
     # Dynamic timesteps (significantly more expensive)
-    Bu_elements = torch.vmap(lambda B_bar, u: B_bar @ u, in_dims=(0,0), out_dims=0, randomness='error',chunk_size=None)(B_bars, cinput_sequence)
+    Bu_elements = torch.einsum("lpf,lf->lp", B_bars, cinput_sequence)
   else:
     # Static timesteps
-    Bu_elements = torch.vmap(lambda u: B_bars @ u, in_dims=0, out_dims=0,randomness='error',chunk_size=None)(cinput_sequence)
+    Bu_elements = torch.einsum("pf,lf->lp", B_bars, cinput_sequence)
 
   if Lambda_bars.ndim == 1:  # Repeat for associative_scan
     Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
 
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u
   #_, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
-  xs = scan_ref(Lambda_bars.unsqueeze(0), Bu_elements.unsqueeze(0)).squeeze(0)
+  xs = pscan(Lambda_bars, Bu_elements)
 
   if bidirectional:
     #_, xs2 = associative_scan(
     #  binary_operator, (Lambda_bars, Bu_elements), reverse=True
     #)
-    xs2 = scan_ref(Lambda_bars.unsqueeze(0), Bu_elements.unsqueeze(0), reverse=True).squeeze(0)
-    xs = torch.cat((xs, xs2), axis=-1)
+    xs2 = pscan_rev(Lambda_bars, Bu_elements)
+    xs = torch.cat((xs, xs2), dim=-1)
 
   # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
 
   # compute SSM output sequence y = C_tilde x{t+1}
   if conj_sym:
-    y = torch.vmap(lambda x: 2 * (C_tilde @ x).real, in_dims=0, out_dims=0, randomness='error',chunk_size=None)(xs)
+    y = 2 * torch.einsum('lh,fh->lf', xs, C_tilde).real
   else:
-    y = torch.vmap(lambda x: (C_tilde @ x).real, in_dims=0, out_dims=0, randomness='error',chunk_size=None)(xs)
+    y = torch.einsum('lh,fh->lf', xs, C_tilde).real
   # return output and state
-  if return_state:
-    return y, xs[-1]
-  else:
-    return y
+  #if return_state:
+  return y, xs[-1]
+  #else:
+  #  return y
 
 Initialization = Literal["complex_normal", "lecun_normal", "truncate_standard_normal"]
 
@@ -210,7 +210,7 @@ class S5SSM(torch.nn.Module):
     self.bandlimit = bandlimit
     self.step_rescale = step_rescale
     self.clip_eigs = clip_eigs
-    self.return_state = False
+    #self.return_state = False
 
     if self.conj_sym:
       # Need to account for case where we actually sample real B and C, and then multiply
@@ -288,22 +288,24 @@ class S5SSM(torch.nn.Module):
         torch.view_as_real(torch.view_as_complex(self.C) * mask)
       )
 
-  def initial_state(self):
+  def initial_state(self) -> torch.Tensor:
     return torch.zeros((*(), self.C.shape[-1]))
 
-  def get_lambda(self):
+#  @torch.compiler.disable(recursive=False)
+  def get_lambda(self) -> torch.Tensor:
     if self.clip_eigs:
-      Lambda = torch.clip(self.Lambda_re, None, -1e-4) + 1j * self.Lambda_im
+      Lambda_re = torch.clip(self.Lambda_re, None, -1e-4)
     else:
-      Lambda = self.Lambda_re + 1j * self.Lambda_im
-    return Lambda
+      Lambda_re = self.Lambda_re 
+    return torch.complex(Lambda_re, self.Lambda_im)
 
-  def get_BC_tilde(self):
-    B_tilde = self.B[..., 0] + 1j * self.B[..., 1]
-    C_tilde = self.C[..., 0] + 1j * self.C[..., 1]
+#  @torch.compiler.disable(recursive=False)
+  def get_BC_tilde(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    B_tilde = torch.complex(self.B[..., 0], self.B[..., 1])
+    C_tilde = torch.complex(self.C[..., 0], self.C[..., 1])
     return B_tilde, C_tilde
 
-  @torch.jit.ignore
+  #@torch.jit.ignore
   def apply_ssm_helper(self,
                        Lambda_bars: torch.Tensor,
                        B_bars: torch.Tensor,
@@ -312,28 +314,28 @@ class S5SSM(torch.nn.Module):
                        D: torch.Tensor) -> torch.Tensor:
 
       # y_{t+1} = C_tilde x_{t+1} + D u
-      ys = apply_ssm(
+      ys, _ = apply_ssm(
           Lambda_bars=Lambda_bars,
           B_bars=B_bars,
           C_tilde=C_tilde,
           input_sequence=input_sequence,
           conj_sym=self.conj_sym,
           bidirectional=self.bidirectional,
-          return_state=self.return_state
+          #return_state=self.return_state
           )
 
       # compute the feed through matrix:
-      compute_D = torch.vmap(lambda u: D * u, in_dims=0, out_dims=0, randomness='error', chunk_size=None)
-      Du = compute_D(input_sequence)
+      #compute_D = torch.vmap(lambda u: D * u, in_dims=0, out_dims=0, randomness='error', chunk_size=None)
+      Du = torch.einsum('i,bi->bi', D, input_sequence)
       return ys + Du
-
+  #"""
   # NOTE: can only be used as RNN OR S5(MIMO) (no mixing)
   def forward(self,
               signal: torch.Tensor) -> torch.Tensor:
     """
 
     Args:
-      signal: TensorType["seq_length", "num_features"]
+      signal: TensorType["batch", "seq_length", "num_features"]
       prev_state: Optional[TensorType["num_states"]] = None
       step_rescale:
 
@@ -352,14 +354,22 @@ class S5SSM(torch.nn.Module):
     Lambda_bar, B_bar = self.discretize(Lambda, B_tilde, step_scale)
 
     # calculate C_tilde x_{t+1}
+    
+    #apply_ssm_vmap = torch.vmap(
+    #    self.apply_ssm_helper, 
+    #    in_dims=(None, None, None, 0, None), out_dims=0, randomness='error', chunk_size=None,
+    #)
+    
+    # Call vmap on the input_sequence while keeping the other inputs fixed
     ys = self.apply_ssm_helper(Lambda_bar, B_bar, C_tilde, signal, self.D)
+    #ys = torch.zeros_like(signal)
     return ys
 
 
   def step(self,
            signal: torch.Tensor,
            prev_state: torch.Tensor,
-           step_rescale: Union[float, torch.Tensor] = 1.0):
+           step_rescale: torch.Tensor) -> torch.Tensor:
     """
     signal: TensorType["batch_size", "seq_length", "num_features"],
     prev_state: TensorType["batch_size", "num_states"],
@@ -443,8 +453,8 @@ class S5(torch.nn.Module):
       step_rescale=step_rescale,
       bandlimit=bandlimit)
 
-  def initial_state(self, batch_size: Optional[int] = None) -> torch.Tensor:
-    return self.seq.initial_state(batch_size)
+  #def initial_state(self, batch_size: Optional[int] = None) -> torch.Tensor:
+  #  return self.seq.initial_state(batch_size)
 
 
   def forward(self,
@@ -455,12 +465,17 @@ class S5(torch.nn.Module):
     Returns:
 
     """
-    return self.seq(signal)
+    outputs = []
+    
+    for i in range(signal.size(0)):
+        outputs.append(self.seq(signal[i]))
+    return torch.stack(outputs)
+    #return torch.vmap(self.seq, in_dims=0, out_dims=0, randomness='error', chunk_size=None)(signal)
 
   def step(self,
            signal: torch.Tensor,
            prev_state: torch.Tensor,
-           rate: Union[float, torch.Tensor] = 1.0):
+           rate: torch.Tensor = 1.0) -> torch.Tensor:
     """
     Args:
       signal: TensorType["batch_size", "seq_length", "num_features"]
