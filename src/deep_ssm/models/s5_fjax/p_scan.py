@@ -163,8 +163,8 @@ def pscan(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
   X: L x D
   Y: L x D
   """
-  x = x.contiguous()
-  y = y.contiguous()
+  #x = x.contiguous()
+  #y = y.contiguous()
   out_x = pscan_(x, y)
   return out_x
 
@@ -173,8 +173,8 @@ def pscan_rev(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
   x = x.contiguous()
   y = y.contiguous()
 
-  x = flip_complex(x, 1)
-  y = flip_complex(y, 1)
+  #x = flip_complex(x, 1)
+  #y = flip_complex(y, 1)
 
   out_x = pscan_(x, y)
 
