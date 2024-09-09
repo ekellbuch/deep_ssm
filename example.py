@@ -86,8 +86,8 @@ class SequenceLayer(torch.nn.Module):
     bn_momentum: float = 0.9,
     # optional parameters
     bandlimit: float = None,
-  ):
-    super().__init__()
+    ):
+    super(SequenceLayer, self).__init__()
     self.d_model = d_model
     self.prenorm = prenorm
     self.batchnorm = batchnorm
@@ -112,8 +112,11 @@ class SequenceLayer(torch.nn.Module):
       self.out1 = torch.nn.Linear(d_model,d_model)
       self.out2 = torch.nn.Linear(d_model,d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
-      self.out1 = torch.nn.Identity() # No-op
-      self.out2 = torch.nn.Linear(d_model,d_model)
+      self.out1 = nn.Identity()  # No-op layer
+      self.out2 = nn.Linear(d_model, d_model)
+    else:
+      self.out1 = nn.Identity()
+      self.out2 = nn.Identity()
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -126,23 +129,23 @@ class SequenceLayer(torch.nn.Module):
 
   def apply_activation(self, x):
     # Apply activation
-    if self.activation in ["full_glu"]:
+    if self.activation == "full_glu":
       x = self.drop(self.gelu(x))
       out2_result = torch.sigmoid(self.out2(x))
       x = self.out1(x) * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu1"]:
+    elif self.activation == "half_glu1":
       x = self.drop(self.gelu(x))
       out2_result = torch.sigmoid(self.out2(x))
       x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu2"]:
+    elif self.activation == "half_glu2":
       # Only apply GELU to the gate input
       x1 = self.drop(self.gelu(x))
       out2_result = torch.sigmoid(self.out2(x1))
       x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["gelu"]:
+    elif self.activation == "gelu":
       x = self.drop(self.gelu(x))
     else:
       raise NotImplementedError(
@@ -151,101 +154,102 @@ class SequenceLayer(torch.nn.Module):
 
   def forward(self,
               x: torch.Tensor) -> torch.Tensor:
-
-    skip = x
+    skip = x  # (B, L, d_input)
     if self.prenorm:
       if self.batchnorm:
-        x = self.norm(x)
+        x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
       else:
         x = self.norm(x)
 
     # Apply sequence model
-    x = self.seq(x)
+    x = self.seq(x)  # (B, L, d_input)
 
-    x = self.apply_activation(x)
+    x = self.apply_activation(x)  # (B, L, d_input)
 
     # residual connection
     x = skip + x
 
     if not self.prenorm:
       if self.batchnorm:
-        x = self.norm(x)
-    return x
+        x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
+    return x  # (B, L, d_input)
 
 
 class S5Model(nn.Module):
 
-    def __init__(
-        self,
-        d_input,
-        d_output=10,
-        ssm_size=384,
-        d_model=256,
-        n_layers=4,
-        blocks: int = 1,
-        dt_min: float = 0.001,
-        dt_max: float = 0.1,
-        bidirectional: bool = False,
-        C_init: str = "complex_normal",
-        conj_sym: bool = False,
-        clip_eigs: bool = False,
-        step_rescale: float = 1.0,
-        # layer parameters
-        dropout: float = 0.0,
-        activation: str = "gelu",
-        prenorm: bool = False,
-        batchnorm: bool = False,
-        bn_momentum: float = 0.9,
-        bandlimit: float = None,
-        discretization: str = "bilinear"
-    ):
-        super().__init__()
+  def __init__(
+    self,
+    d_input,
+    d_output=10,
+    ssm_size=384,
+    d_model=256,
+    n_layers=4,
+    blocks: int = 1,
+    dt_min: float = 0.001,
+    dt_max: float = 0.1,
+    bidirectional: bool = False,
+    C_init: str = "complex_normal",
+    conj_sym: bool = False,
+    clip_eigs: bool = False,
+    step_rescale: float = 1.0,
+    # layer parameters
+    dropout: float = 0.0,
+    activation: str = "gelu",
+    prenorm: bool = False,
+    batchnorm: bool = False,
+    bn_momentum: float = 0.9,
+    bandlimit: float = None,
+    discretization: str = "bilinear",
 
-        # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
-        self.encoder = nn.Linear(d_input, d_model)
+  ):
+    super(S5Model, self).__init__()
 
-        # Stack S5 layers as residual blocks
-        self.layers = nn.Sequential(*[
-          SequenceLayer(d_model=d_model,
-                        ssm_size=ssm_size,
-                        blocks=blocks,
-                        dt_min=dt_min,
-                        dt_max=dt_max,
-                        bidirectional=bidirectional,
-                        C_init=C_init,
-                        conj_sym=conj_sym,
-                        clip_eigs=clip_eigs,
-                        step_rescale=step_rescale,
-                        discretization=discretization,
-                        dropout=dropout,
-                        activation=activation,
-                        prenorm=prenorm,
-                        batchnorm=batchnorm,
-                        bn_momentum=bn_momentum,
-                        bandlimit=bandlimit,
-                        ) for _ in range(n_layers)
-        ])
+    # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
+    self.encoder = nn.Linear(d_input, d_model)
 
-        # Linear decoder
-        self.decoder = nn.Linear(d_model, d_output)
+    self.layers = nn.Sequential(*[
+      SequenceLayer(d_model=d_model,
+                    ssm_size=ssm_size,
+                    blocks=blocks,
+                    dt_min=dt_min,
+                    dt_max=dt_max,
+                    bidirectional=bidirectional,
+                    C_init=C_init,
+                    conj_sym=conj_sym,
+                    clip_eigs=clip_eigs,
+                    step_rescale=step_rescale,
+                    discretization=discretization,
+                    dropout=dropout,
+                    activation=activation,
+                    prenorm=prenorm,
+                    batchnorm=batchnorm,
+                    bn_momentum=bn_momentum,
+                    bandlimit=bandlimit,
+                    ) for _ in range(n_layers)
+    ])
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-      """
-      Input x is shape (L, d_input)
-      """
-      output = self.encoder(x)  # (L, d_input) -> (L, d_model)
+    # Linear decoder
+    self.decoder = nn.Linear(d_model, d_output)
 
-      # Map the layers
-      # Each iteration of this loop will map (d_model, L) -> (d_model, L)
-      output = self.layers(output)
+  def forward(self, x: torch.Tensor) -> torch.Tensor:
+    """
+    Input x is shape (B, L, d_input)
+    """
+    output = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
 
-      # Pooling: average pooling over the sequence length
-      output = output.mean(dim=-2)
+    # Map the layers
+    # Each iteration of this loop will map (B, L, d_model) -> (B, L, d_model)
+    output = self.layers(output)
 
-      # Decode the outputs
-      output = self.decoder(output)  # (d_model) -> (d_output)
+    # for layer in self.layers:
+    #  output = layer(output)
+    # Pooling: average pooling over the sequence length
+    output = output.mean(dim=-2)
 
-      return output
+    # Decode the outputs
+    output = self.decoder(output)  # (B, d_model) -> (B, d_output)
+
+    return output
 
 
 def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_per_epoch):
@@ -315,13 +319,12 @@ def train(epoch, vmap_model,dataloader ):
 
         optimizer.zero_grad()
         outputs = vmap_model(inputs)
-        loss = batched_loss_fn(outputs, targets)
+        loss = criterion(outputs, targets)
         if loss.dim() > 0:
             loss = loss.mean()  # Ensure the loss is a scalar
 
         loss.backward()
         update_gradient()
-
         train_loss += loss.item()
         _, predicted = outputs.max(1)
         total += targets.size(0)
@@ -360,7 +363,7 @@ def eval(epoch, vmap_model, dataloader, checkpoint=False, log_name='Eval'):
         for batch_idx, (inputs, targets) in enumerate(dataloader):#, desc="Evaluating", unit="batch")):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = vmap_model(inputs)
-            loss = batched_loss_fn(outputs, targets)
+            loss = criterion(outputs, targets)
             if loss.dim() > 0:
               loss = loss.mean()  # Ensure the loss is a scalar
             eval_loss += loss.item()
@@ -430,6 +433,11 @@ if __name__ == "__main__":
 
   # Data
   print(f'==> Preparing {args.dataset} data..')
+  # Setup logging to view recompiles
+  torch._logging.set_logs(recompiles=True)
+  torch.backends.cudnn.deterministic = True
+  torch.backends.cudnn.benchmark = False
+  torch.manual_seed(42)
 
 
   if args.dataset == 'cifar10':
@@ -497,11 +505,6 @@ if __name__ == "__main__":
       testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
 
-  # debugging:
-  #trainloader = [next(iter(trainloader)),next(iter(trainloader)),next(iter(trainloader))] # Only 1 batch
-  #valloader = [next(iter(valloader)),next(iter(valloader)),next(iter(valloader))] # Only 1 batch
-  #testloader = [next(iter(testloader)),next(iter(testloader)),next(iter(testloader))] # Only 1 batch
-
   # Model
   print('==> Building model..')
   model = S5Model(
@@ -525,25 +528,7 @@ if __name__ == "__main__":
       bn_momentum=0.95,
   )
   model = model.to(device)
-  # seq length
-  batch = next(iter(trainloader))[0].to(device)
-  #bsz_, len_, dim_ = batch.shape
-  #dummy_input = torch.randn((bsz_, len_, dim_)).to(device)
-  # Option 1: Use torch.compile for model optimization
   compiled_model = torch.compile(model)
-
-  # Forward pass with compiled model
-  output = compiled_model(batch)
-  exit()
-  # compile model and vmap
-  @torch.jit.script
-  def vectorized_forward(x):
-      return model(x)
-  
-  vmap_model = torch.func.vmap(vectorized_forward, in_dims=0, randomness='different')
-
-  if device == 'cuda':
-      cudnn.benchmark = True
 
   if args.resume:
       # Load checkpoint.
@@ -555,49 +540,31 @@ if __name__ == "__main__":
       start_epoch = checkpoint['epoch']
 
 
-  # steps_per_epoch
   steps_per_epoch = len(trainloader)
   criterion = nn.CrossEntropyLoss()
 
   optimizer, scheduler = setup_optimizer(
-      model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay, epochs=args.epochs,
+      compiled_model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay, epochs=args.epochs,
       steps_per_epoch=steps_per_epoch,
   )
  
-  # Setup logging to view recompiles
-  torch._logging.set_logs(recompiles=True)
-
-  def compute_loss(input, target):
-    return criterion(input, target)
-  batched_loss_fn = torch.func.vmap(compute_loss, in_dims=(0, 0))
-
   # Step into both the optimizer and scheduler
-  #@torch.compile(fullgraph=False)
+  @torch.compile(fullgraph=False)
   def update_gradient():
     optimizer.step()
     scheduler.step()
 
-  # Warmup runs to compile the function
-  num_epochs = args.epochs
-  total_steps = (num_epochs+1)*steps_per_epoch
-
-  for ii in range(args.epochs*steps_per_epoch):
-    update_gradient()
-    print(optimizer.param_groups[0]["lr"])
-    if ii == steps_per_epoch:
-      print("Finished warmup")
-
   for epoch in tqdm(range(start_epoch, args.epochs), desc="Running ", unit="epoch"):
       if epoch == 0:
-          pass #tqdm.write('Epoch: %d' % (epoch))
+          pass
       else:
         if wandb.run:
             wandb.log({"epoch": epoch, "Val Acc": val_acc})
         else:
             tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
-      model.train()
-      train_loss, train_acc = train(epoch, vmap_model, trainloader)
-      model.eval()
-      val_acc = eval(epoch, vmap_model, valloader, checkpoint=False, log_name='Val')
-  model.eval()
-  eval(epoch, vmap_model, testloader)
+      compiled_model.train()
+      train_loss, train_acc = train(epoch, compiled_model, trainloader)
+      compiled_model.eval()
+      val_acc = eval(epoch, compiled_model, valloader, checkpoint=False, log_name='Val')
+  compiled_model.eval()
+  eval(epoch, compiled_model, testloader)

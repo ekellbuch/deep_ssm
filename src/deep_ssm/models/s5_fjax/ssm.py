@@ -10,8 +10,7 @@ import math
 from deep_ssm.models.s5_fjax.jax_func import associative_scan, lecun_normal
 from deep_ssm.models.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps, make_DPLR_HiPPO, \
   trunc_standard_normal
-#from deep_ssm.models.s5_fjax.scan_ref import scan as scan_ref
-from deep_ssm.models.s5_fjax.p_scan import pscan, pscan_rev
+from deep_ssm.models.s5_fjax.triton_scan import pscan, pscan_rev
 import torch._dynamo
 
 # Enable capture of functional transforms, including torch.vmap
@@ -25,9 +24,9 @@ def discretize_bilinear(Lambda: torch.Tensor,
   """Discretize a diagonalized, continuous-time linear SSM
   using bilinear transform method.
   Args:
-      Lambda (complex64): diagonal state matrix              (P,)
+      Lambda (real): diagonal state matrix              (P,)
           TensorType["num_states"]
-      B_tilde (complex64): input matrix                      (P, H)
+      B_tilde (real): input matrix                      (P, H)
           TensorType["num_states", "num_features"]
       Delta (float32): discretization step sizes             (P,)
           TensorType["num_states"]
@@ -90,10 +89,7 @@ def binary_operator(
   # return A_j * A_i, A_j * b_i + b_j
   return A_j * A_i, torch.addcmul(b_j, A_j, b_i)
 
-
-#@torch.jit.disable(recursive=True)
-#@torch.jit.ignore
-#@torch.compiler.disable
+@torch.compiler.disable
 def apply_ssm(
   Lambda_bars: torch.Tensor,
   B_bars: torch.Tensor,
@@ -122,22 +118,18 @@ def apply_ssm(
   # compute Bu elements
   if B_bars.ndim == 3:
     # Dynamic timesteps (significantly more expensive)
-    Bu_elements = torch.einsum("lpf,lf->lp", B_bars, cinput_sequence)
+    Bu_elements = torch.einsum("lpf,blf->blp", B_bars, cinput_sequence)
   else:
     # Static timesteps
-    Bu_elements = torch.einsum("pf,lf->lp", B_bars, cinput_sequence)
+    Bu_elements = torch.einsum("pf,blf->blp", B_bars, cinput_sequence)
 
   if Lambda_bars.ndim == 1:  # Repeat for associative_scan
-    Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
+    Lambda_bars = torch.tile(Lambda_bars, (input_sequence.shape[0], input_sequence.shape[1],1))
 
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u
-  #_, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
   xs = pscan(Lambda_bars, Bu_elements)
 
   if bidirectional:
-    #_, xs2 = associative_scan(
-    #  binary_operator, (Lambda_bars, Bu_elements), reverse=True
-    #)
     xs2 = pscan_rev(Lambda_bars, Bu_elements)
     xs = torch.cat((xs, xs2), dim=-1)
 
@@ -145,14 +137,11 @@ def apply_ssm(
 
   # compute SSM output sequence y = C_tilde x{t+1}
   if conj_sym:
-    y = 2 * torch.einsum('lh,fh->lf', xs, C_tilde).real
+    y = 2 * torch.einsum('blh,fh->blf', xs, C_tilde).real
   else:
-    y = torch.einsum('lh,fh->lf', xs, C_tilde).real
+    y = torch.einsum('blh,fh->blf', xs, C_tilde).real
   # return output and state
-  #if return_state:
   return y, xs[-1]
-  #else:
-  #  return y
 
 Initialization = Literal["complex_normal", "lecun_normal", "truncate_standard_normal"]
 
@@ -161,7 +150,7 @@ class S5SSM(torch.nn.Module):
   def __init__(
     self,
     Lambda_re_init: torch.Tensor,
-    Lambda_im_init: torch.Tensor,
+    #Lambda_im_init: torch.Tensor,
     V: torch.Tensor,
     Vinv: torch.Tensor,
     H: int,
@@ -221,15 +210,13 @@ class S5SSM(torch.nn.Module):
 
     # Initialize diagonal state to state matrix Lambda (eigenvalues)
     self.Lambda_re = torch.nn.Parameter(Lambda_re_init)
-    self.Lambda_im = torch.nn.Parameter(Lambda_im_init)
 
-    Lambda = self.get_lambda()
+    Lambda = self.Lambda_re
 
     # Initialize input to state (B) matrix
     # TODO: remove torch.float
     self.B = torch.nn.Parameter(
-      init_VinvB(lecun_normal(), Vinv)((local_P, H), torch.float)
-    )
+      init_VinvB(lecun_normal(), Vinv)((local_P, H), torch.float)[...,0])
 
     # B_tilde = self.B[..., 0] + 1j * self.B[..., 1]
 
@@ -240,33 +227,20 @@ class S5SSM(torch.nn.Module):
     elif self.C_init in ["lecun_normal"]:
       C_init = lecun_normal()
       # C_shape = (H, local_P, 2)
-    elif self.C_init in ["complex_normal"]:
-      C_init = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
     else:
       raise NotImplementedError(
         "C_init method {} not implemented".format(self.C_init))
 
-    if self.C_init in ["complex_normal"]:
-      if self.bidirectional:
-        # TODO check
-        C = torch.cat((C_init, C_init), axis=-1, )
-        self.C = torch.nn.Parameter(C)
-      else:
-        self.C = torch.nn.Parameter(C_init)
+    if self.bidirectional:
+      # TODO: check parametrization for optimization
+      C1 = init_CV(C_init, (H, local_P), V)
+      C2 = init_CV(C_init, (H, local_P), V)
+
+      C = torch.cat((C1[..., 0], C2[..., 0]), axis=-1)
+      self.C = torch.nn.Parameter(C)
     else:
-      if self.bidirectional:
-        # TODO: check parametrization for optimization
-        C1 = init_CV(C_init, (H, local_P), V)
-        C2 = init_CV(C_init, (H, local_P), V)
-
-        C_real = torch.cat((C1[..., 0], C2[..., 0]), axis=-1)
-        C_imag = torch.cat((C1[..., 1], C2[..., 1]), axis=-1)
-
-        C = torch.stack((C_real, C_imag), axis=-1, )
-        self.C = torch.nn.Parameter(C)
-      else:
-        C = init_CV(C_init, (H, local_P), V)
-        self.C = torch.nn.Parameter(C)
+      C = init_CV(C_init, (H, local_P), V)
+      self.C = torch.nn.Parameter(C)
     # Initialize feedthrough (D) matrix
     self.D = torch.nn.Parameter(torch.normal(0, 1, (H,)))
 
@@ -295,14 +269,12 @@ class S5SSM(torch.nn.Module):
   def get_lambda(self) -> torch.Tensor:
     if self.clip_eigs:
       Lambda_re = torch.clip(self.Lambda_re, None, -1e-4)
-    else:
-      Lambda_re = self.Lambda_re 
-    return torch.complex(Lambda_re, self.Lambda_im)
+    return Lambda_re
 
 #  @torch.compiler.disable(recursive=False)
   def get_BC_tilde(self) -> Tuple[torch.Tensor, torch.Tensor]:
-    B_tilde = torch.complex(self.B[..., 0], self.B[..., 1])
-    C_tilde = torch.complex(self.C[..., 0], self.C[..., 1])
+    B_tilde = self.B
+    C_tilde = self.C
     return B_tilde, C_tilde
 
   #@torch.jit.ignore
@@ -323,10 +295,8 @@ class S5SSM(torch.nn.Module):
           bidirectional=self.bidirectional,
           #return_state=self.return_state
           )
-
       # compute the feed through matrix:
-      #compute_D = torch.vmap(lambda u: D * u, in_dims=0, out_dims=0, randomness='error', chunk_size=None)
-      Du = torch.einsum('i,bi->bi', D, input_sequence)
+      Du = torch.einsum('i,bmi->bmi', D, input_sequence)
       return ys + Du
   #"""
   # NOTE: can only be used as RNN OR S5(MIMO) (no mixing)
@@ -341,7 +311,7 @@ class S5SSM(torch.nn.Module):
 
     Returns:
     """
-    # get complex B and C
+    # get  B and C
     B_tilde, C_tilde = self.get_BC_tilde()
 
     # get lambda
@@ -362,7 +332,6 @@ class S5SSM(torch.nn.Module):
     
     # Call vmap on the input_sequence while keeping the other inputs fixed
     ys = self.apply_ssm_helper(Lambda_bar, B_bar, C_tilde, signal, self.D)
-    #ys = torch.zeros_like(signal)
     return ys
 
 
@@ -440,7 +409,7 @@ class S5(torch.nn.Module):
       H=d_model,
       P=ssm_size,
       Lambda_re_init=Lambda.real,
-      Lambda_im_init=Lambda.imag,
+      #Lambda_im_init=Lambda.imag,
       V=V,
       Vinv=Vinv,
       C_init=C_init,
@@ -465,12 +434,8 @@ class S5(torch.nn.Module):
     Returns:
 
     """
-    outputs = []
-    
-    for i in range(signal.size(0)):
-        outputs.append(self.seq(signal[i]))
-    return torch.stack(outputs)
-    #return torch.vmap(self.seq, in_dims=0, out_dims=0, randomness='error', chunk_size=None)(signal)
+    return self.seq(signal)
+
 
   def step(self,
            signal: torch.Tensor,
