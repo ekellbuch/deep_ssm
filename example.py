@@ -32,7 +32,7 @@ from einops import rearrange
 import os
 import argparse
 
-from deep_ssm.models.s5_fjax.ssm import S5
+from deep_ssm.mixers.s5_fjax.ssm import S5
 from tqdm.auto import tqdm
 from typing import Literal, Tuple, Optional, Union
 from torchtyping import TensorType
