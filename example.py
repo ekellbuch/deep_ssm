@@ -87,7 +87,7 @@ class SequenceLayer(torch.nn.Module):
     # optional parameters
     bandlimit: float = None,
   ):
-    super().__init__()
+    super(SequenceLayer, self).__init__()
     self.d_model = d_model
     self.prenorm = prenorm
     self.batchnorm = batchnorm
@@ -109,11 +109,14 @@ class SequenceLayer(torch.nn.Module):
     )
 
     if self.activation in ["full_glu"]:
-      self.out1 = torch.nn.Linear(d_model,d_model)
-      self.out2 = torch.nn.Linear(d_model,d_model)
+      self.out1 = torch.nn.Linear(d_model, d_model)
+      self.out2 = torch.nn.Linear(d_model, d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
-      self.out1 = torch.nn.Identity() # No-op
-      self.out2 = torch.nn.Linear(d_model,d_model)
+      self.out1 = nn.Identity()  # No-op layer
+      self.out2 = nn.Linear(d_model, d_model)
+    else:
+      self.out1 = nn.Identity()
+      self.out2 = nn.Identity()
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -126,23 +129,23 @@ class SequenceLayer(torch.nn.Module):
 
   def apply_activation(self, x):
     # Apply activation
-    if self.activation in ["full_glu"]:
+    if self.activation == "full_glu":
       x = self.drop(self.gelu(x))
       out2_result = torch.sigmoid(self.out2(x))
       x = self.out1(x) * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu1"]:
+    elif self.activation == "half_glu1":
       x = self.drop(self.gelu(x))
       out2_result = torch.sigmoid(self.out2(x))
       x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu2"]:
+    elif self.activation == "half_glu2":
       # Only apply GELU to the gate input
       x1 = self.drop(self.gelu(x))
       out2_result = torch.sigmoid(self.out2(x1))
       x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["gelu"]:
+    elif self.activation == "gelu":
       x = self.drop(self.gelu(x))
     else:
       raise NotImplementedError(
@@ -151,101 +154,102 @@ class SequenceLayer(torch.nn.Module):
 
   def forward(self,
               x: torch.Tensor) -> torch.Tensor:
-
-    skip = x
+    skip = x  # (B, L, d_input)
     if self.prenorm:
       if self.batchnorm:
-        x = self.norm(x)
+        x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
       else:
         x = self.norm(x)
 
     # Apply sequence model
-    x = self.seq(x)
+    x = self.seq(x, torch.tensor(1).to(device))  # (B, L, d_input)
 
-    x = self.apply_activation(x)
+    x = self.apply_activation(x)  # (B, L, d_input)
 
     # residual connection
     x = skip + x
 
     if not self.prenorm:
       if self.batchnorm:
-        x = self.norm(x)
-    return x
+        x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
+    return x  # (B, L, d_input)
 
 
 class S5Model(nn.Module):
 
-    def __init__(
-        self,
-        d_input,
-        d_output=10,
-        ssm_size=384,
-        d_model=256,
-        n_layers=4,
-        blocks: int = 1,
-        dt_min: float = 0.001,
-        dt_max: float = 0.1,
-        bidirectional: bool = False,
-        C_init: str = "complex_normal",
-        conj_sym: bool = False,
-        clip_eigs: bool = False,
-        step_rescale: float = 1.0,
-        # layer parameters
-        dropout: float = 0.0,
-        activation: str = "gelu",
-        prenorm: bool = False,
-        batchnorm: bool = False,
-        bn_momentum: float = 0.9,
-        bandlimit: float = None,
-        discretization: str = "bilinear"
-    ):
-        super().__init__()
+  def __init__(
+    self,
+    d_input,
+    d_output=10,
+    ssm_size=384,
+    d_model=256,
+    n_layers=4,
+    blocks: int = 1,
+    dt_min: float = 0.001,
+    dt_max: float = 0.1,
+    bidirectional: bool = False,
+    C_init: str = "complex_normal",
+    conj_sym: bool = False,
+    clip_eigs: bool = False,
+    step_rescale: float = 1.0,
+    # layer parameters
+    dropout: float = 0.0,
+    activation: str = "gelu",
+    prenorm: bool = False,
+    batchnorm: bool = False,
+    bn_momentum: float = 0.9,
+    bandlimit: float = None,
+    discretization: str = "bilinear",
 
-        # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
-        self.encoder = nn.Linear(d_input, d_model)
+  ):
+    super(S5Model, self).__init__()
 
-        # Stack S5 layers as residual blocks
-        self.layers = nn.Sequential(*[
-          SequenceLayer(d_model=d_model,
-                        ssm_size=ssm_size,
-                        blocks=blocks,
-                        dt_min=dt_min,
-                        dt_max=dt_max,
-                        bidirectional=bidirectional,
-                        C_init=C_init,
-                        conj_sym=conj_sym,
-                        clip_eigs=clip_eigs,
-                        step_rescale=step_rescale,
-                        discretization=discretization,
-                        dropout=dropout,
-                        activation=activation,
-                        prenorm=prenorm,
-                        batchnorm=batchnorm,
-                        bn_momentum=bn_momentum,
-                        bandlimit=bandlimit,
-                        ) for _ in range(n_layers)
-        ])
+    # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
+    self.encoder = nn.Linear(d_input, d_model)
 
-        # Linear decoder
-        self.decoder = nn.Linear(d_model, d_output)
+    self.layers = nn.Sequential(*[
+      SequenceLayer(d_model=d_model,
+                    ssm_size=ssm_size,
+                    blocks=blocks,
+                    dt_min=dt_min,
+                    dt_max=dt_max,
+                    bidirectional=bidirectional,
+                    C_init=C_init,
+                    conj_sym=conj_sym,
+                    clip_eigs=clip_eigs,
+                    step_rescale=step_rescale,
+                    discretization=discretization,
+                    dropout=dropout,
+                    activation=activation,
+                    prenorm=prenorm,
+                    batchnorm=batchnorm,
+                    bn_momentum=bn_momentum,
+                    bandlimit=bandlimit,
+                    ) for _ in range(n_layers)
+    ])
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-      """
-      Input x is shape (L, d_input)
-      """
-      output = self.encoder(x)  # (L, d_input) -> (L, d_model)
+    # Linear decoder
+    self.decoder = nn.Linear(d_model, d_output)
 
-      # Map the layers
-      # Each iteration of this loop will map (d_model, L) -> (d_model, L)
-      output = self.layers(output)
+  def forward(self, x: torch.Tensor) -> torch.Tensor:
+    """
+    Input x is shape (B, L, d_input)
+    """
+    output = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
 
-      # Pooling: average pooling over the sequence length
-      output = output.mean(dim=-2)
+    # Map the layers
+    # Each iteration of this loop will map (B, L, d_model) -> (B, L, d_model)
+    output = self.layers(output)
 
-      # Decode the outputs
-      output = self.decoder(output)  # (d_model) -> (d_output)
+    # for layer in self.layers:
+    #  output = layer(output)
+    # Pooling: average pooling over the sequence length
+    output = output.mean(dim=-2)
 
-      return output
+    # Decode the outputs
+    output = self.decoder(output)  # (B, d_model) -> (B, d_output)
+
+    return output
 
 
 def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_per_epoch):
@@ -291,11 +295,12 @@ def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_p
 
   # Create a lr scheduler
   # include warmup
-  scheduler1 = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1/steps_per_epoch, total_iters=steps_per_epoch)
+  scheduler1 = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1 / steps_per_epoch, total_iters=steps_per_epoch)
   # then move on to optimization
-  scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = epochs*steps_per_epoch, last_epoch=-1)
-  scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2], milestones=[steps_per_epoch])
-  
+  scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs * steps_per_epoch, last_epoch=-1)
+  scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1, scheduler2],
+                                                    milestones=[steps_per_epoch])
+
   return optimizer, scheduler
 
 
@@ -305,95 +310,94 @@ def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_p
 ###############################################################################
 
 # Training
-def train(epoch, vmap_model,dataloader ):
-    train_loss = 0
-    correct = 0
-    total = 0
-    for batch_idx, (inputs, targets) in enumerate(tqdm(dataloader, total=len(dataloader), desc="Training", unit="batch")):
-    #for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
-        inputs, targets = inputs.to(device), targets.to(device)
+def train(epoch, vmap_model, dataloader):
+  train_loss = 0
+  correct = 0
+  total = 0
+  for batch_idx, (inputs, targets) in enumerate(tqdm(dataloader, total=len(dataloader), desc="Training", unit="batch")):
+    # for batch_idx, (inputs, targets) in enumerate(trainloader):#, desc="Training", unit="batch")):
+    inputs, targets = inputs.to(device), targets.to(device)
 
-        optimizer.zero_grad()
-        outputs = vmap_model(inputs)
-        loss = batched_loss_fn(outputs, targets)
-        if loss.dim() > 0:
-            loss = loss.mean()  # Ensure the loss is a scalar
+    optimizer.zero_grad()
+    outputs = vmap_model(inputs)
+    loss = criterion(outputs, targets)
+    if loss.dim() > 0:
+      loss = loss.mean()  # Ensure the loss is a scalar
 
-        loss.backward()
-        update_gradient()
+    loss.backward()
+    update_gradient()
+    train_loss += loss.item()
+    _, predicted = outputs.max(1)
+    total += targets.size(0)
+    correct += predicted.eq(targets).sum().item()
 
-        train_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
+  avg_loss = train_loss / (batch_idx + 1)
+  accuracy = 100. * correct / total
 
-    avg_loss = train_loss / (batch_idx + 1)
-    accuracy = 100. * correct / total
+  if wandb.run:
+    wandb.log({"Train Loss": avg_loss, "Train Accuracy": accuracy, "epoch": epoch})
 
-    if wandb.run:
-        wandb.log({"Train Loss": avg_loss, "Train Accuracy": accuracy, "epoch": epoch})
+    # Log gradient norms
+    for name, param in model.named_parameters():
+      if param.grad is not None:
+        grad_norm = param.grad.norm().item()
+        wandb.log({f"grad_norm/{name}": grad_norm})
 
-        # Log gradient norms
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                grad_norm = param.grad.norm().item()
-                wandb.log({f"grad_norm/{name}": grad_norm})
-
-        # Log LR:
-        for i, param_group in enumerate(optimizer.param_groups):
-          wandb.log({f"lr/group_{i}": param_group['lr']})
-    else:
-        pass
-        #tqdm.write(
-        #'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
-        #(batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
-    return avg_loss, accuracy
+    # Log LR:
+    for i, param_group in enumerate(optimizer.param_groups):
+      wandb.log({f"lr/group_{i}": param_group['lr']})
+  else:
+    pass
+    # tqdm.write(
+    # 'Train: (%d/%d) | Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+    # (batch_idx, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total)
+  return avg_loss, accuracy
 
 
 def eval(epoch, vmap_model, dataloader, checkpoint=False, log_name='Eval'):
-    global best_acc
-    eval_loss = 0
-    correct = 0
-    total = 0
+  global best_acc
+  eval_loss = 0
+  correct = 0
+  total = 0
 
-    with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(dataloader):#, desc="Evaluating", unit="batch")):
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = vmap_model(inputs)
-            loss = batched_loss_fn(outputs, targets)
-            if loss.dim() > 0:
-              loss = loss.mean()  # Ensure the loss is a scalar
-            eval_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+  with torch.no_grad():
+    for batch_idx, (inputs, targets) in enumerate(dataloader):  # , desc="Evaluating", unit="batch")):
+      inputs, targets = inputs.to(device), targets.to(device)
+      outputs = vmap_model(inputs)
+      loss = criterion(outputs, targets)
+      if loss.dim() > 0:
+        loss = loss.mean()  # Ensure the loss is a scalar
+      eval_loss += loss.item()
+      _, predicted = outputs.max(1)
+      total += targets.size(0)
+      correct += predicted.eq(targets).sum().item()
 
-    acc = 100. * correct / total
-    eval_loss = eval_loss / (batch_idx + 1)
+  acc = 100. * correct / total
+  eval_loss = eval_loss / (batch_idx + 1)
 
-    if wandb.run:
-      wandb.log({f"{log_name} Loss": eval_loss, f"{log_name} Accuracy": acc, "epoch": epoch})
-    else:
-      pass
-      #tqdm.write(
-      #  'Epoch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
-      #  (epoch, len(dataloader), eval_loss, acc, correct, total)
-      #)
+  if wandb.run:
+    wandb.log({f"{log_name} Loss": eval_loss, f"{log_name} Accuracy": acc, "epoch": epoch})
+  else:
+    pass
+    # tqdm.write(
+    #  'Epoch Idx: (%d/%d) | Loss: %.3f | Eval Acc: %.3f%% (%d/%d)' %
+    #  (epoch, len(dataloader), eval_loss, acc, correct, total)
+    # )
 
-    # Save checkpoint.
-    if checkpoint:
-        if acc > best_acc:
-            state = {
-                'model': model.state_dict(),
-                'acc': acc,
-                'epoch': epoch,
-            }
-            if not os.path.isdir('checkpoint'):
-                os.mkdir('checkpoint')
-            torch.save(state, './checkpoint/ckpt.pth')
-            best_acc = acc
+  # Save checkpoint.
+  if checkpoint:
+    if acc > best_acc:
+      state = {
+        'model': model.state_dict(),
+        'acc': acc,
+        'epoch': epoch,
+      }
+      if not os.path.isdir('checkpoint'):
+        os.mkdir('checkpoint')
+      torch.save(state, './checkpoint/ckpt.pth')
+      best_acc = acc
 
-    return acc
+  return acc
 
 
 if __name__ == "__main__":
@@ -430,174 +434,143 @@ if __name__ == "__main__":
 
   # Data
   print(f'==> Preparing {args.dataset} data..')
-
+  torch.manual_seed(42)
 
   if args.dataset == 'cifar10':
 
-      if args.grayscale:
-          transform = transforms.Compose([
-              transforms.Grayscale(),
-              transforms.ToTensor(),
-              transforms.Normalize(mean=122.6 / 255.0, std=61.0 / 255.0),
-              transforms.Lambda(view_transform_gs)
-          ])
-      else:
-          transform = transforms.Compose([
-              transforms.ToTensor(),
-              transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-              transforms.Lambda(view_transform)
-          ])
+    if args.grayscale:
+      transform = transforms.Compose([
+        transforms.Grayscale(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=122.6 / 255.0, std=61.0 / 255.0),
+        transforms.Lambda(view_transform_gs)
+      ])
+    else:
+      transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Lambda(view_transform)
+      ])
 
-      # S5 is trained on sequences with no data augmentation!
-      transform_train = transform_test = transform
+    # S5 is trained on sequences with no data augmentation!
+    transform_train = transform_test = transform
 
-      trainset = torchvision.datasets.CIFAR10(
-          root='./data/cifar/', train=True, download=True, transform=transform_train)
-      trainset, _ = split_train_val(trainset, val_split=0.1)
+    trainset = torchvision.datasets.CIFAR10(
+      root='./data/cifar/', train=True, download=True, transform=transform_train)
+    trainset, _ = split_train_val(trainset, val_split=0.1)
 
-      valset = torchvision.datasets.CIFAR10(
-          root='./data/cifar/', train=True, download=True, transform=transform_test)
-      _, valset = split_train_val(valset, val_split=0.1)
+    valset = torchvision.datasets.CIFAR10(
+      root='./data/cifar/', train=True, download=True, transform=transform_test)
+    _, valset = split_train_val(valset, val_split=0.1)
 
-      testset = torchvision.datasets.CIFAR10(
-          root='./data/cifar/', train=False, download=True, transform=transform_test)
+    testset = torchvision.datasets.CIFAR10(
+      root='./data/cifar/', train=False, download=True, transform=transform_test)
 
-      d_input = 3 if not args.grayscale else 1
-      d_output = 10
+    d_input = 3 if not args.grayscale else 1
+    d_output = 10
 
   elif args.dataset == 'mnist':
 
-      transform = transforms.Compose([
-          transforms.ToTensor(),
-          transforms.Lambda(lambda x: x.view(1, 784).t())
-      ])
-      transform_train = transform_test = transform
+    transform = transforms.Compose([
+      transforms.ToTensor(),
+      transforms.Lambda(lambda x: x.view(1, 784).t())
+    ])
+    transform_train = transform_test = transform
 
-      trainset = torchvision.datasets.MNIST(
-          root='./data', train=True, download=True, transform=transform_train)
-      trainset, _ = split_train_val(trainset, val_split=0.1)
+    trainset = torchvision.datasets.MNIST(
+      root='./data', train=True, download=True, transform=transform_train)
+    trainset, _ = split_train_val(trainset, val_split=0.1)
 
-      valset = torchvision.datasets.MNIST(
-          root='./data', train=True, download=True, transform=transform_test)
-      _, valset = split_train_val(valset, val_split=0.1)
+    valset = torchvision.datasets.MNIST(
+      root='./data', train=True, download=True, transform=transform_test)
+    _, valset = split_train_val(valset, val_split=0.1)
 
-      testset = torchvision.datasets.MNIST(
-          root='./data', train=False, download=True, transform=transform_test)
+    testset = torchvision.datasets.MNIST(
+      root='./data', train=False, download=True, transform=transform_test)
 
-      d_input = 1
-      d_output = 10
-  else: raise NotImplementedError
+    d_input = 1
+    d_output = 10
+  else:
+    raise NotImplementedError
 
   # Dataloaders
   trainloader = torch.utils.data.DataLoader(
-      trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True, pin_memory=True)
+    trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True, pin_memory=True)
   valloader = torch.utils.data.DataLoader(
-      valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
   testloader = torch.utils.data.DataLoader(
-      testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    testset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-
-  # debugging:
-  #trainloader = [next(iter(trainloader)),next(iter(trainloader)),next(iter(trainloader))] # Only 1 batch
-  #valloader = [next(iter(valloader)),next(iter(valloader)),next(iter(valloader))] # Only 1 batch
-  #testloader = [next(iter(testloader)),next(iter(testloader)),next(iter(testloader))] # Only 1 batch
 
   # Model
   print('==> Building model..')
   model = S5Model(
-      d_input=d_input,
-      d_output=d_output,
-      ssm_size=384,
-      d_model=args.d_model,
-      n_layers=args.n_layers,
-      C_init="lecun_normal",
-      batchnorm=True,
-      bidirectional=True,
-      blocks=3,
-      clip_eigs=True,
-      dropout=0.1,
-      discretization="zoh",
-      conj_sym=True,
-      dt_min = 0.001,
-      dt_max = 0.1,
-      activation="half_glu1",
-      prenorm=True,
-      bn_momentum=0.95,
+    d_input=d_input,
+    d_output=d_output,
+    ssm_size=384,
+    d_model=args.d_model,
+    n_layers=args.n_layers,
+    C_init="lecun_normal",
+    batchnorm=True,
+    bidirectional=True,
+    blocks=3,
+    clip_eigs=True,
+    dropout=0.1,
+    discretization="zoh",
+    conj_sym=True,
+    dt_min=0.001,
+    dt_max=0.1,
+    activation="half_glu1",
+    prenorm=True,
+    bn_momentum=0.95,
   )
   model = model.to(device)
-  # seq length
-  batch = next(iter(trainloader))[0].to(device)
-  #bsz_, len_, dim_ = batch.shape
-  #dummy_input = torch.randn((bsz_, len_, dim_)).to(device)
-  # Option 1: Use torch.compile for model optimization
+  # fails due to incompatibility with complex numbers?
   compiled_model = torch.compile(model)
-
-  # Forward pass with compiled model
-  output = compiled_model(batch)
-  exit()
-  # compile model and vmap
-  @torch.jit.script
-  def vectorized_forward(x):
-      return model(x)
-  
-  vmap_model = torch.func.vmap(vectorized_forward, in_dims=0, randomness='different')
-
-  if device == 'cuda':
-      cudnn.benchmark = True
+  #compiled_model = torch.jit.script(model)
+  batch = next(iter(trainloader))[0].to(device)
+  compiled_model(batch)
+  #exit()
 
   if args.resume:
-      # Load checkpoint.
-      print('==> Resuming from checkpoint..')
-      assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-      checkpoint = torch.load('./checkpoint/ckpt.pth')
-      model.load_state_dict(checkpoint['model'])
-      best_acc = checkpoint['acc']
-      start_epoch = checkpoint['epoch']
+    # Load checkpoint.
+    print('==> Resuming from checkpoint..')
+    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+    checkpoint = torch.load('./checkpoint/ckpt.pth')
+    model.load_state_dict(checkpoint['model'])
+    best_acc = checkpoint['acc']
+    start_epoch = checkpoint['epoch']
 
-
-  # steps_per_epoch
   steps_per_epoch = len(trainloader)
   criterion = nn.CrossEntropyLoss()
 
   optimizer, scheduler = setup_optimizer(
-      model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay, epochs=args.epochs,
-      steps_per_epoch=steps_per_epoch,
+    compiled_model, lr_factor=args.lr_factor, ssm_lr_base=args.ssm_lr_base, weight_decay=args.weight_decay,
+    epochs=args.epochs,
+    steps_per_epoch=steps_per_epoch,
   )
- 
+
   # Setup logging to view recompiles
   torch._logging.set_logs(recompiles=True)
 
-  def compute_loss(input, target):
-    return criterion(input, target)
-  batched_loss_fn = torch.func.vmap(compute_loss, in_dims=(0, 0))
-
   # Step into both the optimizer and scheduler
-  #@torch.compile(fullgraph=False)
+  @torch.compile(fullgraph=False)
   def update_gradient():
     optimizer.step()
     scheduler.step()
 
-  # Warmup runs to compile the function
-  num_epochs = args.epochs
-  total_steps = (num_epochs+1)*steps_per_epoch
-
-  for ii in range(args.epochs*steps_per_epoch):
-    update_gradient()
-    print(optimizer.param_groups[0]["lr"])
-    if ii == steps_per_epoch:
-      print("Finished warmup")
 
   for epoch in tqdm(range(start_epoch, args.epochs), desc="Running ", unit="epoch"):
-      if epoch == 0:
-          pass #tqdm.write('Epoch: %d' % (epoch))
+    if epoch == 0:
+      pass
+    else:
+      if wandb.run:
+        wandb.log({"epoch": epoch, "Val Acc": val_acc})
       else:
-        if wandb.run:
-            wandb.log({"epoch": epoch, "Val Acc": val_acc})
-        else:
-            tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
-      model.train()
-      train_loss, train_acc = train(epoch, vmap_model, trainloader)
-      model.eval()
-      val_acc = eval(epoch, vmap_model, valloader, checkpoint=False, log_name='Val')
-  model.eval()
-  eval(epoch, vmap_model, testloader)
+        tqdm.write('Epoch: {} Val Acc {}'.format(epoch, val_acc))
+    compiled_model.train()
+    train_loss, train_acc = train(epoch, compiled_model, trainloader)
+    compiled_model.eval()
+    val_acc = eval(epoch, compiled_model, valloader, checkpoint=False, log_name='Val')
+  compiled_model.eval()
+  eval(epoch, compiled_model, testloader)

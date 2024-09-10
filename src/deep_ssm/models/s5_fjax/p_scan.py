@@ -49,9 +49,6 @@ class PScan(torch.autograd.Function):
     D, L = A.size()
     num_steps = int(math.log2(L))
 
-    # need 
-
-
     Aa = A
     Xa = X
     # Up-sweep (reduction) step
@@ -60,11 +57,8 @@ class PScan(torch.autograd.Function):
         # complains for complex
         Aa = Aa[:, :T].view(D, T // 2, 2)  # New shape: (D, T//2, 2 (pairs)
         Xa = Xa[:, :T].view(D, T // 2, 2)
-        #Aa = Aa[:, :T].reshape(D, T // 2, 2)  # New shape: (D, T//2, 2 (pairs)
-        #Xa = Xa[:, :T].reshape(D, T // 2, 2)
 
         # Update X and A based on real and imaginary parts separately
-        #Xa[:, :, 1] = Aa[:, :, 1] * Xa[:, :, 0] + Xa[:, :, 1]
         Xa[:, :, 1].add_(Aa[:, :, 1].mul(Xa[:, :, 0]))
         Aa[:, :, 1].mul_(Aa[:, :, 0])
 
@@ -163,22 +157,23 @@ def pscan(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
   X: L x D
   Y: L x D
   """
-  #x = x.contiguous()
-  #y = y.contiguous()
+  x = x.contiguous()
+  y = y.contiguous()
   out_x = pscan_(x, y)
   return out_x
 
 
 def pscan_rev(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+  
+  x = flip_complex(x, 0)
+  y = flip_complex(y, 0)
+  
   x = x.contiguous()
   y = y.contiguous()
 
-  #x = flip_complex(x, 1)
-  #y = flip_complex(y, 1)
-
   out_x = pscan_(x, y)
 
-  out_x = flip_complex(out_x, 1)
+  out_x = flip_complex(out_x, 0)
   return out_x
 
 
