@@ -34,7 +34,7 @@ import argparse
 
 from deep_ssm.mixers.s5_fjax.ssm import S5
 from tqdm.auto import tqdm
-from typing import Literal, Tuple, Optional, Union
+from typing import Literal, Tuple, Optional, Union, List
 from torchtyping import TensorType
 import torch.nn.functional as F
 
@@ -153,7 +153,10 @@ class SequenceLayer(torch.nn.Module):
     return x
 
   def forward(self,
-              x: torch.Tensor) -> torch.Tensor:
+              x: torch.Tensor,
+              state: torch.Tensor) -> torch.Tensor:
+    """
+    """
     skip = x  # (B, L, d_input)
     if self.prenorm:
       if self.batchnorm:
@@ -162,7 +165,7 @@ class SequenceLayer(torch.nn.Module):
         x = self.norm(x)
 
     # Apply sequence model
-    x, _ = self.seq(x)  # (B, L, d_input)
+    x, state = self.seq(x, state)  # (B, L, d_input)
 
     x = self.apply_activation(x)  # (B, L, d_input)
 
@@ -172,7 +175,7 @@ class SequenceLayer(torch.nn.Module):
     if not self.prenorm:
       if self.batchnorm:
         x = self.norm(x.transpose(-1, -2)).transpose(-1, -2)
-    return x  # (B, L, d_input)
+    return x, state  # (B, L, d_input)
 
 
 class S5Model(nn.Module):
@@ -203,6 +206,7 @@ class S5Model(nn.Module):
 
   ):
     super(S5Model, self).__init__()
+    self.n_layers = n_layers
 
     # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
     self.encoder = nn.Linear(d_input, d_model)
@@ -225,13 +229,21 @@ class S5Model(nn.Module):
                     batchnorm=batchnorm,
                     bn_momentum=bn_momentum,
                     bandlimit=bandlimit,
-                    ) for _ in range(n_layers)
+                    ) for _ in range(self.n_layers)
     ])
 
     # Linear decoder
     self.decoder = nn.Linear(d_model, d_output)
 
-  def forward(self, x: torch.Tensor) -> torch.Tensor:
+  def initial_state(self, batch_size):
+    # init different A layer:
+    states = []
+    for layer_idx in range(self.n_layers):
+      state_layer_idx = self.layers[layer_idx].seq.initial_state(batch_size)
+      states.append(state_layer_idx)
+    return states
+
+  def forward(self, x: torch.Tensor, states: Optional[List[torch.Tensor]] = None) -> Tuple[torch.Tensor,torch.Tensor]:
     """
     Input x is shape (B, L, d_input)
     """
@@ -239,7 +251,14 @@ class S5Model(nn.Module):
 
     # Map the layers
     # Each iteration of this loop will map (B, L, d_model) -> (B, L, d_model)
-    output = self.layers(output)
+    if states is None:
+      states = self.initial_state(x.shape[0])
+
+    # Process each layer with its corresponding state
+    new_states = []
+    for i, layer in enumerate(self.layers):
+        output, state = layer(output, states[i])  # Pass the current state to the current layer
+        new_states.append(state)  # Collect the updated state
 
     # for layer in self.layers:
     #  output = layer(output)
@@ -249,7 +268,7 @@ class S5Model(nn.Module):
     # Decode the outputs
     output = self.decoder(output)  # (B, d_model) -> (B, d_output)
 
-    return output
+    return output, states
 
 
 def setup_optimizer(model, lr_factor, ssm_lr_base, weight_decay, epochs, steps_per_epoch):
@@ -319,7 +338,9 @@ def train(epoch, vmap_model, dataloader):
     inputs, targets = inputs.to(device), targets.to(device)
 
     optimizer.zero_grad()
-    outputs = vmap_model(inputs)
+    if batch_idx == 0:
+      states = None
+    outputs, states = vmap_model(inputs, states)
     loss = criterion(outputs, targets)
     if loss.dim() > 0:
       loss = loss.mean()  # Ensure the loss is a scalar
@@ -363,7 +384,10 @@ def eval(epoch, vmap_model, dataloader, checkpoint=False, log_name='Eval'):
   with torch.no_grad():
     for batch_idx, (inputs, targets) in enumerate(dataloader):  # , desc="Evaluating", unit="batch")):
       inputs, targets = inputs.to(device), targets.to(device)
-      outputs = vmap_model(inputs)
+      if batch_idx == 0:
+        # TODO: fix
+        states = None
+      outputs, states = vmap_model(inputs, states)
       loss = criterion(outputs, targets)
       if loss.dim() > 0:
         loss = loss.mean()  # Ensure the loss is a scalar
@@ -417,7 +441,7 @@ if __name__ == "__main__":
   parser.add_argument('--num_workers', default=16, type=int, help='Number of workers to use for dataloader')
   parser.add_argument('--batch_size', default=50, type=int, help='Batch size')
   # Model
-  parser.add_argument('--n_layers', default=4, type=int, help='Number of layers')
+  parser.add_argument('--n_layers', default=6, type=int, help='Number of layers')
   parser.add_argument('--d_model', default=512, type=int, help='Model dimension')
   # General
   parser.add_argument('--resume', '-r', action='store_true', help='Resume from checkpoint')
