@@ -1,0 +1,83 @@
+Comment: >
+  # This trains the baseline model
+  python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1
+
+project_name: "speech_bci"
+experiment_name: "baseline_gru"
+
+
+common:
+  #outputDir: "/Users/ekellbuch/Projects/deepseq/bci/neural_seq_decoder/outputs"
+  #datasetPath: &datasetPath "/Users/ekellbuch/datasets/SpeechBCI/competitionData/ptDecoder_ctc"
+  outputDir: "/scratch/users/${oc.env:USER}/SpeechBCI/logs"
+  datasetPath: &datasetPath "/scratch/groups/swl1/SpeechBCI/competitionData/ptDecoder_ctc"
+
+
+data_cfg:
+  batchSize: 64
+  datasetPath: *datasetPath
+  whiteNoiseSD: 0.8
+  constantOffsetSD: 0.2
+  speckled_mask_p: 0
+  feature_mask_p: 0
+  temporal_mask_n: 0
+  num_workers: 16
+
+
+# seqLen: 150 ? not used
+# maxTimeSeriesLen: 1200 ? not used
+seed: 0
+
+module_cfg:
+  type: "bci"
+
+model_cfg:
+  type: "bci_gru"
+  configs:
+    neural_dim: 256 #nInputFeatures
+    n_classes: 40 #nClasses
+    hidden_dim: 1024 #nUnits
+    layer_dim: 5 #nLayers
+    #nDays:   # size of training data
+    dropout: 0.4
+    strideLen: 4
+    kernelLen: 32
+    gaussianSmoothWidth: 2.0
+    bidirectional: true
+    #device: gpu
+
+optimizer_cfg:
+  type: "adam"
+  configs:
+    lr: 0.02  # lrStart
+    betas: [0.9, 0.999]
+    eps: 0.1
+    weight_decay: 1e-5  #l2_decay
+
+scheduler_cfg:
+  type: "linear"
+  configs:
+    start_factor : 1.0
+    end_factor: 1.0
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+  grad_norm:
+    type:
+
+  
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_steps: 10000
+  log_every_n_steps: 100
+
+
+eval_cfg:
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
