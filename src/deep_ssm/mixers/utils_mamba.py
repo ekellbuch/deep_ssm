@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence, Union
-
+from torch import nn
 
 def causal_conv1d_ref(
     x,
@@ -45,8 +45,6 @@ def causal_conv1d_ref(
             final_states_out = final_states
     out = (out if activation is None else F.silu(out)).to(dtype=dtype_in)
     return out if not return_final_states else (out, final_states_out)
-
-
 
 
 def causal_conv1d_update_ref(x, conv_state, weight, bias=None, activation=None, cache_seqlens=None):
@@ -219,3 +217,226 @@ class InferenceParams:
         self.seqlen_offset = 0
         if self.lengths_per_sample is not None:
             self.lengths_per_sample.zero_()
+
+
+def rms_norm_ref(
+    x,
+    weight,
+    bias,
+    residual=None,
+    x1=None,
+    weight1=None,
+    bias1=None,
+    eps=1e-6,
+    dropout_p=0.0,
+    rowscale=None,
+    prenorm=False,
+    dropout_mask=None,
+    dropout_mask1=None,
+    upcast=False,
+):
+    dtype = x.dtype
+    if upcast:
+        x = x.float()
+        weight = weight.float()
+        bias = bias.float() if bias is not None else None
+        residual = residual.float() if residual is not None else residual
+        x1 = x1.float() if x1 is not None else None
+        weight1 = weight1.float() if weight1 is not None else None
+        bias1 = bias1.float() if bias1 is not None else None
+    if x1 is not None:
+        assert rowscale is None, "rowscale is not supported with parallel LayerNorm"
+    if rowscale is not None:
+        x = x * rowscale[..., None]
+    if dropout_p > 0.0:
+        if dropout_mask is not None:
+            x = x.masked_fill(~dropout_mask, 0.0) / (1.0 - dropout_p)
+        else:
+            x = F.dropout(x, p=dropout_p)
+        if x1 is not None:
+            if dropout_mask1 is not None:
+                x1 = x1.masked_fill(~dropout_mask1, 0.0) / (1.0 - dropout_p)
+            else:
+                x1 = F.dropout(x1, p=dropout_p)
+    if x1 is not None:
+        x = x + x1
+    if residual is not None:
+        x = (x + residual).to(x.dtype)
+    rstd = 1 / torch.sqrt((x.square()).mean(dim=-1, keepdim=True) + eps)
+    out = ((x * rstd * weight) + bias if bias is not None else (x * rstd * weight)).to(dtype)
+    if weight1 is None:
+        return out if not prenorm else (out, x)
+    else:
+        out1 = ((x * rstd * weight1) + bias1 if bias1 is not None else (x * rstd * weight1)).to(
+            dtype
+        )
+        return (out, out1) if not prenorm else (out, out1, x)
+
+
+class RMSNorm_ref(torch.nn.Module):
+
+    def __init__(self, hidden_size, eps=1e-5, dropout_p=0.0, device=None, dtype=None):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.eps = eps
+        if dropout_p > 0.0:
+            self.drop = torch.nn.Dropout(dropout_p)
+        else:
+            self.drop = None
+        self.weight = torch.nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
+        self.register_parameter("bias", None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.ones_(self.weight)
+
+    def forward(self, x, residual=None, prenorm=False, residual_in_fp32=False):
+        return rms_norm_ref(
+            x=x,
+            weight=self.weight,
+            bias=self.bias,
+            residual=residual,
+            eps=self.eps,
+            dropout_p=self.drop.p if self.drop is not None and self.training else 0.0,
+            prenorm=prenorm,
+            residual_in_fp32=residual_in_fp32,
+        )
+
+
+class Block_ref(torch.nn.Module):
+    def __init__(
+        self, dim, mixer_cls, mlp_cls, norm_cls=nn.LayerNorm, fused_add_norm=False, residual_in_fp32=False
+    ):
+        """
+        Simple block wrapping a mixer class with LayerNorm/RMSNorm and residual connection"
+
+        This Block has a slightly different structure compared to a regular
+        prenorm Transformer block.
+        The standard block is: LN -> MHA/MLP -> Add.
+        [Ref: https://arxiv.org/abs/2002.04745]
+        Here we have: Add -> LN -> Mixer, returning both
+        the hidden_states (output of the mixer) and the residual.
+        This is purely for performance reasons, as we can fuse add and LayerNorm.
+        The residual needs to be provided (except for the very first block).
+        """
+        super().__init__()
+        self.residual_in_fp32 = residual_in_fp32
+        self.fused_add_norm = fused_add_norm
+        self.norm = norm_cls(dim)
+        self.mixer = mixer_cls(dim)
+        if mlp_cls is not nn.Identity:
+            self.norm2 = norm_cls(dim)
+            self.mlp = mlp_cls(dim)
+        else:
+            self.mlp = None
+        if self.fused_add_norm:
+            assert RMSNorm_ref is not None, "RMSNorm import fails"
+            assert isinstance(
+                self.norm, (nn.LayerNorm, RMSNorm_ref)
+            ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
+
+    def forward(
+            self, hidden_states: torch.Tensor, residual: Optional[torch.Tensor] = None, inference_params=None, **mixer_kwargs
+    ):
+        r"""Pass the input through the encoder layer.
+
+        Args:
+            hidden_states: the sequence to the encoder layer (required).
+            residual: hidden_states = Mixer(LN(residual))
+        """
+        if not self.fused_add_norm:
+            residual = (hidden_states + residual) if residual is not None else hidden_states
+            hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
+            if self.residual_in_fp32:
+                residual = residual.to(torch.float32)
+        else:
+            hidden_states, residual = layer_norm_ref(
+                hidden_states,
+                self.norm.weight,
+                self.norm.bias,
+                residual=residual,
+                prenorm=True,
+                residual_in_fp32=self.residual_in_fp32,
+                eps=self.norm.eps,
+                is_rms_norm=isinstance(self.norm, RMSNorm_ref)
+            )
+        hidden_states = self.mixer(hidden_states, inference_params=inference_params, **mixer_kwargs)
+
+        if self.mlp is not None:
+            if not self.fused_add_norm:
+                residual = hidden_states + residual
+                hidden_states = self.norm2(residual.to(dtype=self.norm2.weight.dtype))
+                if self.residual_in_fp32:
+                    residual = residual.to(torch.float32)
+            else:
+                hidden_states, residual = layer_norm_ref(
+                    hidden_states,
+                    self.norm2.weight,
+                    self.norm2.bias,
+                    residual=residual,
+                    prenorm=True,
+                    residual_in_fp32=self.residual_in_fp32,
+                    eps=self.norm2.eps,
+                    is_rms_norm=isinstance(self.norm2, RMSNorm_ref)
+                )
+            hidden_states = self.mlp(hidden_states)
+
+        return hidden_states, residual
+
+    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+        return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
+
+
+def layer_norm_ref(
+    x,
+    weight,
+    bias,
+    residual=None,
+    x1=None,
+    weight1=None,
+    bias1=None,
+    eps=1e-6,
+    dropout_p=0.0,
+    rowscale=None,
+    prenorm=False,
+    dropout_mask=None,
+    dropout_mask1=None,
+    upcast=False,
+):
+    dtype = x.dtype
+    if upcast:
+        x = x.float()
+        weight = weight.float()
+        bias = bias.float() if bias is not None else None
+        residual = residual.float() if residual is not None else residual
+        x1 = x1.float() if x1 is not None else None
+        weight1 = weight1.float() if weight1 is not None else None
+        bias1 = bias1.float() if bias1 is not None else None
+    if x1 is not None:
+        assert rowscale is None, "rowscale is not supported with parallel LayerNorm"
+    if rowscale is not None:
+        x = x * rowscale[..., None]
+    if dropout_p > 0.0:
+        if dropout_mask is not None:
+            x = x.masked_fill(~dropout_mask, 0.0) / (1.0 - dropout_p)
+        else:
+            x = F.dropout(x, p=dropout_p)
+        if x1 is not None:
+            if dropout_mask1 is not None:
+                x1 = x1.masked_fill(~dropout_mask1, 0.0) / (1.0 - dropout_p)
+            else:
+                x1 = F.dropout(x1, p=dropout_p)
+    if x1 is not None:
+        x = x + x1
+    if residual is not None:
+        x = (x + residual).to(x.dtype)
+    out = F.layer_norm(x.to(weight.dtype), x.shape[-1:], weight=weight, bias=bias, eps=eps).to(
+        dtype
+    )
+    if weight1 is None:
+        return out if not prenorm else (out, x)
+    else:
+        out1 = F.layer_norm(
+            x.to(weight1.dtype), x.shape[-1:], weight=weight1, bias=bias1, eps=eps
+        ).to(dtype)
+        return (out, out1) if not prenorm else (out, out1, x)

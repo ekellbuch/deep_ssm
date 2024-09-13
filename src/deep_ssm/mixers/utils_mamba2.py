@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from deep_ssm.mixers.utils import causal_conv1d_ref as causal_conv1d_fn
+from deep_ssm.mixers.utils_mamba import causal_conv1d_ref as causal_conv1d_fn
 
 
 def rms_norm_ref(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True, upcast=True):

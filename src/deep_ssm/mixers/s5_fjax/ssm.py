@@ -10,8 +10,6 @@ from deep_ssm.mixers.s5_fjax.jax_func import associative_scan, lecun_normal
 from deep_ssm.mixers.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps, make_DPLR_HiPPO, \
   trunc_standard_normal
 
-from deep_ssm.mixers.mamba_ssm.selective_scan_interface import selective_scan_fn
-
 # Discretization functions
 def discretize_bilinear(Lambda: torch.Tensor,
                         B_tilde: torch.Tensor,

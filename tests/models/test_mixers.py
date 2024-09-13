@@ -5,7 +5,7 @@ Test mixer layer and step function
 import torch
 from deep_ssm.mixers.mamba_simple import Mamba
 from deep_ssm.mixers.mamba2_simple import Mamba2Simple
-from deep_ssm.mixers.utils import InferenceParams
+from deep_ssm.mixers.utils_mamba import InferenceParams
 from deep_ssm.mixers.s5_fjax.ssm import S5
 
 

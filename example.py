@@ -22,12 +22,9 @@ The default CIFAR10 model trained by this file should get
 '''
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import torch.backends.cudnn as cudnn
 
 import torchvision
 import torchvision.transforms as transforms
-from einops import rearrange
 
 import os
 import argparse
@@ -35,7 +32,6 @@ import argparse
 from deep_ssm.mixers.s5_fjax.ssm import S5
 from tqdm.auto import tqdm
 from typing import Literal, Tuple, Optional, Union, List
-from torchtyping import TensorType
 import torch.nn.functional as F
 
 import wandb
@@ -260,8 +256,6 @@ class S5Model(nn.Module):
         output, state = layer(output, states[i])  # Pass the current state to the current layer
         new_states.append(state)  # Collect the updated state
 
-    # for layer in self.layers:
-    #  output = layer(output)
     # Pooling: average pooling over the sequence length
     output = output.mean(dim=-2)
 

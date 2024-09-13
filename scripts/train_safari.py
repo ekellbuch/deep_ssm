@@ -12,7 +12,7 @@ import safari.utils as utils
 import safari.utils.train
 from safari.utils import registry
 
-from deep_ssm.module import SequenceLightningModule
+from deep_ssm.modules.module_safari import SequenceLightningModule
 from safari.logging import CustomWandbLogger
 
 log = safari.utils.train.get_logger(__name__)
@@ -108,7 +108,7 @@ def train(config):
     trainer.test(model)
 
 
-@hydra.main(config_path="../configs", config_name="config.yaml")
+@hydra.main(config_path="../configs/configs_safari", config_name="config.yaml")
 def main(config: OmegaConf):
   # Process config:
   # - register evaluation resolver

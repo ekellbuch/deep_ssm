@@ -10,26 +10,26 @@ from einops import rearrange, repeat
 try:
     from causal_conv1d import causal_conv1d_fn
 except:
-    from deep_ssm.mixers.utils import causal_conv1d_ref as causal_conv1d_fn
+    from deep_ssm.mixers.utils_mamba import causal_conv1d_ref as causal_conv1d_fn
 
 try:
-    from deep_ssm.mixers.mamba_ssm.triton.layernorm_gated import RMSNorm as RMSNormGated, LayerNorm
+    from mamba_ssm.ops.triton.layernorm_gated import RMSNorm as RMSNormGated, LayerNorm
 except ImportError:
     RMSNormGated, LayerNorm = None, None
 
 try:
-    from deep_ssm.mixers.mamba_ssm.triton.ssd_combined import mamba_chunk_scan_combined
+    from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 except:
     # only for debugging purposes
     from deep_ssm.mixers.utils_mamba2 import ssd_chunk_scan_combined_ref as mamba_chunk_scan_combined
 
 try:
-    from deep_ssm.mixers.mamba_ssm.triton.ssd_combined import mamba_split_conv1d_scan_combined
+    from mamba_ssm.ops.triton.ssd_combined import mamba_split_conv1d_scan_combined
 except:
     from deep_ssm.mixers.utils_mamba2 import mamba_split_conv1d_scan_ref as mamba_split_conv1d_scan_combined
 
 try:
-    from deep_ssm.mixers.mamba_ssm.triton.selective_state_update import selective_state_update
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 except:
     selective_state_update = None
 

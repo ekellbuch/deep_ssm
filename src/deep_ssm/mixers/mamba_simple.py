@@ -12,28 +12,23 @@ from einops import rearrange, repeat
 
 # Remove import error to make compatible with cpu
 try:
-    from deep_ssm.mixers.mamba_ssm.selective_scan_interface import selective_scan_fn, mamba_inner_fn
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 except:
-    from deep_ssm.mixers.utils import selective_scan_ref as selective_scan_fn
-    from deep_ssm.mixers.utils import mamba_inner_ref as mamba_inner_fn
+    from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+    from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except:
     # https://github.com/Dao-AILab/causal-conv1d/blob/main/causal_conv1d/causal_conv1d_interface.py
     #causal_conv1d_fn, causal_conv1d_update = None, None
-    from deep_ssm.mixers.utils import causal_conv1d_ref as causal_conv1d_fn
-    from deep_ssm.mixers.utils import causal_conv1d_update_ref as causal_conv1d_update
+    from deep_ssm.mixers.utils_mamba import causal_conv1d_ref as causal_conv1d_fn
+    from deep_ssm.mixers.utils_mamba import causal_conv1d_update_ref as causal_conv1d_update
 
 
 try:
-    from deep_ssm.mixers.mamba_ssm.triton.selective_state_update import selective_state_update
-except ImportError:
+    from mamba_ssm.triton.selective_state_update import selective_state_update
+except:
     selective_state_update = None
-
-try:
-    from deep_ssm.mixers.mamba_ssm.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn
-except ImportError:
-    RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
 
 class Mamba(nn.Module):
