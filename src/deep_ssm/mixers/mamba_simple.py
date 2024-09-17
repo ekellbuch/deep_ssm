@@ -1,16 +1,13 @@
 # Copyright (c) 2023, Tri Dao, Albert Gu.
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
 
 from einops import rearrange, repeat
 
-# Remove import error to make compatible with cpu
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 except:
@@ -19,11 +16,8 @@ except:
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except:
-    # https://github.com/Dao-AILab/causal-conv1d/blob/main/causal_conv1d/causal_conv1d_interface.py
-    #causal_conv1d_fn, causal_conv1d_update = None, None
     from deep_ssm.mixers.utils_mamba import causal_conv1d_ref as causal_conv1d_fn
     from deep_ssm.mixers.utils_mamba import causal_conv1d_update_ref as causal_conv1d_update
-
 
 try:
     from mamba_ssm.triton.selective_state_update import selective_state_update
@@ -52,24 +46,71 @@ class Mamba(nn.Module):
         dtype=None,
     ):
         """
+        The Mamba class defines a neural network layer that combines elements of state-space models (SSMs),
+        convolutions, and projections to process sequential input data efficiently. The layer is designed
+        to handle long-range dependencies in time-series data by leveraging SSMs and performing convolutions
+        across local windows of input data. It also supports efficient inference by maintaining and updating
+        states across sequences.
 
-        Args:
-          d_model: model dimension
-          d_state: SSM state expansion factor
-          d_conv: Local convolutional width
-          expand: Block expansion factor
-          dt_rank:
-          dt_min:
-          dt_max:
-          dt_init:
-          dt_scale:
-          dt_init_floor:
-          conv_bias:
-          bias:
-          use_fast_path:
-          layer_idx:
-          device:
-          dtype:
+        This class is flexible in its configuration, supporting multiple initialization modes, fused kernel
+        execution for faster computation, and various options for handling input projections, state updates,
+        and inference. It can be used in tasks such as natural language processing, time-series forecasting,
+        or any application requiring efficient sequential data processing.
+
+        Parameters:
+        -----------
+        d_model: int
+            The model dimension, i.e., the number of features in the input.
+
+        d_state: int, default=16
+            The state expansion factor for the state-space model (SSM). It controls the size of the hidden
+            states used to capture long-range dependencies.
+
+        d_conv: int, default=4
+            The local convolution width. This controls the kernel size used in the 1D convolution operation
+            applied to the input.
+
+        expand: int, default=2
+            The block expansion factor that determines the size of intermediate layers within the model.
+
+        dt_rank: str or int, default="auto"
+            The rank of the time-step projection matrix. If set to "auto", it is automatically calculated
+            based on the model dimension (`d_model`).
+
+        dt_min: float, default=0.001
+            Minimum value for the time-step bias initialization.
+
+        dt_max: float, default=0.1
+            Maximum value for the time-step bias initialization.
+
+        dt_init: str, default="random"
+            Initialization mode for the time-step bias. Can be set to "random" or "constant".
+
+        dt_scale: float, default=1.0
+            Scaling factor applied during the initialization of the time-step bias.
+
+        dt_init_floor: float, default=1e-4
+            The floor value for the time-step initialization to ensure numerical stability.
+
+        conv_bias: bool, default=True
+            Whether to use a bias term in the convolutional layers.
+
+        bias: bool, default=False
+            Whether to use a bias term in the linear projection layers.
+
+        use_fast_path: bool, default=True
+            Whether to use the fused kernel for faster execution during the forward pass. This enables
+            an optimized code path if available.
+
+        layer_idx: int, optional
+            Index of the layer, which is useful for caching and managing states during inference. Required
+            for certain inference scenarios to maintain state.
+
+        device: torch.device, optional
+            The device on which the model's parameters should be allocated (e.g., CPU, GPU).
+
+        dtype: torch.dtype, optional
+            The data type of the model's parameters (e.g., torch.float32, torch.float16).
         """
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -111,6 +152,7 @@ class Mamba(nn.Module):
         else:
             raise NotImplementedError
 
+        # 5.4: initialize delta_t, the time step, from x_0
         # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
         dt = torch.exp(
             torch.rand(self.d_inner, **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
@@ -123,6 +165,8 @@ class Mamba(nn.Module):
         # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
         self.dt_proj.bias._no_reinit = True
 
+        ### 5: SSM parameter initialization
+        # 5.1: Initialize A with evenly spaced eigenvalues;
         # S4D real initialization
         A = repeat(
             torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
@@ -133,7 +177,7 @@ class Mamba(nn.Module):
         self.A_log = nn.Parameter(A_log)
         self.A_log._no_weight_decay = True
 
-        # D "skip" parameter
+        # 5.3: initialize D, the skip connection
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
@@ -141,18 +185,42 @@ class Mamba(nn.Module):
 
     def forward(self, hidden_states, inference_params=None):
         """
-        hidden_states: (B, L, D)
-        Returns: same shape as hidden_states
+        Forward pass of the Mamba layer.
+
+        Args:
+        -----
+        hidden_states: Tensor of shape (B, L, D)
+            - `B`: Batch size.
+            - `L`: Sequence length.
+            - `D`: Model dimension.
+
+        inference_params: Optional
+            - If provided, includes cached states for inference. This allows for faster inference by maintaining
+              the previous states from the sequence.
+
+        Returns:
+        --------
+        Tensor of shape (B, L, D) representing the output of the Mamba layer.
         """
+        # Extract the batch size, sequence length, and model dimension from hidden_states
         batch, seqlen, dim = hidden_states.shape
 
+        # Initialize convolutional state and state-space model (SSM) state to None
         conv_state, ssm_state = None, None
+
+        # If inference parameters are provided, retrieve cached states
         if inference_params is not None:
             conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
+
+            # If the sequence length offset is greater than 0, we use a "step" function for inference
             if inference_params.seqlen_offset > 0:
+                # Perform a step-by-step update using the cached states and return the output
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
                 return out
+
+        # Perform input projection using a linear layer (`in_proj`)
+        # The result is rearranged to move the projection step inside the same operation
 
         # We do matmul and transpose BLH -> HBL at the same time
         xz = rearrange(
@@ -160,12 +228,18 @@ class Mamba(nn.Module):
             "d (b l) -> b d l",
             l=seqlen,
         )
+
+        # Add bias to the projected input if `in_proj` has bias
         if self.in_proj.bias is not None:
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
+        # Compute the matrix `A` by applying an exponential function to the stored `A_log` parameter
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        # Fast path for execution: use a fused kernel if available and no inference parameters are provided
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and causal_conv1d_fn is not None and inference_params is None:  # Doesn't support outputting the states
+            # Use the fast fused Mamba kernel (`mamba_inner_fn`) for faster computation
             out = mamba_inner_fn(
                 xz,
                 self.conv1d.weight,
@@ -182,15 +256,20 @@ class Mamba(nn.Module):
                 delta_softplus=True,
             )
         else:
+            # Split the input into two parts: `x` (main input) and `z` (modulation signal)
             x, z = xz.chunk(2, dim=1)
             # Compute short convolution
             if conv_state is not None:
+                # Update convolution state using padding and updating inplace:
                 # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
                 # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
+
             if causal_conv1d_fn is None:
+                # If causal convolution is not available, apply standard convolution with activation (SiLU)
                 x = self.act(self.conv1d(x)[..., :seqlen])
             else:
+                # Apply causal convolution with specified activation function (SiLU or Swish)
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
                     x=x,
@@ -199,15 +278,24 @@ class Mamba(nn.Module):
                     activation=self.activation,
                 )
 
+            # Project the convolved input `x` using `x_proj` and rearrange the result for downstream use
             # We're careful here about the layout, to avoid extra transposes.
             # We want dt to have d as the slowest moving dimension
             # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
+
+            # Split the projection result into three components: `dt`, `B`, and `C`
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+
+            # Apply the `dt_proj` to `dt` and reshape it for further processing
             dt = self.dt_proj.weight @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
+
+            # Reshape `B` and `C` to their expected shapes
             B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
             C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+
+            # Perform the selective scan operation using the computed parameters
             assert self.activation in ["silu", "swish"]
             y = selective_scan_fn(
                 x,
@@ -221,10 +309,16 @@ class Mamba(nn.Module):
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
             )
+
+            # Update the state-space model (SSM) state if it's provided
             if ssm_state is not None:
                 y, last_state = y
                 ssm_state.copy_(last_state)
+
+            # Rearrange the output `y` back to shape (B, L, D)
             y = rearrange(y, "b d l -> b l d")
+
+            # Apply the final projection to match the original model dimension
             out = self.out_proj(y)
         return out
 
@@ -288,6 +382,9 @@ class Mamba(nn.Module):
         return out.unsqueeze(1), conv_state, ssm_state
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+        """
+        Allocates memory for the convolutional and SSM states during inference.
+        """
         device = self.out_proj.weight.device
         conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
         conv_state = torch.zeros(
@@ -301,6 +398,9 @@ class Mamba(nn.Module):
         return conv_state, ssm_state
 
     def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
+        """
+        Retrieves or initializes the cached states for the layer during inference.
+        """
         assert self.layer_idx is not None
         if self.layer_idx not in inference_params.key_value_memory_dict:
             batch_shape = (batch_size,)
