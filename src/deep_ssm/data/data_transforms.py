@@ -151,6 +151,7 @@ class GaussianSmoothing(nn.Module):
     kernel = kernel.repeat(channels, *[1] * (kernel.dim() - 1))
 
     self.register_buffer("weight", kernel)
+    # each input channel is convolved with its own set of filters
     self.groups = channels
 
     if dim == 1:

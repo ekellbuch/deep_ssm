@@ -240,6 +240,7 @@ class Mamba2Simple(nn.Module):
 
 
     def step(self, hidden_states, conv_state, ssm_state):
+        # TODO: fix step function
         dtype = hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
         zxbcdt = self.in_proj(hidden_states.squeeze(1))  # (B 2D)

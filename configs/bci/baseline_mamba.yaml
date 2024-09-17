@@ -17,17 +17,18 @@ module_cfg:
 
 data_cfg:
   batchSize: 64
+  num_workers: 16
   datasetPath: *datasetPath
+  # transformations:
   whiteNoiseSD: 0.8
   constantOffsetSD: 0.2
   # masking
   mask_value: 0.0
   speckled_mask_p: 0.45
-  renormalize_masking: false
   feature_mask_p: 0.03
   temporal_mask_n: 1
   temporal_mask_len: 2
-  num_workers: 16
+  renormalize_masking: false
 
 
 # maxTimeSeriesLen: 1200 ? not used
@@ -40,18 +41,19 @@ model_cfg:
   configs:
     neural_dim: 256 #nInputFeatures
     n_classes: 40 #nClasses
-    layer_dim: 6 #nLayers
-    #nDays:   # size of training data
-    strideLen: 4
-    kernelLen: 32
-    gaussianSmoothWidth: 2.0
-    bidirectional: true
     # mamba params
     d_model: 1024
     d_state: 16
     d_conv: 4
     expand_factor: 1
     bidirectional_input: false
+    bidirectional: true
+    layer_dim: 6 #nLayers
+    # base decoder parameters:
+    gaussianSmoothWidth: 2.0
+    unfolding: true
+    strideLen: 4
+    kernelLen: 32
 
 optimizer_cfg:
   type: "adam"
@@ -63,6 +65,8 @@ optimizer_cfg:
 
 scheduler_cfg:
   type: "stepLR"
+  interval: "step"
+  frequency: 1
   configs:
     step_size : 6101
     gamma: 0.01
@@ -72,6 +76,12 @@ callbacks:
     logging_interval: "step"
   grad_norm:
     type:
+  early_stopping:
+    monitor: "ctc_loss_validation"
+    min_delta: 1e-4
+    patience: 10
+    verbose: false
+    mode: "min"
 
 trainer_cfg:
   fast_dev_run: false
