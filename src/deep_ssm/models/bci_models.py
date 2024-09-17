@@ -36,34 +36,58 @@ class BaseDecoder(nn.Module):
     def __init__(
         self,
         neural_dim,
-        n_classes,
         nDays=24,
         strideLen=4,
         kernelLen=14,
         gaussianSmoothWidth=0,
+        gaussianSmoothSize = 20,
+        unfolding=True,
     ):
+        """
+        The BaseDecoder class is designed to process sequential
+        It applies:
+        Gaussian smoothing along features
+          (neural_dim, gaussianSmoothWidth, gaussianSmoothSize)
+        unfolds (extracts extracts sliding windows) along the sequence dimension:
+          (kernelLen, strideLen)
+        applies a day specific linear transformation and bias to the input
+          (nDays)
+        """
         super(BaseDecoder, self).__init__()
 
         self.neural_dim = neural_dim
-        self.n_classes = n_classes
         self.nDays = nDays
         self.strideLen = strideLen
         self.kernelLen = kernelLen
         self.gaussianSmoothWidth = gaussianSmoothWidth
+        self.gaussianSmoothSize = gaussianSmoothSize
+        self.unfolding = unfolding
 
+        # Define the input layer nonlinearity (Softsign activation)
         self.inputLayerNonlinearity = torch.nn.Softsign()
-        self.unfolder = torch.nn.Unfold(
-            (self.kernelLen, 1), dilation=1, padding=0, stride=self.strideLen
-)
 
+        # Define an unfold operation, which extracts sliding local blocks from a batched input tensor
+        # This operation helps in simulating a convolution-like behavior with kernel and stride.
+        if self.unfolding:
+          self.unfolder = torch.nn.Unfold(
+              (self.kernelLen, 1), dilation=1, padding=0, stride=self.strideLen
+          )
+
+        # If gaussian smoothing is applied, define a gaussian smoother using the specified width
+        # the smoother is applied along the feature dimension
         if self.gaussianSmoothWidth > 0:
             self.gaussianSmoother = GaussianSmoothing(
-                self.neural_dim, 20, self.gaussianSmoothWidth, dim=1
+                self.neural_dim, self.gaussianSmoothSize, self.gaussianSmoothWidth, dim=1
             )
 
+        # Define day-specific weight matrices (learnable parameters) for transforming the input
+        # There is one weight matrix per day, with dimensions neural_dim x neural_dim
         self.dayWeights = nn.Parameter(torch.randn(self.nDays, self.neural_dim, self.neural_dim))
+
+        # Define day-specific biases (learnable parameters), one per day, with dimensions 1 x neural_dim
         self.dayBias = nn.Parameter(torch.zeros(self.nDays, 1, self.neural_dim))
 
+        # Initialize dayWeights with identity matrices for each day (ensuring no transformation at the start)
         for x in range(nDays):
             self.dayWeights.data[x, :, :] = torch.eye(self.neural_dim)
 
@@ -76,26 +100,47 @@ class BaseDecoder(nn.Module):
         #    thisLayer.weight = nn.Parameter(thisLayer.weight + torch.eye(self.neural_dim))
 
     def forward_preprocessing(self, neuralInput, dayIdx):
-        if self.gaussianSmoothWidth > 0:
-            neuralInput = torch.permute(neuralInput, (0, 2, 1))
-            neuralInput = self.gaussianSmoother(neuralInput)
-            neuralInput = torch.permute(neuralInput, (0, 2, 1))
+        """
 
-        # Apply day layer
-        dayWeights = torch.index_select(self.dayWeights, 0, dayIdx)
+        Args:
+          neuralInput: (batch_size x seq_len x num_features)
+          dayIdx: (batch_size, )
+
+        Returns:
+          stridedInputs: (batch_size x new_seq_len x new_num_features)
+        """
+        # Smooth along the feature dimension
+        if self.gaussianSmoothWidth > 0:
+            neuralInput = torch.permute(neuralInput, (0, 2, 1))  # (BS, N, L)
+            neuralInput = self.gaussianSmoother(neuralInput)
+            neuralInput = torch.permute(neuralInput, (0, 2, 1))  # (BS, L, N)
+
+        # Select the weight matrix for the current day based on dayIdx
+        dayWeights = torch.index_select(self.dayWeights, 0, dayIdx)  # (BS, N, N)
+
+        # Apply a linear transformation to the neural input using the selected day weight matrix
+        # This performs a batch-wise matrix multiplication followed by adding the corresponding day bias
         transformedNeural = torch.einsum(
             "btd,bdk->btk", neuralInput, dayWeights
-        ) + torch.index_select(self.dayBias, 0, dayIdx)
-        transformedNeural = self.inputLayerNonlinearity(transformedNeural)
+        ) + torch.index_select(self.dayBias, 0, dayIdx)  # (BS, L, N)
 
-        # Stride/kernel
-        stridedInputs = torch.permute(
-            self.unfolder(
-                torch.unsqueeze(torch.permute(transformedNeural, (0, 2, 1)), 3)
-            ),
-            (0, 2, 1),
-        )
+        # Map values between [-1, 1]
+        transformedNeural = self.inputLayerNonlinearity(transformedNeural)  # (BS, L, N)
 
+        # Apply the unfold operation extracts sliding windows along seq dimension
+        # the feature dimension is expanded by a factor of kernelLen
+        # It essentially extracts overlapping blocks of size kernelLen with stride strideLen.
+        if self.unfolding:
+          stridedInputs = torch.permute(
+              self.unfolder(
+                  torch.unsqueeze(torch.permute(transformedNeural, (0, 2, 1)), 3)  # (BS, N, L, 1)
+              ),
+              (0, 2, 1),
+          )  # (BS, new L, new N)
+        else:
+          stridedInputs = transformedNeural
+
+        #assert stridedInputs.shape == (neuralInput.shape[0], (neuralInput.shape[1] - self.kernelLen) // self.strideLen + 1, self.neural_dim*self.kernelLen)
         return stridedInputs
 
 
@@ -111,23 +156,30 @@ class GRUDecoder(BaseDecoder):
         strideLen=4,
         kernelLen=14,
         gaussianSmoothWidth=0,
+        unfolding=True,
         bidirectional=False,
     ):
         super(GRUDecoder, self).__init__(
-            neural_dim,
-            n_classes,
-            nDays,
-            strideLen,
-            kernelLen,
-            gaussianSmoothWidth,
+            neural_dim=neural_dim,
+            nDays=nDays,
+            strideLen=strideLen,
+            kernelLen=kernelLen,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            unfolding=unfolding
         )
+
         self.layer_dim = layer_dim
         self.bidirectional = bidirectional
         self.hidden_dim = hidden_dim
         self.dropout = dropout
 
+        if unfolding:
+          input_dims = self.neural_dim * kernelLen
+        else:
+          input_dims = self.neural_dim
+
         self.gru_decoder = nn.GRU(
-          (self.neural_dim) * kernelLen,
+            input_dims,
             hidden_dim,
             layer_dim,
             batch_first=True,
@@ -181,14 +233,15 @@ class MambaDecoder(BaseDecoder):
         gaussianSmoothWidth=0,
         bidirectional_input=False,
         bidirectional=False,
+        unfolding=True,
     ):
         super(MambaDecoder, self).__init__(
-            neural_dim,
-            n_classes,
-            nDays,
-            strideLen,
-            kernelLen,
-            gaussianSmoothWidth,
+            neural_dim=neural_dim,
+            nDays=nDays,
+            strideLen=strideLen,
+            kernelLen=kernelLen,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            unfolding=unfolding,
         )
         self.layer_dim = layer_dim
         self.d_model = d_model
@@ -198,6 +251,17 @@ class MambaDecoder(BaseDecoder):
         self.bidirectional_input = bidirectional_input
 
         d_mamba = d_model * 2 if self.bidirectional_input else d_model
+
+        if unfolding:
+          input_dims = self.neural_dim * kernelLen
+        else:
+          input_dims = self.neural_dim
+
+
+        self.linear_input = nn.Linear(
+          input_dims * (2 if self.bidirectional_input else 1), d_mamba
+        )
+
         self.layers = nn.ModuleList(
             [
                 create_block(
@@ -213,9 +277,6 @@ class MambaDecoder(BaseDecoder):
         )
         self.norm_f = nn.LayerNorm(d_mamba, eps=1e-5)
 
-        self.linear_input = nn.Linear(
-            neural_dim * kernelLen * (2 if self.bidirectional_input else 1), d_mamba
-        )
         self.fc_decoder_out = nn.Linear(d_mamba, n_classes + 1)  # +1 for CTC blank
 
     def forward(self, neuralInput, dayIdx):
@@ -259,6 +320,7 @@ class BidirectionalMamba(nn.Module):
     use_fast_path=False, # True,  # Fused kernel options
     layer_idx=None,
   ):
+    # TODO: integrate with model in mixers
     factory_kwargs = {}
     super().__init__()
     self.d_model = d_model

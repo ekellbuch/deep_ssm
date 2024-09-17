@@ -490,17 +490,21 @@ class S5Layer(torch.nn.Module):
     C_init: str = "complex_normal",
     conj_sym: bool = False,
     clip_eigs: bool = False,
+    step_rescale: float = 1.0,
+    discretization: str = "bilinear",
+    # layer parameters
     dropout: float = 0.0,
     activation: str = "gelu",
+    prenorm: bool = False,
     batchnorm: bool = False,
     bn_momentum: float = 0.9,
-    step_rescale: float = 1.0,
-    bandlimit: Optional[float] = None,
-    discretization: Optional[str] = "bilinear",
+    # optional parameters
+    bandlimit: float = None,
     # transposed=True,  # axis ordering (B, L, D) or (B, D, L)
   ):
     super().__init__()
     self.d_model = d_model
+    self.prenorm = prenorm
     self.batchnorm = batchnorm
     self.activation = activation
     #self.transposed = transposed
@@ -513,18 +517,22 @@ class S5Layer(torch.nn.Module):
       dt_max=dt_max,
       bidirectional=bidirectional,
       C_init=C_init,
-      bandlimit=bandlimit,
       conj_sym=conj_sym,
       clip_eigs=clip_eigs,
       step_rescale=step_rescale,
       discretization=discretization,
+      bandlimit=bandlimit,
     )
 
     if self.activation in ["full_glu"]:
       self.out1 = torch.nn.Linear(d_model, d_model)
       self.out2 = torch.nn.Linear(d_model, d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
-      self.out2 = torch.nn.Linear(d_model, d_model)
+      self.out1 = nn.Identity()  # No-op layer
+      self.out2 = nn.Linear(d_model, d_model)
+    else:
+      self.out1 = nn.Identity()
+      self.out2 = nn.Identity()
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -535,34 +543,38 @@ class S5Layer(torch.nn.Module):
 
     self.gelu = F.gelu  # if glu else None
 
+
   def apply_activation(self, x):
     # Apply activation
-    if self.activation in ["full_glu"]:
+    if self.activation == "full_glu":
       x = self.drop(self.gelu(x))
-      x = self.out1(x) * torch.sigmoid(self.out2(x))
+      out2_result = torch.sigmoid(self.out2(x))
+      x = self.out1(x) * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu1"]:
+    elif self.activation == "half_glu1":
       x = self.drop(self.gelu(x))
-      x = x * torch.sigmoid(self.out2(x))
+      out2_result = torch.sigmoid(self.out2(x))
+      x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu2"]:
+    elif self.activation == "half_glu2":
       # Only apply GELU to the gate input
       x1 = self.drop(self.gelu(x))
-      x = x * torch.sigmoid(self.out2(x1))
+      out2_result = torch.sigmoid(self.out2(x1))
+      x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["gelu"]:
+    elif self.activation == "gelu":
       x = self.drop(self.gelu(x))
     else:
       raise NotImplementedError(
         "Activation: {} not implemented".format(self.activation))
     return x
 
+
   def forward(self,
               x: torch.Tensor, #,
               state: torch.Tensor,
               rate: Optional[Union[float, torch.Tensor]] = 1.0):
     """
-
     Args:
       x: TensorType["batch_size", "seq_length", "num_features"]
       state: TensorType["batch_size", "num_states"]
