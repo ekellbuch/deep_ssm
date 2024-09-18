@@ -61,7 +61,7 @@ def train(args):
     # set callbacks
     local_callbacks = []
     if args.callbacks:
-      if args.callbacks.lr_monitor:
+      if args.callbacks.get("lr_monitor"):
         local_callbacks.append(LearningRateMonitor(**args.callbacks.lr_monitor))
       if args.callbacks.get("grad_norm.type"):
         local_callbacks.append(all_callbacks[args.callbacks.grad_norm.type])
