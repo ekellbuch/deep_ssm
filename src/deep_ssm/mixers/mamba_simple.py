@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional
 
 from einops import rearrange, repeat
 
@@ -427,3 +428,53 @@ class Mamba(nn.Module):
                 conv_state.zero_()
                 ssm_state.zero_()
         return conv_state, ssm_state
+
+
+class MambaWrapper(nn.Module):
+    """Thin wrapper around Mamba to support bi-directionality."
+        TODO: compare with bidirectional in audio model
+    """
+    def __init__(
+        self,
+        d_model: int,
+        bidirectional: bool = False,
+        bidirectional_strategy: Optional[str] = None,
+        **mamba_kwargs,
+    ):
+        super().__init__()
+        if bidirectional and bidirectional_strategy is None:
+            bidirectional_strategy = "add"  # Default strategy: `add`
+        if bidirectional and bidirectional_strategy not in ["add", "ew_multiply"]:
+            raise NotImplementedError(f"`{bidirectional_strategy}` strategy for bi-directionality is not implemented!")
+        self.bidirectional = bidirectional
+        self.bidirectional_strategy = bidirectional_strategy
+        self.mamba_fwd = Mamba(
+            d_model=d_model,
+            **mamba_kwargs
+        )
+        if bidirectional:
+            self.mamba_rev = Mamba(
+                d_model=d_model,
+                **mamba_kwargs
+            )
+        else:
+            self.mamba_rev = None
+
+    def forward(self, hidden_states, inference_params=None):
+        """Bidirectional-enabled forward pass
+
+        hidden_states: (B, L, D)
+        Returns: same shape as hidden_states
+        """
+        out = self.mamba_fwd(hidden_states, inference_params=inference_params)
+        if self.bidirectional:
+            out_rev = self.mamba_rev(
+                hidden_states.flip(dims=(1,)),  # Flip along the sequence length dimension
+                inference_params=inference_params
+            ).flip(dims=(1,))  # Flip back for combining with forward hidden states
+            if self.bidirectional_strategy == "add":
+                out = out + out_rev
+            elif self.bidirectional_strategy == "ew_multiply":
+                out = out * out_rev
+        return out
+

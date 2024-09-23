@@ -169,12 +169,25 @@ class S5SSM(torch.nn.Module):
     bandlimit: Optional[float] = None,
   ):
     # TODO: conj_sym,
-    """The S5 SSM
+    """Define an S5 state-space model
+        z[i] = A z[i-1] + B u[i]
+        y[i] = C z[i] + D u[i]
+
+    where A is the  state transition matrix, B is the input matrix, C is the output matrix,
+    and D is the feedthrough matrix.
+    Lambda represents the diagonal state matrix, and V and Vinv are the eigenvectors and inverse
+    eigenvectors used for initialization A = Vinv @ Lambda @ V, and transformed state x[i] = V @ z[i].
+
+    This system is equivalently expressed as:
+        x[i] = Lambda x[i-1] + B_tilde u[i]
+        y[i] = C_tilde x[i] + D u[i]
+    where B_tilde = Vinv @ B and C_tilde = C @ V.
+
     Args:
         Lambda_re_init  (complex64): Initial diagonal state matrix       (P,)
         V           (complex64): Eigenvectors used for init          (P,P)
         Vinv        (complex64): Inverse eigenvectors used for init  (P,P)
-        h           (int32):     Number of features of input seq
+        h           (int32):     Number of features of input sequence.
         p           (int32):     state size
         k           (int32):     rank of low-rank factorization (if used)
         C_init      (string):    Specifies How B and C are initialized
@@ -384,6 +397,23 @@ class S5(torch.nn.Module):
     discretization: Optional[str] = "bilinear",
     bandlimit: float = None,
   ):
+    """
+    Args:
+      d_model: model input dimension
+      ssm_size: state size dimension
+      blocks:
+      dt_min: minimum value to draw timescale values from when initializing log_step
+      dt_max: maximum value to draw timescale values from when initializing log_step
+      bidirectional: use bidirectional setup
+      C_init: Method for initializing emissions matrix C.
+      conj_sym:  Whether conjugate symmetry is enforced
+      clip_eigs: constrain real part of eigenvalues to be negative.
+                True recommended for autoregressive task/unbounded sequence lengths
+                Discussed in https://arxiv.org/pdf/2206.11893.pdf.
+      step_rescale:
+      discretization: Specifies discretization method
+      bandlimit:  Mask frequencies of the kernel
+    """
     super().__init__()
     # init ssm
     assert (
@@ -436,12 +466,12 @@ class S5(torch.nn.Module):
 
   def forward(self,
               signal: torch.Tensor,
-              prev_state: torch.Tensor,
+              state: torch.Tensor,
               rate: Union[float, torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
     Args:
       signal: TensorType["batch_size", "seq_length", "num_features"]
-      prev_state:  Optional[TensorType["batch_size", "num_states"]] = None
+      state:  Optional[TensorType["batch_size", "num_states"]] = None
       rate:
     Returns:
 
@@ -450,17 +480,17 @@ class S5(torch.nn.Module):
     if not isinstance(rate, torch.Tensor):
       # Duplicate across batch dimension
       rate = torch.ones(signal.shape[0], device=signal.device) * rate
-    return torch.vmap(self.seq)(signal, prev_state, rate)
+    return torch.vmap(self.seq)(signal, state, rate)
 
 
   def step(self,
         signal: torch.Tensor,
-        prev_state: torch.Tensor,
+        state: torch.Tensor,
         rate: Union[float, torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
     Args:
       signal: TensorType["batch_size", "seq_length", "num_features"]
-      prev_state: TensorType["batch_size", "num_states"]
+      state: TensorType["batch_size", "num_states"]
       rate:
     Returns:
       y: TensorType["batch_size", "seq_length", "num_features"]
@@ -470,7 +500,7 @@ class S5(torch.nn.Module):
       # Duplicate across batch dimension
       rate = torch.ones(signal.shape[0], device=signal.device) * rate
 
-    return torch.vmap(self.seq.step)(signal, prev_state, rate)
+    return torch.vmap(self.seq.step)(signal, state, rate)
 
 class GEGLU(torch.nn.Module):
   def forward(self, x):
@@ -528,11 +558,11 @@ class S5Layer(torch.nn.Module):
       self.out1 = torch.nn.Linear(d_model, d_model)
       self.out2 = torch.nn.Linear(d_model, d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
-      self.out1 = nn.Identity()  # No-op layer
-      self.out2 = nn.Linear(d_model, d_model)
+      self.out1 = torch.nn.Identity()  # No-op layer
+      self.out2 = torch.nn.Linear(d_model, d_model)
     else:
-      self.out1 = nn.Identity()
-      self.out2 = nn.Identity()
+      self.out1 = torch.nn.Identity()
+      self.out2 = torch.nn.Identity()
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -581,7 +611,7 @@ class S5Layer(torch.nn.Module):
       rate:
     """
     # Apply sequence model
-    x, new_state = self.seq(signal=x, prev_state=state, rate=rate)
+    x, new_state = self.seq(signal=x, state=state, rate=rate)
 
     x = self.apply_activation(x)
 
@@ -629,7 +659,7 @@ if __name__ == "__main__":
   print("D", tensor_stats(model.seq.D.data))
 
   state = model.initial_state(batch_size)
-  res = model(x, prev_state=state)
+  res = model(x, state=state)
   print(res[0].shape, res[1].shape)
 
   # Hparam configuration
@@ -653,7 +683,7 @@ if __name__ == "__main__":
 
   # check model
   state = model.initial_state(data['batch_size'])
-  res = model(x, prev_state=state)
+  res = model(x, state=state)
   print(res[0].shape, res[1].shape)
 
   outputs = res[0]
