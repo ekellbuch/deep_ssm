@@ -1,6 +1,12 @@
 Comment: >
   # This trains the baseline model
-  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1
+  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.mamba_bi_new=True
+  python run.py --config-name="baseline_mamba" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1 model_cfg.configs.mamba_bi_new=True
+
+  # Experiment:
+
+  python run.py --config-name="baseline_mamba" model_cfg.configs.mamba_bi_new=True
+  python run.py --config-name="baseline_mamba" model_cfg.configs.mamba_bi_new=True model_cfg.configs.input_nonlinearity=None
 
 project_name: "speech_bci"
 experiment_name: "baseline_mamba"
@@ -17,7 +23,7 @@ module_cfg:
 
 data_cfg:
   batchSize: 64
-  num_workers: 16
+  num_workers: 0
   datasetPath: *datasetPath
   # transformations:
   whiteNoiseSD: 0.8
@@ -31,9 +37,6 @@ data_cfg:
   renormalize_masking: false
 
 
-# maxTimeSeriesLen: 1200 ? not used
-lrEnd: 0.02
-nBatch: 8000  # 3000
 seed: 15
 
 model_cfg:
@@ -54,6 +57,8 @@ model_cfg:
     unfolding: true
     strideLen: 4
     kernelLen: 32
+    mamba_bi_new: false
+    input_nonlinearity: "softsign"
 
 optimizer_cfg:
   type: "adam"
@@ -91,6 +96,10 @@ trainer_cfg:
   log_every_n_steps: 100
   gradient_clip_val: 0 #.0
   gradient_clip_algorithm: "norm"
+  limit_test_batches: 
+  limit_train_batches:
+  limit_val_batches:
+  max_epochs:
 
 
 

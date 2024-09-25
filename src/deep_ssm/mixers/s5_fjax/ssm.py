@@ -252,8 +252,7 @@ class S5SSM(torch.nn.Module):
 
     if self.C_init in ["complex_normal"]:
       if self.bidirectional:
-        # TODO check
-        C = torch.cat((C_init, C_init), axis=-1, )
+        C = torch.cat((C_init, C_init), dim=-2,)
         self.C = torch.nn.Parameter(C)
       else:
         self.C = torch.nn.Parameter(C_init)
@@ -311,7 +310,7 @@ class S5SSM(torch.nn.Module):
   # NOTE: can only be used as RNN OR S5(MIMO) (no mixing)
   def forward(self,
               signal: torch.Tensor,
-              prev_state: Optional[torch.Tensor] = None,
+              prev_state: torch.Tensor,
               step_rescale: Optional[torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
 
@@ -602,7 +601,7 @@ class S5Layer(torch.nn.Module):
 
   def forward(self,
               x: torch.Tensor, #,
-              state: torch.Tensor,
+              state: Optional[torch.Tensor] = None,
               rate: Optional[Union[float, torch.Tensor]] = 1.0):
     """
     Args:
@@ -611,13 +610,19 @@ class S5Layer(torch.nn.Module):
       rate:
     """
     # Apply sequence model
+    if state is None:
+      state = self.seq.initial_state(x.shape[0])
+
     x, new_state = self.seq(signal=x, state=state, rate=rate)
 
     x = self.apply_activation(x)
 
     return x, new_state
 
-  def step(self, x, state, rate=None):
+  def step(self,
+           x: torch.Tensor,
+           state: torch.Tensor,
+           rate: Optional[Union[float, torch.Tensor]] = 1.0):
     """
     Step as a recurrent model, and apply continuously
 
@@ -631,6 +636,9 @@ class S5Layer(torch.nn.Module):
 
   def default_state(self, *batch_shape, device=None):
       return self.seq.initial_state(*batch_shape)
+
+  def initial_state(self, *batch_shape, device=None):
+      return self.default_state(*batch_shape)
 
   @property
   def d_output(self):

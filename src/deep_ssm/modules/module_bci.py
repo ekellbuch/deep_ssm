@@ -1,46 +1,6 @@
 import lightning as L
 import torch
-from edit_distance import SequenceMatcher
-
-
-def calculate_edit_distance_pytorch(seq1, seq2):
-  """
-     Computes the Levenshtein (edit) distance between two sequences using dynamic programming.
-     The edit distance is the minimum number of single-character edits (insertions, deletions, or substitutions)
-     required to change one sequence into the other.
-
-     Args:
-         seq1 (torch.Tensor): The first sequence, a tensor of shape (n, ) where n is the length of the sequence.
-         seq2 (torch.Tensor): The second sequence, a tensor of shape (m, ) where m is the length of the sequence.
-
-     Returns:
-         int: The computed Levenshtein distance between seq1 and seq2.
-
-     Notes:
-         - This function uses a dynamic programming approach to fill a 2D table (dp) where dp[i, j] represents
-           the minimum number of edits required to convert the first i characters of seq1 to the first j characters of seq2.
-         - The algorithm has time complexity O(n * m), where n and m are the lengths of seq1 and seq2, respectively.
-         - The function assumes that both seq1 and seq2 are 1D integer tensors and processes them element-wise.
-
-     Example:
-         seq1 = torch.tensor([1, 2, 3])
-         seq2 = torch.tensor([2, 3, 4])
-         edit_distance = calculate_edit_distance_pytorch(seq1, seq2)
-         print(edit_distance)  # Outputs the edit distance between the two sequences.
-  """
-  dp = torch.zeros((len(seq1) + 1, len(seq2) + 1), dtype=torch.int32)
-
-  dp[0, :] = torch.arange(len(seq2) + 1)
-  dp[:, 0] = torch.arange(len(seq1) + 1)
-
-  for i in range(1, len(seq1) + 1):
-    for j in range(1, len(seq2) + 1):
-      if seq1[i - 1] == seq2[j - 1]:
-        dp[i, j] = dp[i - 1, j - 1]
-      else:
-        dp[i, j] = 1 + torch.min(dp[i - 1, j], torch.min(dp[i, j - 1], dp[i - 1, j - 1]))
-
-  return dp[len(seq1), len(seq2)].item()
+from torchaudio.functional import edit_distance
 
 
 class BCIDecoder(L.LightningModule):
@@ -74,8 +34,8 @@ class BCIDecoder(L.LightningModule):
       trueSeq = y[iterIdx][: y_len[iterIdx]]
 
       # Calculate the edit distance between decodedSeq and trueSeq
-      edit_distance = calculate_edit_distance_pytorch(decodedSeq, trueSeq)
-      total_edit_distance += edit_distance
+      seq_distance = edit_distance(decodedSeq, trueSeq)
+      total_edit_distance += seq_distance
       total_seq_length += len(trueSeq)
 
     # Calculate the Character Error Rate (CER)

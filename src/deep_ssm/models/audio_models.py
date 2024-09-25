@@ -287,7 +287,7 @@ class Sashimi(nn.Module):
         def mamba_block(dim):
             layer = Mamba(
                 d_model=dim,
-                d_state=64,
+                #d_state=64,
                 # add bidirectional
                 #bidirectional=bidirectional,
                 #dropout=dropout,
@@ -303,7 +303,7 @@ class Sashimi(nn.Module):
         def s4_block(dim):
             layer = S4(
                 d_model=dim,
-                d_state=64,
+                #d_state=64,
                 bidirectional=bidirectional,
                 dropout=dropout,
                 transposed=transposed,
@@ -377,7 +377,6 @@ class Sashimi(nn.Module):
         input: (batch, length, d_input)
         output: (batch, length, d_output)
         """
-
         if self.transposed:
             x = x.transpose(1, 2)  # B D L
 
@@ -505,7 +504,8 @@ if __name__ == '__main__':
         'n_layers':2,
         'unet': True,
         'ssm_type':'s4',
-        'transposed': False,}
+        'transposed': False,
+        'd_state': 64}
 
     model = Sashimi(**parameters)
     # Print parameter count

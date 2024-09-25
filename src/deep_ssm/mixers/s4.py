@@ -24,6 +24,7 @@ if tuple(map(int, torch.__version__.split('.')[:2])) >= (1, 10):
 else:
     _resolve_conj = lambda x: x.conj()
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def get_logger(name=__name__, level=logging.INFO) -> logging.Logger:
     """Initializes multi-GPU-friendly python logger."""
@@ -46,19 +47,20 @@ try:
     from extensions.kernels.cauchy import cauchy_mult as cauchy_cuda
     from extensions.kernels.vandermonde import log_vandermonde_cuda
     has_cuda_extension = True
-    log.info("CUDA extension for structured kernels (Cauchy and Vandermonde multiplication) found.")
+    # log.info("CUDA extension for structured kernels (Cauchy and Vandermonde multiplication) found.")
 except:
-    log.warning(
-        "CUDA extension for structured kernels (Cauchy and Vandermonde multiplication) not found. Install by going to extensions/kernels/ and running `python setup.py install`, for improved speed and memory efficiency. Note that the kernel changed for state-spaces 4.0 and must be recompiled."
-    )
     has_cuda_extension = False
+    if not(device == 'cpu'):
+        log.warning(
+            "CUDA extension for structured kernels (Cauchy and Vandermonde multiplication) not found. Install by going to extensions/kernels/ and running `python setup.py install`, for improved speed and memory efficiency. Note that the kernel changed for state-spaces 4.0 and must be recompiled."
+        )
 
 # Try pykeops
 try:
     import pykeops
     from pykeops.torch import Genred
     has_pykeops = True
-    log.info("Pykeops installation found.")
+    #log.info("Pykeops installation found.")
 
     def _broadcast_dims(*tensors):
         max_dim = max([len(tensor.shape) for tensor in tensors])
@@ -145,7 +147,7 @@ try:
 
 except ImportError:
     has_pykeops = False
-    if not has_cuda_extension:
+    if not has_cuda_extension and not(device == 'cpu'):
         log.warning(
             "Falling back on slow Cauchy and Vandermonde kernel. Install at least one of pykeops or the CUDA extension for better speed and memory efficiency."
         )
@@ -892,7 +894,7 @@ class SSMKernel(Kernel):
         l_max: Optional[int] = None,
         lr: Union[float, Optional[Mapping]] = None,
         wd: Union[float, Optional[Mapping]] = 0.0,
-        verbose: bool = True,
+        verbose: bool = False,
         # SSM arguments
         d_state: int = 64,
         deterministic: bool = False,
