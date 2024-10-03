@@ -1,7 +1,6 @@
 import lightning as L
 import torch
-from torchaudio.functional import edit_distance
-
+from deep_ssm.metrics.bci_metrics import calculate_cer
 
 class BCIDecoder(L.LightningModule):
   def __init__(self, args, model):
@@ -18,50 +17,13 @@ class BCIDecoder(L.LightningModule):
       input_len = X_len
     return input_len
 
-  def calculate_cer(self, pred, X_len, y, y_len):
-    # TODO: optimize this function
-    adjustedLens = self.get_lens(X_len)
-
-    total_edit_distance = 0
-    total_seq_length = 0
-    for iterIdx in range(pred.shape[0]):
-      # Decode the predictions
-      decodedSeq = torch.argmax(pred[iterIdx, 0: adjustedLens[iterIdx], :], dim=-1)
-      decodedSeq = torch.unique_consecutive(decodedSeq, dim=-1)
-      decodedSeq = decodedSeq[decodedSeq != 0]  # Remove blank (0)
-
-      # Get the true sequence
-      trueSeq = y[iterIdx][: y_len[iterIdx]]
-
-      # Calculate the edit distance between decodedSeq and trueSeq
-      seq_distance = edit_distance(decodedSeq, trueSeq)
-      total_edit_distance += seq_distance
-      total_seq_length += len(trueSeq)
-
-    # Calculate the Character Error Rate (CER)
-    train_cer = total_edit_distance / total_seq_length
-    return train_cer
-
 
   def training_step(self, batch, batch_idx):
-    X, y, X_len, y_len, dayIdx = batch
-
-    input_len = self.get_lens(X_len)
-
-    # forward pass
-    pred = self.model(X, dayIdx)
-
-    # calculate CTC loss
-    loss = self.loss_ctc(
-      log_probs=torch.permute(pred.log_softmax(2), [1, 0, 2]),
-      targets=y,
-      input_lengths=input_len,
-      target_lengths=y_len,
-    )
-    self.log("ctc_loss_train", loss)
+    loss = self._custom_step(batch, batch_idx, flag_name='train', compute_cer=False)
     return loss
 
-  def _custom_step(self, batch, batch_idx, flag_name='test'):
+  def _custom_step(self, batch, batch_idx, flag_name='test', compute_cer=True):
+
     X, y, X_len, y_len, dayIdx = batch
 
     input_len = self.get_lens(X_len)
@@ -78,9 +40,11 @@ class BCIDecoder(L.LightningModule):
     )
     self.log(f"ctc_loss_{flag_name}", loss)
 
-    train_cer = self.calculate_cer(pred, X_len, y, y_len)
-    self.log(f"cer_{flag_name}", train_cer)
-
+    # Compute CER
+    if compute_cer:
+      train_cer = calculate_cer(pred, input_len, y, y_len)
+      self.log(f"cer_{flag_name}", train_cer)
+    return loss
 
   def validation_step(self, batch, batch_idx):
     self._custom_step(batch, batch_idx, flag_name='validation')

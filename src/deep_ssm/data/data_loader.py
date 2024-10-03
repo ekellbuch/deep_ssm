@@ -20,7 +20,9 @@ class SpeechDataset(Dataset):
         self.phone_seqs = []
         self.neural_time_bins = []
         self.phone_seq_lens = []
+        self.transcriptions = []
         self.days = []
+
         for day in range(self.n_days):
             for trial in range(len(data[day]["sentenceDat"])):
                 self.neural_feats.append(data[day]["sentenceDat"][trial])
@@ -28,6 +30,7 @@ class SpeechDataset(Dataset):
                 self.neural_time_bins.append(data[day]["sentenceDat"][trial].shape[0])
                 self.phone_seq_lens.append(data[day]["phoneLens"][trial])
                 self.days.append(day)
+                self.transcriptions.append(data[day]["transcriptions"][trial])
 
     def __len__(self):
         return self.n_trials
