@@ -1,7 +1,7 @@
 from deep_ssm.data.data_transforms import GaussianSmoothing
 import torch
 import torch.nn as nn
-from deep_ssm.mixers.mamba_extra import create_block
+from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
 
 
@@ -215,6 +215,10 @@ class MambaDecoder(BaseDecoder):
         unfolding=True,
         mamba_bi_new=False,
         input_nonlinearity="softsign",
+        fused_add_norm=False,
+        rms_norm=False,
+        initialize_mixer=False,
+        bidirectional_strategy=None,
     ):
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -230,55 +234,46 @@ class MambaDecoder(BaseDecoder):
         self.d_state = d_state
         self.d_conv = d_conv
         self.expand_factor = expand_factor
-        self.bidirectional_input = bidirectional_input
 
-        d_mamba = d_model * 2 if self.bidirectional_input else d_model
+        if bidirectional_input:
+            raise NotImplementedError("Bidirectional input not supported for MambaDecoder")
 
         if unfolding:
           input_dims = self.neural_dim * kernelLen
         else:
           input_dims = self.neural_dim
 
-        self.linear_input = nn.Linear(
-          input_dims * (2 if self.bidirectional_input else 1), d_mamba
+        # input dimension to model dimension
+        self.linear_input = nn.Linear(input_dims, d_model)
+
+        # Block of model layers
+        self.backbone = MixerModel(
+            d_model=d_model,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand_factor=expand_factor,
+            n_layer=layer_dim,
+            rms_norm=rms_norm,
+            fused_add_norm=fused_add_norm,
+            bidirectional=bidirectional,
+            mamba_bi_new=mamba_bi_new,
+            initialize_mixer=initialize_mixer,
+            bidirectional_strategy=bidirectional_strategy,
         )
 
-        self.layers = nn.ModuleList(
-            [
-                create_block(
-                    d_model=d_mamba,
-                    d_state=d_state,
-                    d_conv=d_conv,
-                    expand=expand_factor,
-                    layer_idx=i,
-                    bidirectional=bidirectional,
-                    mamba_bi_new=mamba_bi_new,
-                )
-                for i in range(layer_dim)
-            ]
-        )
-        self.norm_f = nn.LayerNorm(d_mamba, eps=1e-5)
-
-        self.fc_decoder_out = nn.Linear(d_mamba, n_classes + 1)  # +1 for CTC blank
+        # from model dimension to n_classes
+        self.fc_decoder_out = nn.Linear(d_model, n_classes + 1)  # +1 for CTC blank
 
     def forward(self, neuralInput, dayIdx):
         stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
 
-        if self.bidirectional_input:
-            stridedFlip = torch.flip(stridedInputs, dims=(1,))
-            stridedInputs = torch.cat((stridedInputs, stridedFlip), dim=-1)
+        # From d_input to d_model
+        hidden_states = self.linear_input(stridedInputs)
 
-        mamba_in = self.linear_input(stridedInputs)
+        # Pass through the mixer
+        hidden_states = self.backbone(hidden_states)
 
-        hidden_states = mamba_in
-        residual = None
-        for layer in self.layers:
-            hidden_states, residual = layer(hidden_states, residual)
-
-        residual = (hidden_states + residual) if residual is not None else hidden_states
-        hid = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))
-
-        seq_out = self.fc_decoder_out(hid)
+        seq_out = self.fc_decoder_out(hidden_states)
         return seq_out
 
 
