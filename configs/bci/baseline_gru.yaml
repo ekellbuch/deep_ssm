@@ -1,6 +1,8 @@
 Comment: >
-  # This trains the baseline model
+  # This trains the baseline model (fast_dev_run is a debugging flag)
   python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1
+  # Overfit in 1 batch
+  python run.py --config-name="baseline_gru" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1
 
 project_name: "speech_bci"
 experiment_name: "baseline_gru"
@@ -15,13 +17,16 @@ common:
 
 data_cfg:
   batchSize: 64
+  num_workers: 0
   datasetPath: *datasetPath
-  whiteNoiseSD: 0.8
-  constantOffsetSD: 0.2
+  # transformations:
+  whiteNoiseSD: 0.8  # add white noise
+  constantOffsetSD: 0.2  # add constant offset
+  # masking
+  mask_value: 0.0
   speckled_mask_p: 0
   feature_mask_p: 0
   temporal_mask_n: 0
-  num_workers: 16
 
 
 # seqLen: 150 ? not used
@@ -36,15 +41,16 @@ model_cfg:
   configs:
     neural_dim: 256 #nInputFeatures
     n_classes: 40 #nClasses
+    # gru params
     hidden_dim: 1024 #nUnits
     layer_dim: 5 #nLayers
-    #nDays:   # size of training data
     dropout: 0.4
+    bidirectional: true
+    # base decoder parameters:
+    gaussianSmoothWidth: 2.0
+    unfolding: true
     strideLen: 4
     kernelLen: 32
-    gaussianSmoothWidth: 2.0
-    bidirectional: true
-    #device: gpu
 
 optimizer_cfg:
   type: "adam"
@@ -56,6 +62,8 @@ optimizer_cfg:
 
 scheduler_cfg:
   type: "linear"
+  interval: "step"
+  frequency: 1
   configs:
     start_factor : 1.0
     end_factor: 1.0
@@ -74,6 +82,10 @@ trainer_cfg:
   accelerator: "auto"
   max_steps: 10000
   log_every_n_steps: 100
+  limit_test_batches:
+  limit_train_batches:
+  limit_val_batches:
+  max_epochs:
 
 
 eval_cfg:

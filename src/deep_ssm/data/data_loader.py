@@ -3,8 +3,10 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import pickle
 from torch.nn.utils.rnn import pad_sequence
-from .data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking
 from torchvision.transforms import Compose
+import math
+import torch.nn.functional as F
+from deep_ssm.data.data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking
 
 
 class SpeechDataset(Dataset):
@@ -18,7 +20,9 @@ class SpeechDataset(Dataset):
         self.phone_seqs = []
         self.neural_time_bins = []
         self.phone_seq_lens = []
+        self.transcriptions = []
         self.days = []
+
         for day in range(self.n_days):
             for trial in range(len(data[day]["sentenceDat"])):
                 self.neural_feats.append(data[day]["sentenceDat"][trial])
@@ -26,6 +30,7 @@ class SpeechDataset(Dataset):
                 self.neural_time_bins.append(data[day]["sentenceDat"][trial].shape[0])
                 self.phone_seq_lens.append(data[day]["phoneLens"][trial])
                 self.days.append(day)
+                self.transcriptions.append(data[day]["transcriptions"][trial])
 
     def __len__(self):
         return self.n_trials
@@ -45,10 +50,19 @@ class SpeechDataset(Dataset):
         )
 
 
-def _padding(batch):
+def _padding(batch, multiple=1):
   X, y, X_lens, y_lens, days = zip(*batch)
+
+  max_len = max(seq.size(0) for seq in X)
+
+  # Pad the sequences:
   X_padded = pad_sequence(X, batch_first=True, padding_value=0)
   y_padded = pad_sequence(y, batch_first=True, padding_value=0)
+
+  # Pad to the desired length:
+  if multiple > 1:
+    desired_len = math.ceil(max_len / multiple) * multiple
+    X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
 
   return (
     X_padded,
@@ -84,13 +98,18 @@ def getDatasetLoaders(args):
   train_ds = SpeechDataset(loadedData["train"], transform=transform_fn)
   test_ds = SpeechDataset(loadedData["test"])
 
+  if args.get("pad_multiple", None) is not None:
+    _padding_fn = lambda x: _padding(x, multiple=args["pad_multiple"])
+  else:
+    _padding_fn = _padding
+
   train_loader = DataLoader(
     train_ds,
     batch_size=args.batchSize,
     shuffle=True,
     num_workers=args.num_workers,
     pin_memory=True,
-    collate_fn=_padding,
+    collate_fn=_padding_fn,
   )
   test_loader = DataLoader(
     test_ds,
@@ -98,7 +117,7 @@ def getDatasetLoaders(args):
     shuffle=False,
     num_workers=args.num_workers,
     pin_memory=True,
-    collate_fn=_padding,
+    collate_fn=_padding_fn,
   )
 
   return train_loader, test_loader, loadedData

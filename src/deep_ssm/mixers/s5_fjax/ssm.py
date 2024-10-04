@@ -169,12 +169,25 @@ class S5SSM(torch.nn.Module):
     bandlimit: Optional[float] = None,
   ):
     # TODO: conj_sym,
-    """The S5 SSM
+    """Define an S5 state-space model
+        z[i] = A z[i-1] + B u[i]
+        y[i] = C z[i] + D u[i]
+
+    where A is the  state transition matrix, B is the input matrix, C is the output matrix,
+    and D is the feedthrough matrix.
+    Lambda represents the diagonal state matrix, and V and Vinv are the eigenvectors and inverse
+    eigenvectors used for initialization A = Vinv @ Lambda @ V, and transformed state x[i] = V @ z[i].
+
+    This system is equivalently expressed as:
+        x[i] = Lambda x[i-1] + B_tilde u[i]
+        y[i] = C_tilde x[i] + D u[i]
+    where B_tilde = Vinv @ B and C_tilde = C @ V.
+
     Args:
         Lambda_re_init  (complex64): Initial diagonal state matrix       (P,)
         V           (complex64): Eigenvectors used for init          (P,P)
         Vinv        (complex64): Inverse eigenvectors used for init  (P,P)
-        h           (int32):     Number of features of input seq
+        h           (int32):     Number of features of input sequence.
         p           (int32):     state size
         k           (int32):     rank of low-rank factorization (if used)
         C_init      (string):    Specifies How B and C are initialized
@@ -239,8 +252,7 @@ class S5SSM(torch.nn.Module):
 
     if self.C_init in ["complex_normal"]:
       if self.bidirectional:
-        # TODO check
-        C = torch.cat((C_init, C_init), axis=-1, )
+        C = torch.cat((C_init, C_init), dim=-2,)
         self.C = torch.nn.Parameter(C)
       else:
         self.C = torch.nn.Parameter(C_init)
@@ -298,7 +310,7 @@ class S5SSM(torch.nn.Module):
   # NOTE: can only be used as RNN OR S5(MIMO) (no mixing)
   def forward(self,
               signal: torch.Tensor,
-              prev_state: Optional[torch.Tensor] = None,
+              prev_state: torch.Tensor,
               step_rescale: Optional[torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
 
@@ -384,6 +396,23 @@ class S5(torch.nn.Module):
     discretization: Optional[str] = "bilinear",
     bandlimit: float = None,
   ):
+    """
+    Args:
+      d_model: model input dimension
+      ssm_size: state size dimension
+      blocks:
+      dt_min: minimum value to draw timescale values from when initializing log_step
+      dt_max: maximum value to draw timescale values from when initializing log_step
+      bidirectional: use bidirectional setup
+      C_init: Method for initializing emissions matrix C.
+      conj_sym:  Whether conjugate symmetry is enforced
+      clip_eigs: constrain real part of eigenvalues to be negative.
+                True recommended for autoregressive task/unbounded sequence lengths
+                Discussed in https://arxiv.org/pdf/2206.11893.pdf.
+      step_rescale:
+      discretization: Specifies discretization method
+      bandlimit:  Mask frequencies of the kernel
+    """
     super().__init__()
     # init ssm
     assert (
@@ -436,12 +465,12 @@ class S5(torch.nn.Module):
 
   def forward(self,
               signal: torch.Tensor,
-              prev_state: torch.Tensor,
+              state: torch.Tensor,
               rate: Union[float, torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
     Args:
       signal: TensorType["batch_size", "seq_length", "num_features"]
-      prev_state:  Optional[TensorType["batch_size", "num_states"]] = None
+      state:  Optional[TensorType["batch_size", "num_states"]] = None
       rate:
     Returns:
 
@@ -450,17 +479,17 @@ class S5(torch.nn.Module):
     if not isinstance(rate, torch.Tensor):
       # Duplicate across batch dimension
       rate = torch.ones(signal.shape[0], device=signal.device) * rate
-    return torch.vmap(self.seq)(signal, prev_state, rate)
+    return torch.vmap(self.seq)(signal, state, rate)
 
 
   def step(self,
         signal: torch.Tensor,
-        prev_state: torch.Tensor,
+        state: torch.Tensor,
         rate: Union[float, torch.Tensor] = 1.0) -> Tuple[torch.Tensor,torch.Tensor]:
     """
     Args:
       signal: TensorType["batch_size", "seq_length", "num_features"]
-      prev_state: TensorType["batch_size", "num_states"]
+      state: TensorType["batch_size", "num_states"]
       rate:
     Returns:
       y: TensorType["batch_size", "seq_length", "num_features"]
@@ -470,7 +499,7 @@ class S5(torch.nn.Module):
       # Duplicate across batch dimension
       rate = torch.ones(signal.shape[0], device=signal.device) * rate
 
-    return torch.vmap(self.seq.step)(signal, prev_state, rate)
+    return torch.vmap(self.seq.step)(signal, state, rate)
 
 class GEGLU(torch.nn.Module):
   def forward(self, x):
@@ -490,17 +519,21 @@ class S5Layer(torch.nn.Module):
     C_init: str = "complex_normal",
     conj_sym: bool = False,
     clip_eigs: bool = False,
+    step_rescale: float = 1.0,
+    discretization: str = "bilinear",
+    # layer parameters
     dropout: float = 0.0,
     activation: str = "gelu",
+    prenorm: bool = False,
     batchnorm: bool = False,
     bn_momentum: float = 0.9,
-    step_rescale: float = 1.0,
-    bandlimit: Optional[float] = None,
-    discretization: Optional[str] = "bilinear",
+    # optional parameters
+    bandlimit: float = None,
     # transposed=True,  # axis ordering (B, L, D) or (B, D, L)
   ):
     super().__init__()
     self.d_model = d_model
+    self.prenorm = prenorm
     self.batchnorm = batchnorm
     self.activation = activation
     #self.transposed = transposed
@@ -513,18 +546,22 @@ class S5Layer(torch.nn.Module):
       dt_max=dt_max,
       bidirectional=bidirectional,
       C_init=C_init,
-      bandlimit=bandlimit,
       conj_sym=conj_sym,
       clip_eigs=clip_eigs,
       step_rescale=step_rescale,
       discretization=discretization,
+      bandlimit=bandlimit,
     )
 
     if self.activation in ["full_glu"]:
       self.out1 = torch.nn.Linear(d_model, d_model)
       self.out2 = torch.nn.Linear(d_model, d_model)
     elif self.activation in ["half_glu1", "half_glu2"]:
+      self.out1 = torch.nn.Identity()  # No-op layer
       self.out2 = torch.nn.Linear(d_model, d_model)
+    else:
+      self.out1 = torch.nn.Identity()
+      self.out2 = torch.nn.Identity()
 
     if self.batchnorm:
       self.norm = torch.nn.BatchNorm1d(d_model, momentum=bn_momentum, track_running_stats=False)
@@ -535,47 +572,57 @@ class S5Layer(torch.nn.Module):
 
     self.gelu = F.gelu  # if glu else None
 
+
   def apply_activation(self, x):
     # Apply activation
-    if self.activation in ["full_glu"]:
+    if self.activation == "full_glu":
       x = self.drop(self.gelu(x))
-      x = self.out1(x) * torch.sigmoid(self.out2(x))
+      out2_result = torch.sigmoid(self.out2(x))
+      x = self.out1(x) * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu1"]:
+    elif self.activation == "half_glu1":
       x = self.drop(self.gelu(x))
-      x = x * torch.sigmoid(self.out2(x))
+      out2_result = torch.sigmoid(self.out2(x))
+      x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["half_glu2"]:
+    elif self.activation == "half_glu2":
       # Only apply GELU to the gate input
       x1 = self.drop(self.gelu(x))
-      x = x * torch.sigmoid(self.out2(x1))
+      out2_result = torch.sigmoid(self.out2(x1))
+      x = x * out2_result
       x = self.drop(x)
-    elif self.activation in ["gelu"]:
+    elif self.activation == "gelu":
       x = self.drop(self.gelu(x))
     else:
       raise NotImplementedError(
         "Activation: {} not implemented".format(self.activation))
     return x
 
+
   def forward(self,
               x: torch.Tensor, #,
-              state: torch.Tensor,
+              state: Optional[torch.Tensor] = None,
               rate: Optional[Union[float, torch.Tensor]] = 1.0):
     """
-
     Args:
       x: TensorType["batch_size", "seq_length", "num_features"]
       state: TensorType["batch_size", "num_states"]
       rate:
     """
     # Apply sequence model
-    x, new_state = self.seq(signal=x, prev_state=state, rate=rate)
+    if state is None:
+      state = self.seq.initial_state(x.shape[0])
+
+    x, new_state = self.seq(signal=x, state=state, rate=rate)
 
     x = self.apply_activation(x)
 
     return x, new_state
 
-  def step(self, x, state, rate=None):
+  def step(self,
+           x: torch.Tensor,
+           state: torch.Tensor,
+           rate: Optional[Union[float, torch.Tensor]] = 1.0):
     """
     Step as a recurrent model, and apply continuously
 
@@ -589,6 +636,9 @@ class S5Layer(torch.nn.Module):
 
   def default_state(self, *batch_shape, device=None):
       return self.seq.initial_state(*batch_shape)
+
+  def initial_state(self, *batch_shape, device=None):
+      return self.default_state(*batch_shape)
 
   @property
   def d_output(self):
@@ -617,7 +667,7 @@ if __name__ == "__main__":
   print("D", tensor_stats(model.seq.D.data))
 
   state = model.initial_state(batch_size)
-  res = model(x, prev_state=state)
+  res = model(x, state=state)
   print(res[0].shape, res[1].shape)
 
   # Hparam configuration
@@ -641,7 +691,7 @@ if __name__ == "__main__":
 
   # check model
   state = model.initial_state(data['batch_size'])
-  res = model(x, prev_state=state)
+  res = model(x, state=state)
   print(res[0].shape, res[1].shape)
 
   outputs = res[0]
