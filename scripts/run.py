@@ -48,7 +48,7 @@ def train(args):
 
 
     # get dataset:
-    train_loader, test_loader, loadedData = getDatasetLoaders(args.data_cfg)
+    train_loader, val_loader, test_loader, loadedData = getDatasetLoaders(args.data_cfg)
 
     # get module and model:
     modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=len(loadedData["train"]))
@@ -71,14 +71,14 @@ def train(args):
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
     # Train model
-    trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=test_loader)
+    trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     # Test model
     trainer.test(model, test_loader)
 
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):
-      wandb.run.summary["output_dir"] = output_dir
+      wandb.run.qsummary["output_dir"] = output_dir
       wandb.run.summary["total_params"] = sum(p.numel() for p in model.parameters())
 
       wandb.finish()

@@ -103,6 +103,11 @@ def getDatasetLoaders(args):
   else:
     _padding_fn = _padding
 
+  if args.get("train_split", 1) < 1:
+    train_ds, val_ds = torch.utils.data.random_split(train_ds, [args.train_split, 1- args.train_split])
+  else:
+    train_ds, val_ds = train_ds, test_ds
+
   train_loader = DataLoader(
     train_ds,
     batch_size=args.batchSize,
@@ -111,6 +116,16 @@ def getDatasetLoaders(args):
     pin_memory=True,
     collate_fn=_padding_fn,
   )
+
+  val_loader = DataLoader(
+    val_ds,
+    batch_size=args.batchSize,
+    shuffle=True,
+    num_workers=args.num_workers,
+    pin_memory=True,
+    collate_fn=_padding_fn,
+  )
+
   test_loader = DataLoader(
     test_ds,
     batch_size=args.batchSize,
@@ -120,6 +135,6 @@ def getDatasetLoaders(args):
     collate_fn=_padding_fn,
   )
 
-  return train_loader, test_loader, loadedData
+  return train_loader, val_loader, test_loader, loadedData
 
 
