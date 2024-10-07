@@ -7,15 +7,16 @@ from torchvision.transforms import Compose
 import math
 import torch.nn.functional as F
 from deep_ssm.data.data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking
+from transformers import WhisperProcessor
 
 
 class SpeechDataset(Dataset):
-    def __init__(self, data, transform=None):
+    def __init__(self, data, transform=None, processor=None):
         self.data = data
         self.transform = transform
         self.n_days = len(data)
         self.n_trials = sum([len(d["sentenceDat"]) for d in data])
-
+        self.processor = processor
         self.neural_feats = []
         self.phone_seqs = []
         self.neural_time_bins = []
@@ -35,6 +36,14 @@ class SpeechDataset(Dataset):
     def __len__(self):
         return self.n_trials
 
+    def get_transcription(self, idx):
+      if self.processor is not None:
+        transcription = self.processor(text=self.transcriptions[idx], return_tensors="pt",
+                                       padding=True).input_ids.squeeze(0)
+      else:
+        transcription = self.transcriptions[idx]
+      return transcription
+
     def __getitem__(self, idx):
         neural_feats = torch.tensor(self.neural_feats[idx], dtype=torch.float32)
 
@@ -47,11 +56,13 @@ class SpeechDataset(Dataset):
             torch.tensor(self.neural_time_bins[idx], dtype=torch.int32),
             torch.tensor(self.phone_seq_lens[idx], dtype=torch.int32),
             torch.tensor(self.days[idx], dtype=torch.int64),
+           # self.get_transcription(idx),
         )
 
 
 def _padding(batch, multiple=1):
   X, y, X_lens, y_lens, days = zip(*batch)
+  # X, y, X_lens, y_lens, days, transcriptions = zip(*batch)
 
   max_len = max(seq.size(0) for seq in X)
 
@@ -59,11 +70,24 @@ def _padding(batch, multiple=1):
   X_padded = pad_sequence(X, batch_first=True, padding_value=0)
   y_padded = pad_sequence(y, batch_first=True, padding_value=0)
 
+  # Pad transcriptions:
+  # TODO: check if type is tensor
+  #transcriptions_padded = pad_sequence(transcriptions, batch_first=True, padding_value=0)
+
   # Pad to the desired length:
   if multiple > 1:
     desired_len = math.ceil(max_len / multiple) * multiple
     X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
 
+    """
+    batch = {}
+    batch["neural_feats"] = X_padded
+    batch["phone_seqs"] = y_padded
+    batch["neural_time_bins"] = torch.stack(X_lens)
+    batch["phone_seq_lens"] = torch.stack(y_lens)
+    batch["days"] = torch.stack(days)
+    batch["transcriptions"] = transcriptions_padded
+    """
   return (
     X_padded,
     y_padded,
@@ -95,7 +119,14 @@ def getDatasetLoaders(args):
   else:
     transform_fn = None
 
-  train_ds = SpeechDataset(loadedData["train"], transform=transform_fn)
+  if args.get("transcript_processor", None):
+    if args.transcript_processor == "whisper":
+      processor = WhisperProcessor.from_pretrained("openai/whisper-small")
+    else:
+      raise ValueError(f"Unknown processor: {args.transcript_processor}")
+  else:
+    processor = None
+  train_ds = SpeechDataset(loadedData["train"], transform=transform_fn, processor=processor)
   test_ds = SpeechDataset(loadedData["test"])
 
   if args.get("pad_multiple", None) is not None:
