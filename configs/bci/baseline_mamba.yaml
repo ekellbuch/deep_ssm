@@ -1,43 +1,30 @@
 Comment: >
   # This trains the baseline model
-  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1
-  python run.py --config-name="baseline_mamba" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1
-
-  # Experiment:
-
-  python run.py --config-name="baseline_mamba" 
-  python run.py --config-name="baseline_mamba" model_cfg.configs.input_nonlinearity=None
+  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
 
 project_name: "speech_bci"
 experiment_name: "baseline_mamba"
 
-
-common:
-  #outputDir: "/Users/ekellbuch/Projects/deepseq/bci/neural_seq_decoder/outputs"
-  #datasetPath: &datasetPath "/Users/ekellbuch/datasets/SpeechBCI/competitionData/ptDecoder_ctc"
-  outputDir: "/scratch/users/${oc.env:USER}/SpeechBCI/logs"
-  datasetPath: &datasetPath "/scratch/groups/swl1/SpeechBCI/competitionData/ptDecoder_ctc"
-
-module_cfg:
-  type: "bci"
+seed: 0
 
 data_cfg:
   batchSize: 64
   num_workers: 0
-  datasetPath: *datasetPath
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
+  train_split: 1    # % of training data assigned to train_loader 1=100%
   # transformations:
   whiteNoiseSD: 0.8
   constantOffsetSD: 0.2
   # masking
   mask_value: 0.0
-  speckled_mask_p: 0.45
-  feature_mask_p: 0.03
-  temporal_mask_n: 1
-  temporal_mask_len: 2
+  speckled_mask_p: 0 #0.45
+  feature_mask_p: 0 #0.03
+  temporal_mask_n: 0 #1
+  temporal_mask_len: 0 #2
   renormalize_masking: false
 
-
-seed: 15
+module_cfg:
+  type: "bci"
 
 model_cfg:
   type: "bci_mamba"
@@ -49,7 +36,6 @@ model_cfg:
     d_state: 16
     d_conv: 4
     expand_factor: 1
-    bidirectional_input: false
     bidirectional: true
     layer_dim: 6 #nLayers
     # base decoder parameters:
@@ -57,24 +43,28 @@ model_cfg:
     unfolding: true
     strideLen: 4
     kernelLen: 32
-    mamba_bi_new: true
     input_nonlinearity: "softsign"
+    normalize_batch: false
+    init_embedding_layer: false
+    include_relu: false
+    dropout: 0
+    
 
 optimizer_cfg:
   type: "adam"
   configs:
-    lr: 0.01  # lrStart
+    lr: 0.02 # lrStart
     betas: [0.9, 0.99]
     eps: 0.1
     weight_decay: 1e-5  #l2_decay
 
 scheduler_cfg:
-  type: "stepLR"
+  type: "linear"
   interval: "step"
   frequency: 1
   configs:
-    step_size : 6101
-    gamma: 0.01
+    start_factor : 1.0
+    end_factor: 1.0
 
 callbacks:
   lr_monitor:
@@ -94,13 +84,12 @@ trainer_cfg:
   accelerator: "auto"
   max_steps: 10000
   log_every_n_steps: 100
-  gradient_clip_val: 0 #.0
+  gradient_clip_val: 0
   gradient_clip_algorithm: "norm"
-  limit_test_batches: 
+  limit_test_batches:
   limit_train_batches:
   limit_val_batches:
   max_epochs:
-
 
 
 eval_cfg:

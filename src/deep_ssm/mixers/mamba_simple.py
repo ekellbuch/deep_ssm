@@ -21,7 +21,7 @@ except:
     from deep_ssm.mixers.utils_mamba import causal_conv1d_update_ref as causal_conv1d_update
 
 try:
-    from mamba_ssm.triton.selective_state_update import selective_state_update
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 except:
     selective_state_update = None
 
