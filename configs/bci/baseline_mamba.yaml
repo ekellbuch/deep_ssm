@@ -1,12 +1,12 @@
 Comment: >
   # This trains the baseline model
-  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.mamba_bi_new=True
-  python run.py --config-name="baseline_mamba" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1 model_cfg.configs.mamba_bi_new=True
+  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1
+  python run.py --config-name="baseline_mamba" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1
 
   # Experiment:
 
-  python run.py --config-name="baseline_mamba" model_cfg.configs.mamba_bi_new=True
-  python run.py --config-name="baseline_mamba" model_cfg.configs.mamba_bi_new=True model_cfg.configs.input_nonlinearity=None
+  python run.py --config-name="baseline_mamba" 
+  python run.py --config-name="baseline_mamba" model_cfg.configs.input_nonlinearity=None
 
 project_name: "speech_bci"
 experiment_name: "baseline_mamba"
@@ -57,7 +57,7 @@ model_cfg:
     unfolding: true
     strideLen: 4
     kernelLen: 32
-    mamba_bi_new: false
+    mamba_bi_new: true
     input_nonlinearity: "softsign"
 
 optimizer_cfg:
