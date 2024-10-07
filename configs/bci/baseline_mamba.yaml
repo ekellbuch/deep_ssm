@@ -25,6 +25,8 @@ data_cfg:
   batchSize: 64
   num_workers: 0
   datasetPath: *datasetPath
+  # train and val split
+  train_split: 0.8
   # transformations:
   whiteNoiseSD: 0.8
   constantOffsetSD: 0.2
@@ -46,7 +48,7 @@ model_cfg:
     n_classes: 40 #nClasses
     # mamba params
     d_model: 1024
-    d_state: 16
+    d_state: 64  # size of hidden state
     d_conv: 4
     expand_factor: 1
     bidirectional_input: false
@@ -69,12 +71,10 @@ optimizer_cfg:
     weight_decay: 1e-5  #l2_decay
 
 scheduler_cfg:
-  type: "stepLR"
-  interval: "step"
-  frequency: 1
+  type: "reduce_on_plateau"
+  monitor: "ctc_loss_validation"
   configs:
-    step_size : 6101
-    gamma: 0.01
+    mode: "min"
 
 callbacks:
   lr_monitor:
