@@ -219,6 +219,7 @@ class MambaDecoder(BaseDecoder):
         rms_norm=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
+        dropout=0.0,
     ):
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -245,6 +246,7 @@ class MambaDecoder(BaseDecoder):
 
         # input dimension to model dimension
         self.linear_input = nn.Linear(input_dims, d_model)
+        self.dropout = nn.Dropout(p=dropout)
 
         # Block of model layers
         self.backbone = MixerModel(
@@ -269,6 +271,7 @@ class MambaDecoder(BaseDecoder):
 
         # From d_input to d_model
         hidden_states = self.linear_input(stridedInputs)
+        hidden_states = self.dropout(hidden_states)
 
         # Pass through the mixer
         hidden_states = self.backbone(hidden_states)
