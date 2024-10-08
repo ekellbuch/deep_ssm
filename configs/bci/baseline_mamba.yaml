@@ -8,21 +8,21 @@ Comment: >
   python run.py --config-name="baseline_mamba" 
   python run.py --config-name="baseline_mamba" model_cfg.configs.input_nonlinearity=None
 
-project_name: "speech_bci"
-experiment_name: "baseline_mamba"
+project_name: "speech_bci_debug"
+experiment_name: "overfit_mamba"
 
 
 common:
-  #outputDir: "/Users/ekellbuch/Projects/deepseq/bci/neural_seq_decoder/outputs"
-  #datasetPath: &datasetPath "/Users/ekellbuch/datasets/SpeechBCI/competitionData/ptDecoder_ctc"
-  outputDir: "/scratch/users/${oc.env:USER}/SpeechBCI/logs"
-  datasetPath: &datasetPath "/scratch/groups/swl1/SpeechBCI/competitionData/ptDecoder_ctc"
+  outputDir: "/Users/ekellbuch/Projects/deepseq/bci/neural_seq_decoder/outputs"
+  datasetPath: &datasetPath "/Users/ekellbuch/datasets/SpeechBCI/competitionData/ptDecoder_ctc"
+  #outputDir: "/scratch/users/${oc.env:USER}/SpeechBCI/logs"
+  #datasetPath: &datasetPath "/scratch/groups/swl1/SpeechBCI/competitionData/ptDecoder_ctc"
 
 module_cfg:
   type: "bci"
 
 data_cfg:
-  batchSize: 64
+  batchSize: 128
   num_workers: 0
   datasetPath: *datasetPath  # location of data
   train_split: 1    # % of training data assigned to train_loader 1=100%
@@ -30,14 +30,14 @@ data_cfg:
   constantOffsetSD: 0.2  # transformations: constant offset added to data
   # masking
   mask_value: 0.0
-  speckled_mask_p: 0.45
-  feature_mask_p: 0.03
-  temporal_mask_n: 1
+  speckled_mask_p: 0
+  feature_mask_p: 0
+  temporal_mask_n: 0
   temporal_mask_len: 2
   renormalize_masking: false
 
 
-seed: 15
+seed: 0
 
 model_cfg:
   type: "bci_mamba"
@@ -49,15 +49,24 @@ model_cfg:
     d_state: 16
     d_conv: 4
     expand_factor: 1
-    bidirectional: true
-    layer_dim: 6 #nLayers
+    bidirectional: false
+    layer_dim: 5 #nLayers
+    mamba_bi_new: true
+    input_nonlinearity: None #"softsign"
+    normalize_batch: False
+    initialize_mixer: True
+    dropout: 0
     # base decoder parameters:
     gaussianSmoothWidth: 2.0
+    unfolding: true
+    # base decoder parameters:
+    gaussianSmoothWidth: 0
     unfolding: false
     strideLen: 4
     kernelLen: 32
     mamba_bi_new: true
     input_nonlinearity: "softsign"
+    # input embedding parameters
     dropout: 0.1
 
 optimizer_cfg:  # optimizer configurations
@@ -72,17 +81,17 @@ scheduler_cfg:  # scheduler configurations
   type: "linear"
   interval: "step"
   frequency: 1
-  warmup_epochs: 0
+  warmup_epochs: 1
   configs:
     start_factor : 1.0
-    end_factor: 0.1
-    total_iters: 10
+    end_factor: 1.0
+    total_iters: 100
 
 callbacks:
   lr_monitor:
     logging_interval: "step"
   grad_norm:
-    type:
+    type: "vars_pbatch"
   early_stopping:
     monitor: "ctc_loss_validation"
     min_delta: 1e-4
@@ -96,11 +105,12 @@ trainer_cfg:
   accelerator: "auto"
   max_steps: 100
   log_every_n_steps: 1
-  gradient_clip_val: 0 #.0
-  gradient_clip_algorithm: "norm"
-  limit_test_batches: 0.5
+  gradient_clip_val: 0.1 #.0
+  gradient_clip_algorithm: "value"
+  limit_test_batches: 1
   limit_train_batches: 1
-  limit_val_batches: 0.5
+  limit_val_batches: 1
+  overfit_batches: 1
   max_epochs:
 
 

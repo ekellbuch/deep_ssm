@@ -3,7 +3,7 @@ import lightning as L
 import wandb
 
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 from deep_ssm.data.data_loader import getDatasetLoaders
 from deep_ssm.modules import all_modules
@@ -39,6 +39,9 @@ def train(args):
 
         logger = WandbLogger(name=args.experiment_name,
                              project=args.project_name, **kwargs)
+
+        args_as_dict = OmegaConf.to_container(args)
+        logger.log_hyperparams(args_as_dict)
       elif args.trainer_cfg.logger == "tensorboard":
         logger = TensorBoardLogger(args.project_name,
                                    name=args.experiment_name,
@@ -61,11 +64,11 @@ def train(args):
     # set callbacks
     local_callbacks = []
     if args.callbacks:
-      if args.callbacks.get("lr_monitor"):
+      if args.callbacks.get("lr_monitor", None):
         local_callbacks.append(LearningRateMonitor(**args.callbacks.lr_monitor))
-      if args.callbacks.get("grad_norm.type"):
+      if args.callbacks.get("grad_norm") and args.callbacks.grad_norm.get("type", None):
         local_callbacks.append(all_callbacks[args.callbacks.grad_norm.type])
-      if args.callbacks.get("early_stopping"):
+      if args.callbacks.get("early_stopping", None):
         local_callbacks.append(EarlyStopping(**args.callbacks.early_stopping))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)

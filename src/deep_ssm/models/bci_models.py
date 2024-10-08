@@ -213,13 +213,16 @@ class MambaDecoder(BaseDecoder):
         bidirectional_input=False,
         bidirectional=False,
         unfolding=True,
-        mamba_bi_new=False,
+        mamba_bi_new=True,
         input_nonlinearity="softsign",
         fused_add_norm=False,
         rms_norm=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
         dropout=0.0,
+        normalize_batch=False,
+        init_embedding_layer=False,
+        init_decoder_layer=False,
     ):
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -235,6 +238,7 @@ class MambaDecoder(BaseDecoder):
         self.d_state = d_state
         self.d_conv = d_conv
         self.expand_factor = expand_factor
+        self.normalize_batch = normalize_batch
 
         if bidirectional_input:
             raise NotImplementedError("Bidirectional input not supported for MambaDecoder")
@@ -266,10 +270,38 @@ class MambaDecoder(BaseDecoder):
         # from model dimension to n_classes
         self.fc_decoder_out = nn.Linear(d_model, n_classes + 1)  # +1 for CTC blank
 
+        # Initialize embedding weights:
+        if init_embedding_layer:
+            nn.init.xavier_normal_(self.linear_input.weight)
+            nn.init.zeros_(self.linear_input.bias)
+
+        if init_decoder_layer:
+            for name, param in self.fc_decoder_out.named_parameters():
+                if "weight" in name:
+                    nn.init.orthogonal_(param)
+                if "bias" in name:
+                    nn.init.zeros_(param)
+
     def forward(self, neuralInput, dayIdx):
+        """
+        Forward pass of the Decoder
+        Args:
+            neuralInput: (batch_size x seq_len x num_features)
+            dayIdx: (batch_size, )
+
+        Returns:
+
+        """
+        if self.normalize_batch:
+            dim_ = -1
+            means = neuralInput.mean(dim_, keepdim=True).detach() # B x 1 x D
+            neuralInput = neuralInput - means
+            stdev = torch.sqrt(torch.var(neuralInput, dim=dim_, keepdim=True, unbiased=False) + 1e-5)  # B x 1 x D
+            neuralInput /= stdev
+
+        # Preprocess batch
         stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
 
-        # From d_input to d_model
         hidden_states = self.linear_input(stridedInputs)
         hidden_states = self.dropout(hidden_states)
 

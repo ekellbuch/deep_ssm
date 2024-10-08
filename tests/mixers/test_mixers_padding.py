@@ -8,7 +8,7 @@ from deep_ssm.mixers.mamba2_simple import Mamba2Simple
 from deep_ssm.mixers.s5_fjax.ssm import S5Layer as S5
 from deep_ssm.mixers.s4 import S4Block as S4
 from torch.nn import functional as F
-from deep_ssm.mixers.mamba_extra import BidirectionalMamba, MambaWrapper
+from deep_ssm.mixers.mamba_extra import MambaWrapper
 
 
 
@@ -25,7 +25,6 @@ MODELS = {"Mamba": Mamba,
           "Mamba2": Mamba2Simple,
           "S4": S4,
           "MambaBi": MambaWrapper,
-          "MambaBi_v0": BidirectionalMamba
           }
 
 
@@ -38,7 +37,6 @@ class TestMixerInference(parameterized.TestCase):
         ("S5", "S5", False),
         ("S4 Bidirectional", "S4", True),
         ("S5 Bidirectional", "S5", True),
-        #("MambaBi_v0", "MambaBi_v0", True),
         ("MambaBi", "MambaBi", True)
     )
     def test_padded_sequence(self, model_name, bidirectional):
@@ -52,6 +50,11 @@ class TestMixerInference(parameterized.TestCase):
         headdim = 1
         pad_len = 5
         x = torch.randn(batch, seqlen, dim).to(dtype).to(device)
+        means = x.mean(1, keepdim=True).detach()  # B x 1 x D
+        x = x - means
+        stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5)  # B x 1 x D
+        x /= stdev
+
         padded_x = F.pad(x, (0, 0, 0, pad_len)).to(dtype)
 
         assert x.shape == padded_x[:,pad_len:].shape
