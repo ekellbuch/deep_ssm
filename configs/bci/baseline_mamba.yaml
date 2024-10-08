@@ -45,11 +45,10 @@ model_cfg:
     neural_dim: 256  # number of InputFeatures
     n_classes: 40    # number of classes
     # mamba params
-    d_model: 256
-    d_state: 64
+    d_model: 1024
+    d_state: 16
     d_conv: 4
-    expand_factor: 2
-    bidirectional_input: false
+    expand_factor: 1
     bidirectional: true
     layer_dim: 6 #nLayers
     # base decoder parameters:
@@ -64,7 +63,7 @@ model_cfg:
 optimizer_cfg:  # optimizer configurations
   type: "adam"
   configs:
-    lr: 0.02  # lrStart
+    lr: 0.01  # lrStart
     betas: [0.9, 0.99]
     eps: 0.1
     weight_decay: 1e-5  #l2_decay
@@ -73,6 +72,7 @@ scheduler_cfg:  # scheduler configurations
   type: "linear"
   interval: "step"
   frequency: 1
+  warmup_epochs: 0
   configs:
     start_factor : 1.0
     end_factor: 0.1
