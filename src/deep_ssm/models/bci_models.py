@@ -364,3 +364,63 @@ class SashimiDecoder(BaseDecoder):
         seq_out = self.fc_decoder_out(hidden_states)
         return seq_out
 
+
+
+class BCIModel(BaseDecoder):
+    def __init__(
+        self,
+        neural_dim,
+        n_classes,
+        preprocess_cfg,
+        mixer_cfg,
+        nDays=24,
+        lambda_pred=0,
+        lambda_cls=0,
+    ):
+        super(BCIModel, self).__init__(neural_dim=neural_dim,nDays=nDays,**preprocess_cfg)
+
+        self.preprocess_cfg = preprocess_cfg
+        self.mixer_cfg = mixer_cfg
+        self.lambda_pred = lambda_pred
+        self.lambda_cls = lambda_cls
+
+        if preprocess_cfg.get('unfolding', False):
+          input_dims = neural_dim * self.preprocess_cfg.kernelLen
+        else:
+          input_dims = self.neural_dim
+
+        # Embedding layer: input dimension to model dimension
+        self.embedding_layer = nn.Linear(input_dims, self.mixer_cfg.d_model)
+
+        # i
+        # Block of model layers
+        self.backbone = MixerModel(**self.mixer_cfg)
+
+        if self.lambda_pred:
+            self.pred_decoder_out = nn.Linear(self.mixer_cfg.d_model, input_dims)  # +1 for CTC blank
+
+        if self.lambda_cls:
+            self.cls_decoder_out = nn.Linear(self.mixer_cfg.d_model, n_classes + 1)  # +1 for CTC blank
+
+    def forward(self, neuralInput, dayIdx):
+        stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
+
+        # From d_input to d_model
+        hidden_states = self.embedding_layer(stridedInputs)
+
+        # Pass through the mixer:
+        hidden_states = self.backbone(hidden_states)
+
+        # From d_model to d_input
+        if self.lambda_pred:
+            pred_out = self.pred_decoder_out(hidden_states)
+        else:
+            pred_out = None
+
+        # From d_model to n_classes
+        if self.lambda_cls:
+            cls_out = self.cls_decoder_out(hidden_states)
+        else:
+            cls_out = None
+        # Return the predictions
+        return pred_out, cls_out
