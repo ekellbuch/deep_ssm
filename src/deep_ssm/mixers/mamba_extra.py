@@ -171,7 +171,7 @@ class MixerModel(nn.Module):
         fused_add_norm=False,
         residual_in_fp32=False,
         bidirectional=False,
-        mamba_bi_new=False,
+        mamba_bi_new=True,
         initialize_mixer=False,
         bidirectional_strategy=None,
     ):
