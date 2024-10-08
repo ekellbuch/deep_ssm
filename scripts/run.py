@@ -78,7 +78,7 @@ def train(args):
 
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):
-      wandb.run.qsummary["output_dir"] = output_dir
+      wandb.run.summary["output_dir"] = output_dir
       wandb.run.summary["total_params"] = sum(p.numel() for p in model.parameters())
 
       wandb.finish()
