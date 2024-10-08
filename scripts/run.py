@@ -3,7 +3,7 @@ import lightning as L
 import wandb
 
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 from deep_ssm.data.data_loader import getDatasetLoaders
 from deep_ssm.modules import all_modules
@@ -39,6 +39,9 @@ def train(args):
 
         logger = WandbLogger(name=args.experiment_name,
                              project=args.project_name, **kwargs)
+
+        args_as_dict = OmegaConf.to_container(args)
+        logger.log_hyperparams(args_as_dict)
       elif args.trainer_cfg.logger == "tensorboard":
         logger = TensorBoardLogger(args.project_name,
                                    name=args.experiment_name,
