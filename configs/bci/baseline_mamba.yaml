@@ -24,7 +24,7 @@ module_cfg:
 data_cfg:
   batchSize: 64
   num_workers: 0
-  datasetPath: *datasetPath  # location of data 
+  datasetPath: *datasetPath  # location of data
   train_split: 1    # % of training data assigned to train_loader 1=100%
   whiteNoiseSD: 0.8   # transformations: std of white noise added to data
   constantOffsetSD: 0.2  # transformations: constant offset added to data

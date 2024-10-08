@@ -120,7 +120,7 @@ def getDatasetLoaders(args):
   val_loader = DataLoader(
     val_ds,
     batch_size=args.batchSize,
-    shuffle=True,
+    shuffle=False,
     num_workers=args.num_workers,
     pin_memory=True,
     collate_fn=_padding_fn,
