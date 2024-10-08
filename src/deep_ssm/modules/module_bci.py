@@ -19,7 +19,7 @@ class BCIDecoder(L.LightningModule):
 
 
   def training_step(self, batch, batch_idx):
-    loss = self._custom_step(batch, batch_idx, flag_name='train', compute_cer=False)
+    loss = self._custom_step(batch, batch_idx, flag_name='train', compute_cer=True)
     return loss
 
   def _custom_step(self, batch, batch_idx, flag_name='test', compute_cer=True):

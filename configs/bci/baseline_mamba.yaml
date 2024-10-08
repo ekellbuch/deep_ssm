@@ -48,7 +48,7 @@ model_cfg:
     n_classes: 40 #nClasses
     # mamba params
     d_model: 1024
-    d_state: 16
+    d_state: 64  # size of hidden state
     d_conv: 4
     expand_factor: 1
     bidirectional_input: false
