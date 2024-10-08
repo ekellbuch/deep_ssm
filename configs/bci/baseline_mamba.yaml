@@ -59,6 +59,7 @@ model_cfg:
     kernelLen: 32
     mamba_bi_new: true
     input_nonlinearity: "softsign"
+    dropout: 0.1
 
 optimizer_cfg:  # optimizer configurations
   type: "adam"
