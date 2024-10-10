@@ -4,7 +4,7 @@ Comment: >
   # Overfit in 1 batch
   python run.py --config-name="baseline_gru" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1
 
-project_name: "speech_bci"
+project_name: "speech_bci_debug"
 experiment_name: "baseline_gru"
 
 
@@ -19,6 +19,8 @@ data_cfg:
   batchSize: 64
   num_workers: 0
   datasetPath: *datasetPath
+  # train and val split
+  train_split: 1    # % of training data assigned to train_loader 1=100%
   # transformations:
   whiteNoiseSD: 0.8  # add white noise
   constantOffsetSD: 0.2  # add constant offset
@@ -27,10 +29,9 @@ data_cfg:
   speckled_mask_p: 0
   feature_mask_p: 0
   temporal_mask_n: 0
+  renormalize_masking: false
 
 
-# seqLen: 150 ? not used
-# maxTimeSeriesLen: 1200 ? not used
 seed: 0
 
 module_cfg:
@@ -67,24 +68,29 @@ scheduler_cfg:
   configs:
     start_factor : 1.0
     end_factor: 1.0
+    total_iters: 100
 
 callbacks:
   lr_monitor:
     logging_interval: "step"
   grad_norm:
     type:
-
+  early_stopping:
+    monitor: "ctc_loss_validation"
+    min_delta: 1e-4
+    patience: 10
+    verbose: false
+    mode: "min"
   
-
 trainer_cfg:
   fast_dev_run: false
   logger: "wandb"
   accelerator: "auto"
-  max_steps: 10000
-  log_every_n_steps: 100
-  limit_test_batches:
-  limit_train_batches:
-  limit_val_batches:
+  max_steps: 100
+  log_every_n_steps: 1
+  limit_test_batches: 0.5
+  limit_train_batches: 1
+  limit_val_batches: 0.5
   max_epochs:
 
 

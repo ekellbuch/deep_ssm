@@ -10,7 +10,7 @@ class GradNormCallback_vars_pbatch(Callback):
         #TODO:time grad_norm call vs detach().data.norm(2):
         norms = grad_norm(pl_module.model, norm_type=2)  # You can change `norm_type` to 1 for L1 norm
         for layer_name, norm_value in norms.items():
-            self.log(f'grad_norm_{layer_name}', norm_value, on_step=True, on_epoch=False)
+            self.log(f'{layer_name}', norm_value)
 
 
 class GradNormCallback_vars_pepoch(Callback):
@@ -20,7 +20,7 @@ class GradNormCallback_vars_pepoch(Callback):
     def on_train_epoch_end(self, trainer, pl_module):
         norms = grad_norm(pl_module.model, norm_type=2)  # You can change `norm_type` to 1 for L1 norm
         for layer_name, norm_value in norms.items():
-            self.log(f'grad_norm_{layer_name}', norm_value, on_step=True, on_epoch=False)
+            self.log(f'{layer_name}', norm_value)
 
 
 class GradNormCallback(Callback):
