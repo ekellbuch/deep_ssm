@@ -19,7 +19,7 @@ class BCIDecoder(L.LightningModule):
 
 
   def training_step(self, batch, batch_idx):
-    loss = self._custom_step(batch, batch_idx, flag_name='train', compute_cer=True)
+    loss = self._custom_step(batch, batch_idx, flag_name='train', compute_cer=False)
     return loss
 
   def _custom_step(self, batch, batch_idx, flag_name='test', compute_cer=True):
@@ -57,6 +57,8 @@ class BCIDecoder(L.LightningModule):
   def configure_optimizers(self):
     if self.args.optimizer_cfg.type == "adam":
       optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
+    elif self.args.optimizer_cfg.type == "adamw":
+      optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
     else:
       raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
 

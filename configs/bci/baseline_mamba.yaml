@@ -11,7 +11,7 @@ data_cfg:
   batchSize: 64
   num_workers: 0
   datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
-  train_split: 1    # % of training data assigned to train_loader 1=100%
+  train_split: 0.95    # % of training data assigned to train_loader 1=100%
   # transformations:
   whiteNoiseSD: 0.8
   constantOffsetSD: 0.2
@@ -51,7 +51,7 @@ model_cfg:
     
 
 optimizer_cfg:
-  type: "adam"
+  type: "adam"q
   configs:
     lr: 0.02 # lrStart
     betas: [0.9, 0.99]
@@ -59,12 +59,16 @@ optimizer_cfg:
     weight_decay: 1e-5  #l2_decay
 
 scheduler_cfg:
-  type: "linear"
-  interval: "step"
+  type: "reduce_on_plateau"
+  interval: "epoch"
+  monitor: "ctc_loss_validation"
   frequency: 1
+  strict: True,
   configs:
-    start_factor : 1.0
-    end_factor: 1.0
+    mode: "min"
+    factor: 0.5
+    patience: 2
+    min_lr: 1e-8
 
 callbacks:
   lr_monitor:
@@ -89,7 +93,6 @@ trainer_cfg:
   limit_test_batches:
   limit_train_batches:
   limit_val_batches:
-  max_epochs:
 
 
 eval_cfg:
