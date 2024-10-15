@@ -293,7 +293,7 @@ class MambaDecoder(BaseDecoder):
 
         """
         if self.normalize_batch:
-            dim_ = -1
+            dim_ = 1
             means = neuralInput.mean(dim_, keepdim=True).detach() # B x 1 x D
             neuralInput = neuralInput - means
             stdev = torch.sqrt(torch.var(neuralInput, dim=dim_, keepdim=True, unbiased=False) + 1e-5)  # B x 1 x D
