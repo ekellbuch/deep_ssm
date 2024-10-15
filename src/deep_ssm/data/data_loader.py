@@ -20,7 +20,7 @@ class SpeechDataset(Dataset):
         self.phone_seqs = []
         self.neural_time_bins = []
         self.phone_seq_lens = []
-        self.transcriptions = []
+        #self.transcriptions = []
         self.days = []
 
         for day in range(self.n_days):
@@ -30,7 +30,7 @@ class SpeechDataset(Dataset):
                 self.neural_time_bins.append(data[day]["sentenceDat"][trial].shape[0])
                 self.phone_seq_lens.append(data[day]["phoneLens"][trial])
                 self.days.append(day)
-                self.transcriptions.append(data[day]["transcriptions"][trial])
+                #self.transcriptions.append(data[day]["transcriptions"][trial])
 
     def __len__(self):
         return self.n_trials
@@ -60,9 +60,9 @@ def _padding(batch, multiple=1):
   y_padded = pad_sequence(y, batch_first=True, padding_value=0)
 
   # Pad to the desired length:
-  if multiple > 1:
-    desired_len = math.ceil(max_len / multiple) * multiple
-    X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
+  #if multiple > 1:
+  #  desired_len = math.ceil(max_len / multiple) * multiple
+  #  X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
 
   return (
     X_padded,
