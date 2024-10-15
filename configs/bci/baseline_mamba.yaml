@@ -44,6 +44,11 @@ model_cfg:
     strideLen: 4
     kernelLen: 32
     input_nonlinearity: "softsign"
+    normalize_batch: false
+    init_embedding_layer: false
+    include_relu: false
+    dropout: 0
+    
 
 optimizer_cfg:
   type: "adam"

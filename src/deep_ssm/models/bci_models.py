@@ -222,7 +222,7 @@ class MambaDecoder(BaseDecoder):
         dropout=0.0,
         normalize_batch=False,
         init_embedding_layer=False,
-        init_decoder_layer=False,
+        include_relu=False
     ):
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -239,6 +239,7 @@ class MambaDecoder(BaseDecoder):
         self.d_conv = d_conv
         self.expand_factor = expand_factor
         self.normalize_batch = normalize_batch
+        self.include_relu = include_relu
 
         if bidirectional_input:
             raise NotImplementedError("Bidirectional input not supported for MambaDecoder")
@@ -272,15 +273,9 @@ class MambaDecoder(BaseDecoder):
 
         # Initialize embedding weights:
         if init_embedding_layer:
-            nn.init.xavier_normal_(self.linear_input.weight)
-            nn.init.zeros_(self.linear_input.bias)
-
-        if init_decoder_layer:
-            for name, param in self.fc_decoder_out.named_parameters():
-                if "weight" in name:
-                    nn.init.orthogonal_(param)
-                if "bias" in name:
-                    nn.init.zeros_(param)
+            for layer in [self.linear_input, self.fc_decoder_out]:
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
 
     def forward(self, neuralInput, dayIdx):
         """
@@ -293,7 +288,7 @@ class MambaDecoder(BaseDecoder):
 
         """
         if self.normalize_batch:
-            dim_ = -1
+            dim_ = 1
             means = neuralInput.mean(dim_, keepdim=True).detach() # B x 1 x D
             neuralInput = neuralInput - means
             stdev = torch.sqrt(torch.var(neuralInput, dim=dim_, keepdim=True, unbiased=False) + 1e-5)  # B x 1 x D
@@ -303,12 +298,17 @@ class MambaDecoder(BaseDecoder):
         stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
 
         hidden_states = self.linear_input(stridedInputs)
+        # include relu
+        if self.include_relu:
+            hidden_states = torch.relu(hidden_states)
+    
         hidden_states = self.dropout(hidden_states)
 
         # Pass through the mixer
         hidden_states = self.backbone(hidden_states)
 
         seq_out = self.fc_decoder_out(hidden_states)
+
         return seq_out
 
 
