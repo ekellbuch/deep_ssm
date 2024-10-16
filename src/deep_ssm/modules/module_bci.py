@@ -57,6 +57,8 @@ class BCIDecoder(L.LightningModule):
   def configure_optimizers(self):
     if self.args.optimizer_cfg.type == "adam":
       optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
+    elif self.args.optimizer_cfg.type == "adamw":
+      optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
     else:
       raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
 
