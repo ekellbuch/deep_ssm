@@ -269,7 +269,11 @@ class MambaDecoder(BaseDecoder):
         )
 
         # from model dimension to n_classes
-        self.fc_decoder_out = nn.Linear(d_model, n_classes + 1)  # +1 for CTC blank
+        if bidirectional and bidirectional_strategy == "concatenate":
+            d_output = d_model*2
+        else:
+            d_output = d_model
+        self.fc_decoder_out = nn.Linear(d_output, n_classes + 1)  # +1 for CTC blank
 
         # Initialize embedding weights:
         if init_embedding_layer:
