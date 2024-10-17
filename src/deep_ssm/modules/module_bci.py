@@ -101,6 +101,11 @@ class BCIDecoder(L.LightningModule):
         optimizer,
         **self.args.scheduler_cfg.configs,
       )
+    elif self.args.scheduler_cfg.type == 'cyclic_lr':
+      scheduler = torch.optim.lr_scheduler.CyclicLR(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
     else:
       raise NotImplementedError(f"Scheduler {self.args.scheduler_cfg.type} not implemented")
 
