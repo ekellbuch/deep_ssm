@@ -47,7 +47,7 @@ class BCIDecoder(L.LightningModule):
     return loss
 
   def validation_step(self, batch, batch_idx):
-    self._custom_step(batch, batch_idx, flag_name='validation')
+    self._custom_step(batch, batch_idx, flag_name='validation', compute_cer=False)
 
   def test_step(self, batch, batch_idx):
     self._custom_step(batch, batch_idx, flag_name='test')
@@ -93,6 +93,11 @@ class BCIDecoder(L.LightningModule):
       )
     elif self.args.scheduler_cfg.type == 'reduce_on_plateau':
       scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
+    elif self.args.scheduler_cfg.type == 'cosine_annealing_warm_restarts':
+      scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         **self.args.scheduler_cfg.configs,
       )
