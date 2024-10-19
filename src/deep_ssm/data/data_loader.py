@@ -77,17 +77,16 @@ def getDatasetLoaders(args):
   with open(args.datasetPath, "rb") as handle:
     loadedData = pickle.load(handle)
 
-
   transforms = []
-  if args.feature_mask_p > 0:
+  if args.get("feature_mask_p", 0) > 0:
     transforms.append(FeatureMasking(args.feature_mask_p, args.mask_value))
-  if args.temporal_mask_n > 0:
+  if args.get("temporal_mask_n", 0) > 0:
     transforms.append(TemporalMasking(args.temporal_mask_n,args.mask_value, args.temporal_mask_len))
-  if args.speckled_mask_p > 0:
+  if args.get("speckled_mask_p", 0) > 0:
     transforms.append(SpeckleMasking(args.speckled_mask_p, args.mask_value, args.renormalize_masking))
-  if args.whiteNoiseSD > 0:
+  if args.get("whiteNoiseSD", 0) > 0:
     transforms.append(AddWhiteNoise(args.whiteNoiseSD))
-  if args.constantOffsetSD > 0:
+  if args.get("constantOffsetSD", 0) > 0:
     transforms.append(AddOffset(args.constantOffsetSD))
 
   if len(transforms) > 0:
