@@ -11,6 +11,9 @@ from deep_ssm.models import all_models
 from omegaconf import OmegaConf
 from deep_ssm.utils.callbacks import all_callbacks
 
+import torch
+torch.set_float32_matmul_precision('medium')  # Or 'high'
+
 
 @hydra.main(config_path="../configs/bci", config_name="baseline_gru", version_base=None)
 def main(args: DictConfig) -> None:
@@ -55,6 +58,13 @@ def train(args):
 
     # get module and model:
     modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=len(loadedData["train"]))
+
+    if args.model_cfg.get("resume_ckpt_path", None):
+      # Do not resume training simply load checkpoints
+      weights = torch.load(args.model_cfg.resume_ckpt_path)['state_dict']
+      weights = {k.replace('model.', ''): v for k, v in weights.items()}
+      modelito.load_state_dict(weights)
+
     model = all_modules[args.module_cfg.type](args, modelito)
 
     # set trainer:
