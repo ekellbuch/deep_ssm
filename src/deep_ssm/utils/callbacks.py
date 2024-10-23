@@ -52,9 +52,50 @@ def gradient_norm(model):
     return total_norm
 
 
+class UpdateMaskingStrategy(Callback):
+
+    def __init__(self,
+                 masking_epochs=[2, 3],
+                 speckled_mask_p_schedule=[0.1, 0.2],
+                 temporal_mask_n_schedule=[0, 1],
+                 feature_mask_p_schedule=[0, 0]
+                 ):
+        """
+        Args:
+            args: Configuration arguments for dataloaders and other training parameters.
+            masking_epochs: List of epochs at which masking strategies should change.
+            speckled_mask_p_schedule: List of speckled masking probabilities to apply at each epoch.
+            temporal_mask_n_schedule: List of temporal masking steps to apply at each epoch.
+            dataloader_epoch_interval: Interval (in epochs) to reload the dataloaders.
+        """
+        self.masking_epochs = masking_epochs
+        self.speckled_mask_p_schedule = speckled_mask_p_schedule
+        self.temporal_mask_n_schedule = temporal_mask_n_schedule
+        self.feature_mask_p_schedule = feature_mask_p_schedule
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        epoch = trainer.current_epoch
+        # Update dataloader configuration dynamically
+        if epoch in self.masking_epochs:
+            # Dynamically update masking parameters
+            index = self.masking_epochs.index(epoch)
+            speckled_mask_p = self.speckled_mask_p_schedule[index]
+            temporal_mask_n = self.temporal_mask_n_schedule[index]
+            feature_mask_p = self.feature_mask_p_schedule[index]
+
+            # Update args with new masking values
+            trainer.datamodule.args.speckled_mask_p = speckled_mask_p
+            trainer.datamodule.args.temporal_mask_n = temporal_mask_n
+            trainer.datamodule.args.feature_mask_p = feature_mask_p
+
+            # Update train transform
+            trainer.datamodule.update_transforms()
+
+
 all_callbacks = {
     "model_pbatch": GradNormCallback(),
     "model_pepoch": GradNormCallback_pepoch(),
     "vars_pbatch": GradNormCallback_vars_pbatch(),
     "vars_pepoch": GradNormCallback_vars_pepoch(),
+    "masking_scheduler": UpdateMaskingStrategy,
 }
