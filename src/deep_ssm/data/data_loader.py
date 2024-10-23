@@ -7,6 +7,7 @@ from torchvision.transforms import Compose
 import math
 import torch.nn.functional as F
 from deep_ssm.data.data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking
+import lightning as L
 
 
 class SpeechDataset(Dataset):
@@ -73,10 +74,7 @@ def _padding(batch, multiple=1):
   )
 
 
-def getDatasetLoaders(args):
-  with open(args.datasetPath, "rb") as handle:
-    loadedData = pickle.load(handle)
-
+def get_data_augmentations(args):
   transforms = []
   if args.get("feature_mask_p", 0) > 0:
     transforms.append(FeatureMasking(args.feature_mask_p, args.mask_value))
@@ -93,6 +91,13 @@ def getDatasetLoaders(args):
     transform_fn = Compose(transforms)
   else:
     transform_fn = None
+  return transform_fn
+
+def getDatasetLoaders(args):
+  with open(args.datasetPath, "rb") as handle:
+    loadedData = pickle.load(handle)
+
+  transform_fn = get_data_augmentations(args)
 
   train_ds = SpeechDataset(loadedData["train"], transform=transform_fn)
   test_ds = SpeechDataset(loadedData["test"])
@@ -137,3 +142,81 @@ def getDatasetLoaders(args):
   return train_loader, val_loader, test_loader, loadedData
 
 
+class SpeechDataModule(L.LightningDataModule):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.train_ds = None
+        self.val_ds = None
+        self.test_ds = None
+        self.loadedData = None
+        # TODO: clean this up
+        self.nDays = 24
+
+    def setup(self, stage=None):
+        # Load the dataset from the pickle file
+        with open(self.args.datasetPath, "rb") as handle:
+            loadedData = pickle.load(handle)
+
+        self.nDays = len(loadedData["train"])
+        # Set up the fdata transforms
+        transform_fn = get_data_augmentations(self.args)
+
+        # Create train, validation, and test datasets
+        train_ds = SpeechDataset(loadedData["train"], transform=transform_fn)
+        test_ds = SpeechDataset(loadedData["test"])
+        if self.args.get("pad_multiple", None) is not None:
+            self.padding_fn = lambda x: _padding(x, multiple=self.args["pad_multiple"])
+        else:
+            self.padding_fn = _padding
+
+        # Split train and validation datasets if needed
+        if self.args.get("train_split", 1) < 1:
+          train_len = int(len(train_ds) * self.args.train_split)
+          val_len = len(train_ds) - train_len
+          train_ds, val_ds = torch.utils.data.random_split(train_ds, [train_len, 1 - val_len])
+          val_ds.dataset.transform = None
+          self.train_ds = train_ds
+          self.val_ds = val_ds
+        else:
+            self.train_ds, self.val_ds = train_ds, test_ds
+
+    def update_transforms(self):
+        transform_fn = get_data_augmentations(self.args)
+        # Update transform function
+        if isinstance(self.train_ds, torch.utils.data.Subset):
+            self.train_ds.dataset.transform = transform_fn
+        else:
+            self.train_ds.transform = transform_fn
+        print(f"Set new loader with params {self.args}")
+
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_ds,
+            batch_size=self.args.batchSize,
+            shuffle=True,
+            num_workers=self.args.num_workers,
+            pin_memory=True,
+            collate_fn=self.padding_fn,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_ds,
+            batch_size=self.args.batchSize,
+            shuffle=False,
+            num_workers=self.args.num_workers,
+            pin_memory=True,
+            collate_fn=self.padding_fn,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_ds,
+            batch_size=self.args.batchSize,
+            shuffle=False,
+            num_workers=self.args.num_workers,
+            pin_memory=True,
+            collate_fn=self.padding_fn,
+        )
