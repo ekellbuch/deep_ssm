@@ -181,6 +181,8 @@ class SpeechDataModule(L.LightningDataModule):
         else:
             self.train_ds, self.val_ds = train_ds, test_ds
 
+        self.test_ds = test_ds
+
     def update_transforms(self):
         transform_fn = get_data_augmentations(self.args)
         # Update transform function
