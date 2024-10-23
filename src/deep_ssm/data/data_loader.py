@@ -150,7 +150,8 @@ class SpeechDataModule(L.LightningDataModule):
         self.val_ds = None
         self.test_ds = None
         self.loadedData = None
-        self.nDays = None
+        # TODO: clean this up
+        self.nDays = 24
 
     def setup(self, stage=None):
         # Load the dataset from the pickle file

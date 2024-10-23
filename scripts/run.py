@@ -5,7 +5,7 @@ import wandb
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
-from deep_ssm.data.data_loader import getDatasetLoaders
+from deep_ssm.data.data_loader import SpeechDataModule
 from deep_ssm.modules import all_modules
 from deep_ssm.models import all_models
 from omegaconf import OmegaConf
@@ -54,10 +54,10 @@ def train(args):
 
 
     # get dataset:
-    train_loader, val_loader, test_loader, loadedData = getDatasetLoaders(args.data_cfg)
+    datamodule = SpeechDataModule(args.data_cfg)
 
     # get module and model:
-    modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=len(loadedData["train"]))
+    modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=datamodule.nDays)
 
     if args.model_cfg.get("resume_ckpt_path", None):
       # Do not resume training simply load checkpoints
@@ -80,18 +80,20 @@ def train(args):
         local_callbacks.append(all_callbacks[args.callbacks.grad_norm.type])
       if args.callbacks.get("early_stopping", None):
         local_callbacks.append(EarlyStopping(**args.callbacks.early_stopping))
-
+      if args.callbacks.get("masking_scheduler", None):
+        local_callbacks.append(all_callbacks["masking_scheduler"](**args.callbacks.masking_scheduler))
+        trainer_config["reload_dataloaders_every_n_epochs"] = 1
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
-      trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+      trainer.fit(model=model, datamodule=datamodule)
+      ckpt_path = None
     else:
-      trainer.test(model, train_loader, ckpt_path=args.eval_cfg.get("ckpt_path", None))
-      trainer.test(model, val_loader, ckpt_path=args.eval_cfg.get("ckpt_path", None))
+      ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
     # Test model
-    trainer.test(model, test_loader, ckpt_path=args.eval_cfg.get("ckpt_path", None))
+    trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):
