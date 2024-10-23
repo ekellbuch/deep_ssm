@@ -4,7 +4,7 @@ import wandb
 
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
-from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
 from deep_ssm.data.data_loader import SpeechDataModule
 from deep_ssm.modules import all_modules
 from deep_ssm.models import all_models
@@ -83,6 +83,9 @@ def train(args):
       if args.callbacks.get("masking_scheduler", None):
         local_callbacks.append(all_callbacks["masking_scheduler"](**args.callbacks.masking_scheduler))
         trainer_config["reload_dataloaders_every_n_epochs"] = 1
+      if args.callbacks.get("checkpoint_cfg", None):
+        local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
+
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
     # Train model
