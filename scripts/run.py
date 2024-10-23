@@ -84,10 +84,14 @@ def train(args):
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
     # Train model
-    trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    if not args.eval_cfg.get("eval_only", 0):
+      trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    else:
+      trainer.test(model, train_loader, ckpt_path=args.eval_cfg.get("ckpt_path", None))
+      trainer.test(model, val_loader, ckpt_path=args.eval_cfg.get("ckpt_path", None))
 
     # Test model
-    trainer.test(model, test_loader)
+    trainer.test(model, test_loader, ckpt_path=args.eval_cfg.get("ckpt_path", None))
 
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):
