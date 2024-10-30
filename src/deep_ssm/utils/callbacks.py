@@ -1,60 +1,44 @@
-from lightning.pytorch.callbacks import Callback
-
+from lightning import Callback
+from lightning.pytorch.utilities import grad_norm
+import torch
 
 class GradNormCallback_vars_pbatch(Callback):
     """
-    Logs the gradient norm for each parameter individually.
+    Logs gradnorm in batch
     """
-
-    def on_after_backward(self, trainer, pl_module):
-        for name, param in pl_module.named_parameters():
-            if param.grad is not None:
-                # Calculate the norm of the gradient
-                param_grad_norm = param.grad.detach().data.norm(2).item()
-                # Log the gradient norm for this parameter
-                pl_module.log(f"grad_norm/{name}", param_grad_norm)
-
-        # Optionally, log the total gradient norm
-        total_grad_norm = gradient_norm(pl_module)
-        pl_module.log("grad_norm/model", total_grad_norm)
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        #TODO:time grad_norm call vs detach().data.norm(2):
+        norms = grad_norm(pl_module.model, norm_type=2)  # You can change `norm_type` to 1 for L1 norm
+        for layer_name, norm_value in norms.items():
+            self.log(f'{layer_name}', norm_value)
 
 
 class GradNormCallback_vars_pepoch(Callback):
     """
-    Logs the gradient norm for each parameter individually.
+    Logs gradnorm in epoch
     """
-
-    def on_train_epoch_start(self, trainer, pl_module):
-        for name, param in pl_module.named_parameters():
-            if param.grad is not None:
-                # Calculate the norm of the gradient
-                param_grad_norm = param.grad.detach().data.norm(2).item()
-                # Log the gradient norm for this parameter
-                pl_module.log(f"grad_norm/{name}", param_grad_norm)
-
-        # Optionally, log the total gradient norm
-        total_grad_norm = gradient_norm(pl_module)
-        pl_module.log("grad_norm/model", total_grad_norm)
-
+    def on_train_epoch_end(self, trainer, pl_module):
+        norms = grad_norm(pl_module.model, norm_type=2)  # You can change `norm_type` to 1 for L1 norm
+        for layer_name, norm_value in norms.items():
+            self.log(f'{layer_name}', norm_value)
 
 
 class GradNormCallback(Callback):
     """
-  Logs the gradient norm.
+    Logs gradnorm at the end of the backward pass
   Edited from https://github.com/Lightning-AI/lightning/issues/1462
   """
-
     def on_after_backward(self, trainer, pl_module):
         pl_module.log("grad_norm/model", gradient_norm(pl_module))
 
 
 class GradNormCallback_pepoch(Callback):
     """
-  Logs the gradient norm.
-  Edited from https://github.com/Lightning-AI/lightning/issues/1462
-  """
+    Logs gradnorm at the end of the epoch
+    Edited from https://github.com/Lightning-AI/lightning/issues/1462
+    """
 
-    def on_train_epoch_start(self, trainer, pl_module):
+    def on_train_epoch_end(self, trainer, pl_module):
         pl_module.log("grad_norm/model", gradient_norm(pl_module))
 
 
@@ -68,9 +52,70 @@ def gradient_norm(model):
     return total_norm
 
 
+class UpdateMaskingStrategy(Callback):
+
+    def __init__(self,
+                 masking_epochs=[2, 3],
+                 speckled_mask_p_schedule=[0.1, 0.2],
+                 temporal_mask_n_schedule=[0, 1],
+                 feature_mask_p_schedule=[0, 0]
+                 ):
+        """
+        Args:
+            args: Configuration arguments for dataloaders and other training parameters.
+            masking_epochs: List of epochs at which masking strategies should change.
+            speckled_mask_p_schedule: List of speckled masking probabilities to apply at each epoch.
+            temporal_mask_n_schedule: List of temporal masking steps to apply at each epoch.
+            dataloader_epoch_interval: Interval (in epochs) to reload the dataloaders.
+        """
+        self.masking_epochs = masking_epochs
+        self.speckled_mask_p_schedule = speckled_mask_p_schedule
+        self.temporal_mask_n_schedule = temporal_mask_n_schedule
+        self.feature_mask_p_schedule = feature_mask_p_schedule
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        epoch = trainer.current_epoch
+        # Update dataloader configuration dynamically
+        if epoch in self.masking_epochs:
+            # Dynamically update masking parameters
+            index = self.masking_epochs.index(epoch)
+            speckled_mask_p = self.speckled_mask_p_schedule[index]
+            temporal_mask_n = self.temporal_mask_n_schedule[index]
+            feature_mask_p = self.feature_mask_p_schedule[index]
+
+            # Update args with new masking values
+            trainer.datamodule.args.speckled_mask_p = speckled_mask_p
+            trainer.datamodule.args.temporal_mask_n = temporal_mask_n
+            trainer.datamodule.args.feature_mask_p = feature_mask_p
+
+            # Update train transform
+            trainer.datamodule.update_transforms()
+
+
+class EigenValTracking_pbatch(Callback):
+    """
+    Logs gradnorm in batch
+    """
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        # log eigenvalues:
+        keywords = ['mamba_fwd.A_log', 'mamba_bwd.A_log']
+        for name, param in pl_module.model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                if any(keyword in name for keyword in keywords):
+                    # let's track some eigenvals:
+                    self.log(f"max_exp_{name}", torch.exp(param).max())
+                    self.log(f"min_exp_{name}", torch.exp(param).min())
+
+        norms = grad_norm(pl_module.model, norm_type=2)
+        for layer_name, norm_value in norms.items():
+            self.log(f'{layer_name}', norm_value)
+
+
 all_callbacks = {
-    "model_pbatch": GradNormCallback,
-    "model_pepoch": GradNormCallback_pepoch,
-    "vars_pbatch": GradNormCallback_vars_pbatch,
-    "vars_pepoch": GradNormCallback_vars_pepoch,
+    "model_pbatch": GradNormCallback(),
+    "model_pepoch": GradNormCallback_pepoch(),
+    "vars_pbatch": GradNormCallback_vars_pbatch(),
+    "vars_pepoch": GradNormCallback_vars_pepoch(),
+    "masking_scheduler": UpdateMaskingStrategy,
+    "eigen_track": EigenValTracking_pbatch(),
 }

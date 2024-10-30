@@ -47,7 +47,7 @@ class BCIDecoder(L.LightningModule):
     return loss
 
   def validation_step(self, batch, batch_idx):
-    self._custom_step(batch, batch_idx, flag_name='validation')
+    self._custom_step(batch, batch_idx, flag_name='validation', compute_cer=False)
 
   def test_step(self, batch, batch_idx):
     self._custom_step(batch, batch_idx, flag_name='test')
@@ -57,8 +57,25 @@ class BCIDecoder(L.LightningModule):
   def configure_optimizers(self):
     if self.args.optimizer_cfg.type == "adam":
       optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
+    elif self.args.optimizer_cfg.type == "adamw":
+      optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
     else:
       raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
+
+    # Define Warm-Up Scheduler
+    warmup_epochs = self.args.scheduler_cfg.get("warmup_epochs", 0)
+
+    def warmup_lambda(epoch):
+      # Warm-up function: linearly increase LR for first 'warmup_epochs' epochs
+      if epoch < warmup_epochs:
+        return float(epoch) / float(warmup_epochs)
+      else:
+        return 1.0  # After warm-up, learning rate stays constant
+
+    # Warm-Up Scheduler
+    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+                                                         lr_lambda=warmup_lambda)
+
     if self.args.scheduler_cfg.type == "linear":
       scheduler = torch.optim.lr_scheduler.LinearLR(
         optimizer,
@@ -79,13 +96,33 @@ class BCIDecoder(L.LightningModule):
         optimizer,
         **self.args.scheduler_cfg.configs,
       )
+    elif self.args.scheduler_cfg.type == 'cosine_annealing_warm_restarts':
+      scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
+    elif self.args.scheduler_cfg.type == 'cyclic_lr':
+      scheduler = torch.optim.lr_scheduler.CyclicLR(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
     else:
       raise NotImplementedError(f"Scheduler {self.args.scheduler_cfg.type} not implemented")
 
     # Copy all scheduler except 'configs' and 'type'
     scheduler_cfg_copy = {k: v for k, v in self.args.scheduler_cfg.items() if k not in ['configs', 'type']}
 
-    scheduler_cfg_copy['scheduler'] = scheduler
+    # Add warmup_scheduler to the scheduler_cfg_copy
+    if warmup_epochs > 0:
+      # Chained scheduler, where warmup runs first, then the main scheduler
+      chained_scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, scheduler],
+        milestones=[warmup_epochs]
+      )
+      scheduler_cfg_copy['scheduler'] = chained_scheduler
+    else:
+      scheduler_cfg_copy['scheduler'] = scheduler
     #lr_scheduler_config = { "scheduler" : scheduler}#, "optimizer": optimizer}
     #lr_scheduler_config.update(scheduler_cfg_copy)
 

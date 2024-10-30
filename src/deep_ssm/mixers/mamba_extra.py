@@ -42,6 +42,7 @@ def create_block(
   bidirectional=False,
   mamba_bi_new=False,
   bidirectional_strategy=None,
+  d_out=None
 ):
   if mamba_bi_new:
     model = MambaWrapper
@@ -56,6 +57,7 @@ def create_block(
                       expand=expand,
                       bidirectional=bidirectional,
                       bidirectional_strategy=bidirectional_strategy,
+                      d_out=d_out,
                       )
 
   norm_cls = partial(
@@ -90,7 +92,7 @@ class MambaWrapper(nn.Module):
         super().__init__()
         if bidirectional and bidirectional_strategy is None:
             bidirectional_strategy = "add"  # Default strategy: `add`
-        if bidirectional and bidirectional_strategy not in ["add", "ew_multiply"]:
+        if bidirectional and bidirectional_strategy not in ["add", "ew_multiply","concatenate"]:
             raise NotImplementedError(f"`{bidirectional_strategy}` strategy for bi-directionality is not implemented!")
         self.bidirectional = bidirectional
         self.bidirectional_strategy = bidirectional_strategy
@@ -122,6 +124,8 @@ class MambaWrapper(nn.Module):
                 out = out + out_rev
             elif self.bidirectional_strategy == "ew_multiply":
                 out = out * out_rev
+            elif self.bidirectional_strategy == "concatenate":
+                out = torch.cat((out, out_rev), dim=-1)
         return out
 
 
@@ -183,12 +187,23 @@ class MixerModel(nn.Module):
         self.d_conv = d_conv
         self.expand_factor = expand_factor
         self.fused_add_norm = fused_add_norm
+        self.bidirectional = bidirectional
+        self.bidirectional_strategy = bidirectional_strategy
 
         # Block of model layers
+        if self.bidirectional and self.bidirectional_strategy == "concatenate":
+            d_models = [d_model * 2] * n_layer
+            d_models[0] = d_model
+            d_outputs = [d_model] * n_layer
+            d_model = d_model*2
+        else:
+          d_models = [d_model] * n_layer
+          d_outputs = [None] * n_layer
+
         self.layers = nn.ModuleList(
             [
                 create_block(
-                    d_model=d_model,
+                    d_model=d_models[i],
                     d_state=d_state,
                     d_conv=d_conv,
                     expand=expand_factor,
@@ -199,6 +214,7 @@ class MixerModel(nn.Module):
                     fused_add_norm=fused_add_norm,
                     rms_norm=rms_norm,
                     bidirectional_strategy=bidirectional_strategy,
+                    d_out=d_outputs[i]
                 )
                 for i in range(n_layer)
             ]
@@ -217,9 +233,12 @@ class MixerModel(nn.Module):
     def forward(self, hidden_states, inference_params=None, **mixer_kwargs):
 
         residual = None
-        for layer in self.layers:
+        for layer_idx, layer in enumerate(self.layers):
             hidden_states, residual = layer(hidden_states, residual)#, inference_params=inference_params, **mixer_kwargs)
-
+            if self.bidirectional and self.bidirectional_strategy == "concatenate" and layer_idx==0:
+                residual_flip = residual.flip(dims=(1,))
+                residual = torch.cat((residual, residual_flip), dim=-1)
+                
         if not self.fused_add_norm:
             residual = (hidden_states + residual) if residual is not None else hidden_states
             hidden_states = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))

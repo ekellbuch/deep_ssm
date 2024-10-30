@@ -21,7 +21,7 @@ except:
     from deep_ssm.mixers.utils_mamba import causal_conv1d_update_ref as causal_conv1d_update
 
 try:
-    from mamba_ssm.triton.selective_state_update import selective_state_update
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 except:
     selective_state_update = None
 
@@ -45,6 +45,7 @@ class Mamba(nn.Module):
         layer_idx=None,
         device=None,
         dtype=None,
+        d_out=None
     ):
         """
         The Mamba class defines a neural network layer that combines elements of state-space models (SSMs),
@@ -187,7 +188,9 @@ class Mamba(nn.Module):
         self.D._no_weight_decay = True
 
         # projects block output from ED back to D
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+        if d_out is None:
+            d_out = self.d_model
+        self.out_proj = nn.Linear(self.d_inner, d_out, bias=bias, **factory_kwargs)
 
     def forward(self, hidden_states, inference_params=None):
         """
