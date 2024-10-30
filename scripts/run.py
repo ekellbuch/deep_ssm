@@ -85,6 +85,8 @@ def train(args):
         trainer_config["reload_dataloaders_every_n_epochs"] = 1
       if args.callbacks.get("checkpoint_cfg", None):
         local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
+      if args.callbacks.get("eigen_track", None):
+        local_callbacks.append(all_callbacks["eigen_track"])
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
