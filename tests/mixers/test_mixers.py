@@ -8,7 +8,7 @@ from deep_ssm.mixers.mamba2_simple import Mamba2Simple
 from deep_ssm.mixers.utils_mamba import InferenceParams
 from deep_ssm.mixers.s5_fjax.ssm import S5Layer as S5
 from deep_ssm.mixers.s4 import S4Block as S4
-from deep_ssm.mixers.mamba_extra import BidirectionalMamba, MambaWrapper
+from deep_ssm.mixers.mamba_extra import MambaWrapper
 
 
 from absl.testing import absltest
@@ -24,7 +24,6 @@ MODELS = {"Mamba": Mamba,
           "Mamba2": Mamba2Simple,
           "S4": S4,
           "MambaBi": MambaWrapper,
-          "MambaBi_v0": BidirectionalMamba
           }
 
 
