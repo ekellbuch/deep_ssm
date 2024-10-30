@@ -1,6 +1,6 @@
 from lightning import Callback
 from lightning.pytorch.utilities import grad_norm
-
+import torch
 
 class GradNormCallback_vars_pbatch(Callback):
     """
@@ -92,10 +92,30 @@ class UpdateMaskingStrategy(Callback):
             trainer.datamodule.update_transforms()
 
 
+class EigenValTracking_pbatch(Callback):
+    """
+    Logs gradnorm in batch
+    """
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        # log eigenvalues:
+        keywords = ['mamba_fwd.A_log', 'mamba_bwd.A_log']
+        for name, param in pl_module.model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                if any(keyword in name for keyword in keywords):
+                    # let's track some eigenvals:
+                    self.log(f"max_exp_{name}", torch.exp(param).max())
+                    self.log(f"min_exp_{name}", torch.exp(param).min())
+
+        norms = grad_norm(pl_module.model, norm_type=2)
+        for layer_name, norm_value in norms.items():
+            self.log(f'{layer_name}', norm_value)
+
+
 all_callbacks = {
     "model_pbatch": GradNormCallback(),
     "model_pepoch": GradNormCallback_pepoch(),
     "vars_pbatch": GradNormCallback_vars_pbatch(),
     "vars_pepoch": GradNormCallback_vars_pepoch(),
     "masking_scheduler": UpdateMaskingStrategy,
+    "eigen_track": EigenValTracking_pbatch(),
 }
