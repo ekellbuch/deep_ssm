@@ -53,6 +53,8 @@ model_cfg:
     include_relu: false
     dropout: 0
     mamba_bi_new: true
+    fcc_layers: false
+    initialize_mixer: false
     
 
 optimizer_cfg:
@@ -64,12 +66,15 @@ optimizer_cfg:
     weight_decay: 1e-5  #l2_decay
 
 scheduler_cfg:
-  type: "stepLR"
-  interval: "step"
+  type: "reduce_on_plateau"
+  interval: "epoch"
+  monitor: "ctc_loss_train"
   frequency: 1
   configs:
-    step_size : 4000
-    gamma: 0.5
+    patience: 5
+    mode: "min"
+    factor: 0.5
+    min_lr: 1e-8
 
 callbacks:
   lr_monitor:
@@ -87,6 +92,7 @@ callbacks:
     speckled_mask_p_schedule: [ 0.25, 0]
     feature_mask_p_schedule: [ 0.01, 0]
     temporal_mask_n_schedule: [ 0, 0]
+  eigen_track:
 
 trainer_cfg:
   fast_dev_run: false
