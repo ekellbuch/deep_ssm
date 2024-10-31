@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
+import torch.nn.functional as F
 
 
 class BaseDecoder(nn.Module):
@@ -222,7 +223,11 @@ class MambaDecoder(BaseDecoder):
         dropout=0.0,
         normalize_batch=False,
         init_embedding_layer=False,
-        include_relu=False
+        include_relu=False,
+        # additional decoding layer:
+        fcc_layers=False,
+        activation="relu",
+        dff=None,
     ):
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -240,6 +245,7 @@ class MambaDecoder(BaseDecoder):
         self.expand_factor = expand_factor
         self.normalize_batch = normalize_batch
         self.include_relu = include_relu
+        self.fcc_layers = fcc_layers
 
         if bidirectional_input:
             raise NotImplementedError("Bidirectional input not supported for MambaDecoder")
@@ -281,6 +287,14 @@ class MambaDecoder(BaseDecoder):
                 nn.init.xavier_uniform_(layer.weight)
                 nn.init.zeros_(layer.bias)
 
+        if self.fcc_layers:
+            d_ff = dff or 4*d_output
+            self.activation = F.relu if activation == 'relu' else F.gelu
+            self.conv1 = nn.Conv1d(in_channels=d_output, out_channels=d_ff, kernel_size=1)
+            self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_output, kernel_size=1)
+            self.norm2 = nn.LayerNorm(d_output)
+
+
     def forward(self, neuralInput, dayIdx):
         """
         Forward pass of the Decoder
@@ -310,6 +324,13 @@ class MambaDecoder(BaseDecoder):
 
         # Pass through the mixer
         hidden_states = self.backbone(hidden_states)
+
+        # Pass through FCC layers:
+        if self.fcc_layers:
+            y = hidden_states
+            y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
+            y = self.dropout(self.conv2(y).transpose(-1, 1))
+            hidden_states = self.norm2(hidden_states + y)
 
         seq_out = self.fc_decoder_out(hidden_states)
 
