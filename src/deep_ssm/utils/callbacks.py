@@ -1,6 +1,8 @@
 from lightning import Callback
 from lightning.pytorch.utilities import grad_norm
 import torch
+import torch.nn.functional as F
+
 
 class GradNormCallback_vars_pbatch(Callback):
     """
@@ -102,9 +104,13 @@ class EigenValTracking_pbatch(Callback):
         for name, param in pl_module.model.named_parameters():
             if param.requires_grad and param.grad is not None:
                 if any(keyword in name for keyword in keywords):
-                    # let's track some eigenvals:
-                    self.log(f"max_exp_{name}", torch.exp(param).max())
-                    self.log(f"min_exp_{name}", torch.exp(param).min())
+                    # let's track val post discretization:
+                    A = -torch.exp(param)
+                    dt = F.softplus(dt + pl_module.model.dt_proj.bias.to(dtype=dt.dtype))
+                    dA = torch.exp(torch.einsum("bd,dn->bdn", dt, A))
+
+                    self.log(f"max_dA_{name}", dA.max())
+                    self.log(f"min_dA_{name}", dA.min())
 
         norms = grad_norm(pl_module.model, norm_type=2)
         for layer_name, norm_value in norms.items():
