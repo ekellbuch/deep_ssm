@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
+import torch.nn.functional as F
 
 
 class BaseDecoder(nn.Module):
@@ -213,12 +214,20 @@ class MambaDecoder(BaseDecoder):
         bidirectional_input=False,
         bidirectional=False,
         unfolding=True,
-        mamba_bi_new=False,
+        mamba_bi_new=True,
         input_nonlinearity="softsign",
         fused_add_norm=False,
         rms_norm=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
+        dropout=0.0,
+        normalize_batch=False,
+        init_embedding_layer=False,
+        include_relu=False,
+        # additional decoding layer:
+        fcc_layers=False,
+        activation="relu",
+        dff=None,
     ):
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -234,6 +243,9 @@ class MambaDecoder(BaseDecoder):
         self.d_state = d_state
         self.d_conv = d_conv
         self.expand_factor = expand_factor
+        self.normalize_batch = normalize_batch
+        self.include_relu = include_relu
+        self.fcc_layers = fcc_layers
 
         if bidirectional_input:
             raise NotImplementedError("Bidirectional input not supported for MambaDecoder")
@@ -245,6 +257,7 @@ class MambaDecoder(BaseDecoder):
 
         # input dimension to model dimension
         self.linear_input = nn.Linear(input_dims, d_model)
+        self.dropout = nn.Dropout(p=dropout)
 
         # Block of model layers
         self.backbone = MixerModel(
@@ -262,18 +275,65 @@ class MambaDecoder(BaseDecoder):
         )
 
         # from model dimension to n_classes
-        self.fc_decoder_out = nn.Linear(d_model, n_classes + 1)  # +1 for CTC blank
+        if bidirectional and bidirectional_strategy == "concatenate":
+            d_output = d_model*2
+        else:
+            d_output = d_model
+        self.fc_decoder_out = nn.Linear(d_output, n_classes + 1)  # +1 for CTC blank
+
+        # Initialize embedding weights:
+        if init_embedding_layer:
+            for layer in [self.linear_input, self.fc_decoder_out]:
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
+
+        if self.fcc_layers:
+            d_ff = dff or 4*d_output
+            self.activation = F.relu if activation == 'relu' else F.gelu
+            self.conv1 = nn.Conv1d(in_channels=d_output, out_channels=d_ff, kernel_size=1)
+            self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_output, kernel_size=1)
+            self.norm2 = nn.LayerNorm(d_output)
+
 
     def forward(self, neuralInput, dayIdx):
+        """
+        Forward pass of the Decoder
+        Args:
+            neuralInput: (batch_size x seq_len x num_features)
+            dayIdx: (batch_size, )
+
+        Returns:
+
+        """
+        if self.normalize_batch:
+            dim_ = 1
+            means = neuralInput.mean(dim_, keepdim=True).detach() # B x 1 x D
+            neuralInput = neuralInput - means
+            stdev = torch.sqrt(torch.var(neuralInput, dim=dim_, keepdim=True, unbiased=False) + 1e-5)  # B x 1 x D
+            neuralInput /= stdev
+
+        # Preprocess batch
         stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
 
-        # From d_input to d_model
         hidden_states = self.linear_input(stridedInputs)
+        # include relu
+        if self.include_relu:
+            hidden_states = torch.relu(hidden_states)
+    
+        hidden_states = self.dropout(hidden_states)
 
         # Pass through the mixer
         hidden_states = self.backbone(hidden_states)
 
+        # Pass through FCC layers:
+        if self.fcc_layers:
+            y = hidden_states
+            y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
+            y = self.dropout(self.conv2(y).transpose(-1, 1))
+            hidden_states = self.norm2(hidden_states + y)
+
         seq_out = self.fc_decoder_out(hidden_states)
+
         return seq_out
 
 

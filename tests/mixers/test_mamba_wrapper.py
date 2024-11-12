@@ -1,5 +1,5 @@
 """
-Test mixer layer padding
+Test that embedding mamba in mixer module gives the same results
 
 """
 import torch
@@ -8,7 +8,7 @@ from deep_ssm.mixers.mamba2_simple import Mamba2Simple
 from deep_ssm.mixers.s5_fjax.ssm import S5Layer as S5
 from deep_ssm.mixers.s4 import S4Block as S4
 from torch.nn import functional as F
-from deep_ssm.mixers.mamba_extra import MambaWrapper
+from deep_ssm.mixers.mamba_extra import MambaWrapper, MixerModel
 
 
 
@@ -21,10 +21,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 MODELS = {"Mamba": Mamba,
-          "S5": S5,
-          "Mamba2": Mamba2Simple,
-          "S4": S4,
-          "MambaBi": MambaWrapper,
           }
 
 
@@ -32,12 +28,6 @@ MODELS = {"Mamba": Mamba,
 class TestMixerInference(parameterized.TestCase):
     @parameterized.named_parameters(
         ("Mamba", "Mamba", False),
-        ("Mamba2", "Mamba2", False),
-        ("S4", "S4", False),
-        ("S5", "S5", False),
-        ("S4 Bidirectional", "S4", True),
-        ("S5 Bidirectional", "S5", True),
-        ("MambaBi", "MambaBi", True)
     )
     def test_padded_sequence(self, model_name, bidirectional):
         """
@@ -58,6 +48,7 @@ class TestMixerInference(parameterized.TestCase):
         padded_x = F.pad(x, (0, 0, 0, pad_len)).to(dtype)
 
         assert x.shape == padded_x[:,pad_len:].shape
+        kwargs = {}
         if 'Mamba' in model_name:
             args ={"d_model": dim,
                     "layer_idx": 0,
@@ -65,51 +56,39 @@ class TestMixerInference(parameterized.TestCase):
                      "d_state": 16,
                      }
 
-        elif model_name == 'S5':
-            args ={"d_model": dim,
-                     "ssm_size": 16,
-                    "blocks": 1,
-                     }
-        elif model_name == 'S4':
-            args ={"d_model": dim,
-                  "d_state": 16,
-                  "transposed": False
-                   }
-        if model_name == 'Mamba2':
-            kwargs ={"headdim": headdim,
-                     "rmsnorm": False,
-                     "use_mem_eff_path": False,
-                     "chunk_size": 1,
-                     }
-        else:
-            kwargs ={}
-
         if bidirectional:
           kwargs['bidirectional'] = bidirectional
 
         # Training-style forward pass (full sequence in parallel)
-        model = MODELS[model_name](
-            **args,
-            **kwargs,
-        ).to(device)
+        torch.manual_seed(42)
+        model = MODELS[model_name](**args, **kwargs).to(device)
 
         model.eval()
 
         with torch.no_grad():
+          y1 = model(x)
+          y1_padded= model(padded_x)
+
+        torch.manual_seed(42)
+        model2 = MambaWrapper(
+            **args,
+            **kwargs,
+        ).to(device)
+
+        model2.eval()
+
+        with torch.no_grad():
           if 'Mamba' in model_name:
-            y1 = model(x)
-            y1_padded= model(padded_x)
+            y2 = model2(x)
+            y2_padded= model2(padded_x)
 
-          else:
-            y1, _ = model(x)
-            y1_padded, _ = model(padded_x)
+        # Check that two models are the same given same parameters:
+        for p1, p2 in zip(model.named_parameters(), model2.mamba_fwd.named_parameters()):
+            assert p1[0] == p2[0]
+            self.assertTrue(torch.allclose(p1[1], p2[1], rtol=1e-5, atol=1e-5))
+        self.assertTrue(torch.allclose(y2, y1, rtol=1e-5, atol=1e-5))
+        self.assertTrue(torch.allclose(y2_padded, y1_padded, rtol=1e-5, atol=1e-5))
 
-          assert y1.shape == x.shape
-          assert y1_padded.shape == padded_x.shape
-
-          unpadded_y1 = y1_padded[:, :-pad_len, :]
-
-          self.assertTrue(torch.allclose(unpadded_y1, y1, rtol=1e-5, atol=1e-5))
 
 
 

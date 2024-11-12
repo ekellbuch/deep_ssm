@@ -1,30 +1,19 @@
 Comment: >
   # This trains the baseline model
-  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.mamba_bi_new=True
-  python run.py --config-name="baseline_mamba" trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1 model_cfg.configs.mamba_bi_new=True
+  python run.py --config-name="baseline_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 model_cfg.configs.d_conv=4
+  python run.py --config-name="baseline_mamba" model_cfg.configs.layer_dim=1 model_cfg.configs.d_conv=2 trainer_cfg.limit_train_batches=1 trainer_cfg.limit_val_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.log_every_n_steps=1 model_cfg.configs.d_model=2
 
-  # Experiment:
-
-  python run.py --config-name="baseline_mamba" model_cfg.configs.mamba_bi_new=True
-  python run.py --config-name="baseline_mamba" model_cfg.configs.mamba_bi_new=True model_cfg.configs.input_nonlinearity=None
 
 project_name: "speech_bci"
 experiment_name: "baseline_mamba"
 
-
-common:
-  #outputDir: "/Users/ekellbuch/Projects/deepseq/bci/neural_seq_decoder/outputs"
-  #datasetPath: &datasetPath "/Users/ekellbuch/datasets/SpeechBCI/competitionData/ptDecoder_ctc"
-  outputDir: "/scratch/users/${oc.env:USER}/SpeechBCI/logs"
-  datasetPath: &datasetPath "/scratch/groups/swl1/SpeechBCI/competitionData/ptDecoder_ctc"
-
-module_cfg:
-  type: "bci"
+seed: 0
 
 data_cfg:
   batchSize: 64
   num_workers: 0
-  datasetPath: *datasetPath
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
+  train_split: 1    # % of training data assigned to train_loader 1=100%
   # transformations:
   whiteNoiseSD: 0.8
   constantOffsetSD: 0.2
@@ -36,11 +25,12 @@ data_cfg:
   temporal_mask_len: 2
   renormalize_masking: false
 
-
-seed: 15
+module_cfg:
+  type: "bci"
 
 model_cfg:
   type: "bci_mamba"
+  resume_ckpt_path:   # load weights from ckpt but not parameters.
   configs:
     neural_dim: 256 #nInputFeatures
     n_classes: 40 #nClasses
@@ -49,32 +39,42 @@ model_cfg:
     d_state: 16
     d_conv: 4
     expand_factor: 1
-    bidirectional_input: false
     bidirectional: true
+    bidirectional_strategy: "add"
     layer_dim: 6 #nLayers
     # base decoder parameters:
     gaussianSmoothWidth: 2.0
     unfolding: true
     strideLen: 4
     kernelLen: 32
-    mamba_bi_new: false
     input_nonlinearity: "softsign"
+    normalize_batch: false
+    init_embedding_layer: false
+    include_relu: false
+    dropout: 0
+    mamba_bi_new: true
+    fcc_layers: false
+    initialize_mixer: false
+    
 
 optimizer_cfg:
   type: "adam"
   configs:
-    lr: 0.01  # lrStart
-    betas: [0.9, 0.99]
+    lr: 0.02 # lrStart
+    betas: [0.9, 0.999]
     eps: 0.1
     weight_decay: 1e-5  #l2_decay
 
 scheduler_cfg:
-  type: "stepLR"
-  interval: "step"
+  type: "reduce_on_plateau"
+  interval: "epoch"
+  monitor: "ctc_loss_train"
   frequency: 1
   configs:
-    step_size : 6101
-    gamma: 0.01
+    patience: 5
+    mode: "min"
+    factor: 0.5
+    min_lr: 1e-8
 
 callbacks:
   lr_monitor:
@@ -82,28 +82,37 @@ callbacks:
   grad_norm:
     type:
   early_stopping:
-    monitor: "ctc_loss_validation"
+    monitor: "ctc_loss_train"
     min_delta: 1e-4
-    patience: 10
+    patience: 30
     verbose: false
     mode: "min"
+  masking_scheduler:
+    masking_epochs: [ 25, 50]  # epochs where we reduce masking
+    speckled_mask_p_schedule: [ 0.25, 0]
+    feature_mask_p_schedule: [ 0.01, 0]
+    temporal_mask_n_schedule: [ 0, 0]
+  eigen_track:
 
 trainer_cfg:
   fast_dev_run: false
   logger: "wandb"
   accelerator: "auto"
-  max_steps: 10000
+  max_steps: 15000
   log_every_n_steps: 100
-  gradient_clip_val: 0 #.0
+  gradient_clip_val: 0
   gradient_clip_algorithm: "norm"
-  limit_test_batches: 
+  limit_test_batches:
   limit_train_batches:
   limit_val_batches:
-  max_epochs:
+  
 
+checkpoint_cfg:
+  every_n_train_steps: 1000
 
 
 eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
 
 hydra:
   run:
