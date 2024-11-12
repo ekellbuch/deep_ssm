@@ -8,20 +8,25 @@ import math
 import torch.nn.functional as F
 from deep_ssm.data.data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking
 import lightning as L
+from transformers import WhisperTokenizer
 
 
 class SpeechDataset(Dataset):
-    def __init__(self, data, transform=None):
+    def __init__(self, data, transform=None, processor=None, return_text=False):
         self.data = data
         self.transform = transform
         self.n_days = len(data)
         self.n_trials = sum([len(d["sentenceDat"]) for d in data])
 
+        self.return_text = return_text
+        self.processor = processor
+        self.tokenizer = self.get_tokenizer()
+
         self.neural_feats = []
         self.phone_seqs = []
         self.neural_time_bins = []
         self.phone_seq_lens = []
-        #self.transcriptions = []
+        self.transcriptions = []
         self.days = []
 
         for day in range(self.n_days):
@@ -31,10 +36,25 @@ class SpeechDataset(Dataset):
                 self.neural_time_bins.append(data[day]["sentenceDat"][trial].shape[0])
                 self.phone_seq_lens.append(data[day]["phoneLens"][trial])
                 self.days.append(day)
-                #self.transcriptions.append(data[day]["transcriptions"][trial])
+                if self.return_text:
+                  self.transcriptions.append(data[day]["transcriptions"][trial])
 
     def __len__(self):
         return self.n_trials
+
+    def get_tokenizer(self):
+      if self.processor == "whisper":
+        return WhisperTokenizer.from_pretrained("openai/whisper-small.en", task="transcribe")
+      else:
+        return None
+
+    def get_transcription(self, idx):
+      if self.tokenizer is not None:
+          transcription = self.tokenizer(text=self.transcriptions[idx], return_tensors="pt",
+                                       padding=True).input_ids.squeeze(0)
+      else:
+        transcription = self.transcriptions[idx]
+      return transcription
 
     def __getitem__(self, idx):
         neural_feats = torch.tensor(self.neural_feats[idx], dtype=torch.float32)
@@ -42,17 +62,31 @@ class SpeechDataset(Dataset):
         if self.transform:
             neural_feats = self.transform(neural_feats)
 
-        return (
-            neural_feats,
-            torch.tensor(self.phone_seqs[idx], dtype=torch.int32),
-            torch.tensor(self.neural_time_bins[idx], dtype=torch.int32),
-            torch.tensor(self.phone_seq_lens[idx], dtype=torch.int32),
-            torch.tensor(self.days[idx], dtype=torch.int64),
-        )
+        if self.return_text:
+            return (
+                neural_feats,
+                torch.tensor(self.phone_seqs[idx], dtype=torch.int32),
+                torch.tensor(self.neural_time_bins[idx], dtype=torch.int32),
+                torch.tensor(self.phone_seq_lens[idx], dtype=torch.int32),
+                torch.tensor(self.days[idx], dtype=torch.int64),
+                self.get_transcription(idx),
+            )
+        else:
+          return (
+              neural_feats,
+              torch.tensor(self.phone_seqs[idx], dtype=torch.int32),
+              torch.tensor(self.neural_time_bins[idx], dtype=torch.int32),
+              torch.tensor(self.phone_seq_lens[idx], dtype=torch.int32),
+              torch.tensor(self.days[idx], dtype=torch.int64),
+          )
 
 
 def _padding(batch, multiple=1):
-  X, y, X_lens, y_lens, days = zip(*batch)
+  if len(batch[0]) == 6:
+    X, y, X_lens, y_lens, days, transcriptions = zip(*batch)
+
+  else:
+    X, y, X_lens, y_lens, days = zip(*batch)
 
   max_len = max(seq.size(0) for seq in X)
 
@@ -65,13 +99,24 @@ def _padding(batch, multiple=1):
   #  desired_len = math.ceil(max_len / multiple) * multiple
   #  X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
 
-  return (
-    X_padded,
-    y_padded,
-    torch.stack(X_lens),
-    torch.stack(y_lens),
-    torch.stack(days),
-  )
+  if len(batch[0]) == 5:
+    return (
+      X_padded,
+      y_padded,
+      torch.stack(X_lens),
+      torch.stack(y_lens),
+      torch.stack(days),
+    )
+  else:
+    transcriptions_padded = pad_sequence(transcriptions, batch_first=True, padding_value=-100)
+    return (
+      X_padded,
+      y_padded,
+      torch.stack(X_lens),
+      torch.stack(y_lens),
+      torch.stack(days),
+      transcriptions_padded
+    )
 
 
 def get_data_augmentations(args):
@@ -152,6 +197,8 @@ class SpeechDataModule(L.LightningDataModule):
         self.loadedData = None
         # TODO: clean this up
         self.nDays = 24
+        self.return_text = args.get("return_text", False)
+        self.processor = args.get("processor", None)
 
     def setup(self, stage=None):
         # Load the dataset from the pickle file
@@ -163,8 +210,14 @@ class SpeechDataModule(L.LightningDataModule):
         transform_fn = get_data_augmentations(self.args)
 
         # Create train, validation, and test datasets
-        train_ds = SpeechDataset(loadedData["train"], transform=transform_fn)
-        test_ds = SpeechDataset(loadedData["test"])
+        train_ds = SpeechDataset(loadedData["train"],
+                                 transform=transform_fn,
+                                 processor=self.processor,
+                                 return_text=self.return_text)
+        test_ds = SpeechDataset(loadedData["test"],
+                                processor=self.processor,
+                                return_text=self.return_text)
+
         if self.args.get("pad_multiple", None) is not None:
             self.padding_fn = lambda x: _padding(x, multiple=self.args["pad_multiple"])
         else:
