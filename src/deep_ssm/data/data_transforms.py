@@ -3,6 +3,8 @@ import numbers
 from torch import nn
 import math
 import torch.nn.functional as F
+from torchaudio.transforms import Resample
+
 
 class Transform(object):
   """Abstract base class for transforms."""
@@ -35,6 +37,20 @@ class AddOffset(Transform):
     X += (torch.randn([1, X.shape[-1]], device=X.device) * self.constantOffsetSD)
     return X
 
+
+class DataResample(Transform):
+  """
+  Apply resampling along L dimension
+  """
+  def __init__(self, orig_freq, new_freq):
+
+    self.resample = Resample(orig_freq, new_freq)
+
+  def __call__(self, X):
+    # X is L x D
+    X = self.resample(torch.transpose(X, -1, -2))
+    X = torch.transpose(X, -1, -2)
+    return X
 
 class SpeckleMasking(Transform):
   def __init__(self, speckled_mask_p=0, mask_value=0, renormalize_masking=True):

@@ -6,9 +6,10 @@ from torch.nn.utils.rnn import pad_sequence
 from torchvision.transforms import Compose
 import math
 import torch.nn.functional as F
-from deep_ssm.data.data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking
+from deep_ssm.data.data_transforms import AddWhiteNoise, AddOffset, SpeckleMasking, TemporalMasking, FeatureMasking, DataResample
 import lightning as L
 from transformers import WhisperTokenizer
+import re
 
 
 class SpeechDataset(Dataset):
@@ -50,7 +51,12 @@ class SpeechDataset(Dataset):
 
     def get_transcription(self, idx):
       if self.tokenizer is not None:
-          transcription = self.tokenizer(text=self.transcriptions[idx], return_tensors="pt",
+          transcript = self.transcriptions[idx]
+          # process transcript: 
+          transcript = transcript.strip()
+          transcript = re.sub(r"[^a-zA-Z\- \']", "", transcript)
+          transcript = transcript.replace("--", "").lower()
+          transcription = self.tokenizer(text=transcript, return_tensors="pt",
                                        padding=True).input_ids.squeeze(0)
       else:
         transcription = self.transcriptions[idx]
@@ -81,7 +87,7 @@ class SpeechDataset(Dataset):
           )
 
 
-def _padding(batch, multiple=1):
+def _padding(batch, padding_type=None, padding_len=0):
   if len(batch[0]) == 6:
     X, y, X_lens, y_lens, days, transcriptions = zip(*batch)
 
@@ -91,13 +97,16 @@ def _padding(batch, multiple=1):
   max_len = max(seq.size(0) for seq in X)
 
   # Pad the sequences:
+  # use default padding, i.e. all sequences in batch are the same length
   X_padded = pad_sequence(X, batch_first=True, padding_value=0)
-  y_padded = pad_sequence(y, batch_first=True, padding_value=0)
 
-  # Pad to the desired length:
-  #if multiple > 1:
-  #  desired_len = math.ceil(max_len / multiple) * multiple
-  #  X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
+  if padding_type == 'multiple':
+    desired_len = math.ceil(max_len / multiple) * padding_len
+    X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
+  elif padding_type == 'fixed_len':
+    X_padded = F.pad(X_padded, (0, 0, 0,  padding_len - X_padded.size(1)), value=0)
+
+  y_padded = pad_sequence(y, batch_first=True, padding_value=0)
 
   if len(batch[0]) == 5:
     return (
@@ -131,60 +140,26 @@ def get_data_augmentations(args):
     transforms.append(AddWhiteNoise(args.whiteNoiseSD))
   if args.get("constantOffsetSD", 0) > 0:
     transforms.append(AddOffset(args.constantOffsetSD))
-
+  if args.get("resample", False):
+    transforms.append(DataResample(args.orig_freq, args.new_freq))
   if len(transforms) > 0:
     transform_fn = Compose(transforms)
   else:
     transform_fn = None
   return transform_fn
 
-def getDatasetLoaders(args):
-  with open(args.datasetPath, "rb") as handle:
-    loadedData = pickle.load(handle)
 
-  transform_fn = get_data_augmentations(args)
-
-  train_ds = SpeechDataset(loadedData["train"], transform=transform_fn)
-  test_ds = SpeechDataset(loadedData["test"])
-
-  if args.get("pad_multiple", None) is not None:
-    _padding_fn = lambda x: _padding(x, multiple=args["pad_multiple"])
+def get_test_augmentations(args):
+  # only a subset of augmentations are passed at test time 
+  transforms = []
+  if args.get("resample", False):
+    transforms.append(DataResample(args.orig_freq, args.new_freq))
+  if len(transforms) > 0:
+    transform_fn = Compose(transforms)
   else:
-    _padding_fn = _padding
+    transform_fn = None
+  return transform_fn
 
-  if args.get("train_split", 1) < 1:
-    train_ds, val_ds = torch.utils.data.random_split(train_ds, [args.train_split, 1- args.train_split])
-  else:
-    train_ds, val_ds = train_ds, test_ds
-
-  train_loader = DataLoader(
-    train_ds,
-    batch_size=args.batchSize,
-    shuffle=True,
-    num_workers=args.num_workers,
-    pin_memory=True,
-    collate_fn=_padding_fn,
-  )
-
-  val_loader = DataLoader(
-    val_ds,
-    batch_size=args.batchSize,
-    shuffle=False,
-    num_workers=args.num_workers,
-    pin_memory=True,
-    collate_fn=_padding_fn,
-  )
-
-  test_loader = DataLoader(
-    test_ds,
-    batch_size=args.batchSize,
-    shuffle=False,
-    num_workers=args.num_workers,
-    pin_memory=True,
-    collate_fn=_padding_fn,
-  )
-
-  return train_loader, val_loader, test_loader, loadedData
 
 
 class SpeechDataModule(L.LightningDataModule):
@@ -214,14 +189,19 @@ class SpeechDataModule(L.LightningDataModule):
                                  transform=transform_fn,
                                  processor=self.processor,
                                  return_text=self.return_text)
+
+        transform_fn_test = get_test_augmentations(self.args)
+        
         test_ds = SpeechDataset(loadedData["test"],
                                 processor=self.processor,
                                 return_text=self.return_text)
 
-        if self.args.get("pad_multiple", None) is not None:
-            self.padding_fn = lambda x: _padding(x, multiple=self.args["pad_multiple"])
+        if self.args.get("padding_type", None):
+          padding_type = self.args.get("padding_type", None)
+          padding_len = self.args.get("padding_len", 0)
+          self.padding_fn = lambda x: _padding(x, padding_type=padding_type, padding_len=padding_len)
         else:
-            self.padding_fn = _padding
+          self.padding_fn = _padding
 
         # Split train and validation datasets if needed
         if self.args.get("train_split", 1) < 1:
