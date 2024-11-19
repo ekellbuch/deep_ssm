@@ -1,0 +1,111 @@
+Comment: >
+  # This trains the baseline model
+  python feature_whisper.py  trainer_cfg.fast_dev_run=1
+  python feature_whisper.py  trainer_cfg.overfit_batches=1 trainer_cfg.check_val_every_n_epoch=1 trainer_cfg.log_every_n_steps=1
+
+project_name: "speech_bci_whisper"
+experiment_name: "baseline_whisper"
+matmul_precision: "medium"
+
+module_cfg:
+  type: "bci"
+
+common:
+  model_name: &model_name "openai/whisper-tiny.en" #"openai/whisper-small.en"
+
+data_cfg:
+  batchSize: 32
+  num_workers: 0
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
+  train_split: 0.9
+  # transformations:
+  whiteNoiseSD: 0
+  constantOffsetSD: 0
+  resample: true
+  orig_freq: 50
+  new_freq: 100
+  padding_type: "fixed_len"
+  padding_len: 3000
+  # masking
+  mask_value: 0.0
+  speckled_mask_p: 0
+  feature_mask_p: 0.0
+  temporal_mask_n: 0
+  temporal_mask_len: 0
+  renormalize_masking: false
+  # 
+  processor: "whisper"
+  return_text: true   # the dataloader should return the transcripts for training e2e model
+  model_name: *model_name # use to load tokenizer
+
+seed: 15
+
+model_cfg:
+  type: "whisper_e2e"
+  model_name: *model_name # use to load tokenizer
+  configs:
+    neural_dim: 256
+    freeze_encoder: false
+    freeze_decoder: false
+
+lora_cfg:
+  apply_lora : true
+  configs:
+    r : 4
+    lora_alpha: 16
+    lora_dropout: 0.1
+
+
+optimizer_cfg:
+  type: "adamw"
+  configs:
+    lr: 1e-3
+  
+scheduler_cfg:
+  type: "reduce_on_plateau"
+  warmup_epochs: 0
+  monitor: "loss_train"
+  configs:
+    mode: "min"
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-8
+  #type: "cosine_annealing"
+  #configs:
+  #  T_max: 100 # in epochs
+  #  eta_min: 1e-8
+
+
+callbacks:
+  lr_monitor:
+    logging_interval: "epoch"
+  grad_norm:
+    type:
+  early_stopping:
+    monitor: "wer_validation"
+    min_delta: 1e-4
+    patience: 10
+    verbose: false
+    mode: "min"
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_epochs: 50
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+  limit_train_batches:
+  limit_val_batches:
+  limit_test_batches:
+  overfit_batches: 0.0
+
+
+eval_cfg:
+  eval_only: 0
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}

@@ -13,7 +13,7 @@ import re
 
 
 class SpeechDataset(Dataset):
-    def __init__(self, data, transform=None, processor=None, return_text=False):
+    def __init__(self, data, transform=None, processor=None, return_text=False, model_name=None):
         self.data = data
         self.transform = transform
         self.n_days = len(data)
@@ -21,6 +21,7 @@ class SpeechDataset(Dataset):
 
         self.return_text = return_text
         self.processor = processor
+        self.model_name = model_name
         self.tokenizer = self.get_tokenizer()
 
         self.neural_feats = []
@@ -45,7 +46,7 @@ class SpeechDataset(Dataset):
 
     def get_tokenizer(self):
       if self.processor == "whisper":
-        return WhisperTokenizer.from_pretrained("openai/whisper-small.en", task="transcribe")
+        return WhisperTokenizer.from_pretrained(self.model_name, task="transcribe")
       else:
         return None
 
@@ -174,6 +175,7 @@ class SpeechDataModule(L.LightningDataModule):
         self.nDays = 24
         self.return_text = args.get("return_text", False)
         self.processor = args.get("processor", None)
+        self.model_name = args.get("model_name", None)
 
     def setup(self, stage=None):
         # Load the dataset from the pickle file
@@ -188,13 +190,15 @@ class SpeechDataModule(L.LightningDataModule):
         train_ds = SpeechDataset(loadedData["train"],
                                  transform=transform_fn,
                                  processor=self.processor,
-                                 return_text=self.return_text)
+                                 return_text=self.return_text,
+                                 model_name=self.model_name)
 
         transform_fn_test = get_test_augmentations(self.args)
         
         test_ds = SpeechDataset(loadedData["test"],
                                 processor=self.processor,
-                                return_text=self.return_text)
+                                return_text=self.return_text,
+                                model_name=self.model_name)
 
         if self.args.get("padding_type", None):
           padding_type = self.args.get("padding_type", None)
@@ -203,16 +207,15 @@ class SpeechDataModule(L.LightningDataModule):
         else:
           self.padding_fn = _padding
 
-        # Split train and validation datasets if needed
+        # Split train and validation datasets if needed:
         if self.args.get("train_split", 1) < 1:
-          train_len = int(len(train_ds) * self.args.train_split)
-          val_len = len(train_ds) - train_len
-          train_ds, val_ds = torch.utils.data.random_split(train_ds, [train_len, 1 - val_len])
+          train_ds, val_ds = torch.utils.data.random_split(train_ds, [self.args.train_split, 1 - self.args.train_split])
           val_ds.dataset.transform = None
           self.train_ds = train_ds
           self.val_ds = val_ds
         else:
-            self.train_ds, self.val_ds = train_ds, test_ds
+            val_ds, _ = torch.utils.data.random_split(test_ds, [0.1, 0.9])
+            self.train_ds, self.val_ds = train_ds, val_ds
 
         self.test_ds = test_ds
 
@@ -230,6 +233,7 @@ class SpeechDataModule(L.LightningDataModule):
         return DataLoader(
             self.train_ds,
             batch_size=self.args.batchSize,
+            # TODO: turned off shuffling to get exact number for performance
             shuffle=True,
             num_workers=self.args.num_workers,
             pin_memory=True,

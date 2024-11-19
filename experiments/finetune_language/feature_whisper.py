@@ -6,6 +6,7 @@ so we ended up with a rate of 50 Hz (bins) per second.
 Memory, it doesn't fit with batch_size 64 but it does fit with batch_size 32
 Version which works, now try with lightning
 """
+import hydra
 import lightning as L
 import torch
 import torch.nn as nn
@@ -27,86 +28,73 @@ from datasets import load_metric
 from tqdm import tqdm
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 from torch.optim.lr_scheduler import LambdaLR
+from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
+import wandb
+from deep_ssm.modules.module_bci import BCIWhisperModule
+from deep_ssm.utils.callbacks import all_callbacks
 
 torch.autograd.set_detect_anomaly(True)
 
-TOY_CONFIG = "/home/groups/swl1/ekb/Projects/deepseq/deep_ssm/configs/bci/baseline_whisper.yaml"
-
-
-
+"""
 def print_trainable_params(model):
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(f"Trainable parameter: {name}, Shape: {param.shape}")
-
 # Helper function to calculate trainable parameters
 def count_trainable_params(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+"""
 
 
+class ModifiedWhisper(nn.Module):
 
-# read baseline_mamba.yaml
-def create_cfg() -> dict:
-    """Load all toy data config file without hydra."""
-    cfg = yaml.load(open(str(TOY_CONFIG)), Loader=yaml.FullLoader)
-    return OmegaConf.create(cfg)
+    def __init__(self, in_channels, whisper_model):
+        super(ModifiedWhisper, self).__init__()
+        self.input_layer = nn.Conv1d(in_channels=in_channels, out_channels=80, kernel_size=3, stride=1, padding=1)
+        self.whisper_model = whisper_model
+
+    def forward(self, x, labels=None):
+        # x: batch_size x length x num_features
+
+        # Pass through modified input layer
+        # Change shape to [batch, channels, time]
+
+        # resample data and pad to 30 sec
+
+        # x to shape batch_size, num_features, length
+        # x = self.resample(x.permute(0, 2, 1).contiguous())
+
+        # x to shape batch_size, length, out_channels
+        x = self.input_layer(x.permute(0, 2, 1))
+
+        # Forward through Whisper model
+        outputs = self.whisper_model(input_features=x, labels=labels)
+        return outputs
 
 
-def main():
-
+@hydra.main(config_path="../../configs/bci", config_name="baseline_whisper", version_base=None)
+def main(args):
     # Load config file:
-    args = create_cfg()
+    #args = create_cfg()
+    torch.set_float32_matmul_precision(args.matmul_precision)
     L.seed_everything(args.seed)
 
     # Load dataset
     datamodule = SpeechDataModule(args.data_cfg)
     datamodule.setup()
-    #batch =  next(iter(datamodule.train_dataloader()))
-
-    spike_feature_dim = 256  # Example feature dimension for neural spike data
 
     # Load Whisper model and processor
-    model_name = "openai/whisper-small.en"
     # extracts mel-filter bank features from raw speech using Short time Fourier Transform
-    #feature_extractor = WhisperFeatureExtractor.from_pretrained(model_name)
-    processor = WhisperProcessor.from_pretrained(model_name)
+    # feature_extractor = WhisperFeatureExtractor.from_pretrained(model_name)
+    processor = WhisperProcessor.from_pretrained(args.model_cfg.model_name)
 
     # loads whisper model
-    model = WhisperForConditionalGeneration.from_pretrained(model_name)
-
-    #test_input = torch.randn( 80, 3000).to(device)  # Adjust to match your batch and input size
-    #model = model.to(device)
-    # summary(model, (3000,))
-    
-    # Modify the model input layer to accept neural data
-    class ModifiedWhisper(nn.Module):
-
-        def __init__(self,whisper_model):
-            super(ModifiedWhisper, self).__init__()
-            self.input_layer = nn.Conv1d(in_channels=spike_feature_dim, out_channels=80, kernel_size=3, stride=1, padding=1)
-            #self.feature_extractor = feature_extractor#(feature_size=spike_feature_dim)
-            self.whisper_model = whisper_model
-
-        def forward(self, x, labels=None):
-            # x: batch_size x length x num_features
-
-            # Pass through modified input layer
-            # Change shape to [batch, channels, time]
-
-            # resample data and pad to 30 sec
-
-            # x to shape batch_size, num_features, length
-            # x = self.resample(x.permute(0, 2, 1).contiguous())
-
-            # x to shape batch_size, length, out_channels
-            x = self.input_layer(x.permute(0, 2, 1))
-
-            # Forward through Whisper model
-            outputs = self.whisper_model(input_features=x, labels=labels)
-            return outputs
+    model = WhisperForConditionalGeneration.from_pretrained(args.model_cfg.model_name)
 
     # Initialize modified model
-    modified_model = ModifiedWhisper(model)
+    in_channels = args.model_cfg.configs.neural_dim
+    modified_model = ModifiedWhisper(in_channels, model)
 
     # Freeze lower layers of the Whisper model encoder
     # or maybe here we should freeze the decoder?
@@ -122,9 +110,7 @@ def main():
     print("Before applying LoRA:")
     #x_temp = torch.randn(256, 3000)
     #summary(modified_model, input_size=(1, 256, 3000), device='cpu')  # example input shape
-    print(f"Total trainable parameters: {count_trainable_params(modified_model)}")
-
-
+    #print(f"Total trainable parameters: {count_trainable_params(modified_model)}")
 
     # Apply (Low-Rank Adaptation)
     if args.lora_cfg.apply_lora:
@@ -142,89 +128,67 @@ def main():
 
         print("After applying LoRA:")
         #summary(modified_model, input_size=(1, 256, 3000))
-        print(f"Total trainable parameters after LoRA: {count_trainable_params(modified_model)}")
+        #print(f"Total trainable parameters after LoRA: {count_trainable_params(modified_model)}")
 
-    # Define training parameters
-    modified_model.to(device)
+    # Define module
+    modulito = BCIWhisperModule(args, modified_model, processor)
 
-    optimizer = optim.AdamW(modified_model.parameters(), lr=1e-3)
+    # setup logger:
+    if args.trainer_cfg.fast_dev_run:
+      logger = None
+    else:
+      if args.trainer_cfg.logger == "wandb":
+        if args.trainer_cfg.accelerator == "ddp":
+          kwargs = {"group": "DDP"}
+        else:
+          kwargs = dict()
 
+        logger = WandbLogger(name=args.experiment_name,
+                             project=args.project_name, **kwargs)
 
-    # Warm-up and total training steps
-    warmup_steps = 10
-    total_steps = 100  #len(dataloader) * epochs
+        args_as_dict = OmegaConf.to_container(args)
+        logger.log_hyperparams(args_as_dict)
+      else:
+        logger = None
 
-    # Lambda function for learning rate
-    def lr_lambda(current_step):
-        if current_step < warmup_steps:
-            return float(current_step) / float(max(1, warmup_steps))
-        return max(0.0, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
+    # set trainer:
+    trainer_config = OmegaConf.to_container(args.trainer_cfg)
+    trainer_config['logger'] = logger
 
-    # Scheduler with warm-up and decay
-    #scheduler = LambdaLR(optimizer, lr_lambda)
+    # set callbacks
+    local_callbacks = []
+    if args.callbacks:
+      if args.callbacks.get("lr_monitor", None):
+        local_callbacks.append(LearningRateMonitor(**args.callbacks.lr_monitor))
+      if args.callbacks.get("grad_norm") and args.callbacks.grad_norm.get("type", None):
+        local_callbacks.append(all_callbacks[args.callbacks.grad_norm.type])
+      if args.callbacks.get("early_stopping", None):
+        local_callbacks.append(EarlyStopping(**args.callbacks.early_stopping))
+      if args.callbacks.get("masking_scheduler", None):
+        local_callbacks.append(all_callbacks["masking_scheduler"](**args.callbacks.masking_scheduler))
+        trainer_config["reload_dataloaders_every_n_epochs"] = 1
+      if args.callbacks.get("checkpoint_cfg", None):
+        local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
+      if args.callbacks.get("eigen_track", None):
+        local_callbacks.append(all_callbacks["eigen_track"])
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-8)
+    trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
-    wer_metric = load_metric("wer")
+    # Train model
+    if not args.eval_cfg.get("eval_only", 0):
+      trainer.fit(model=modulito, datamodule=datamodule)
+      ckpt_path = None
+    else:
+      ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
-    # Create DataLoader
-    datamodule.setup()
-    train_loader = datamodule.train_dataloader()
-    test_loader = datamodule.test_dataloader()
+    # Test model
+    trainer.test(modulito, datamodule=datamodule, ckpt_path=ckpt_path)
 
-    # Training loop
-    num_epochs = 5
-    modified_model.train()
-    #for epoch in tqdm(range(num_epochs)):
-    batches = next(iter(train_loader))
-    batches = [batches]
+    # End logging
+    if args.trainer_cfg.logger == "wandb" and not (logger is None):
+      wandb.run.summary["total_params"] = sum(p.numel() for p in model.parameters())
+      wandb.finish()
 
-    for epoch in range(num_epochs):
-        total_loss = 0
-        wer_sum = 0
-        total_samples = 0
-
-        # Overfit one batch:
-        #batches = [train_loader]
-        #for batch in tqdm(batches):
-        for batch in batches:
-            spike_features = batch[0].to(device)  # batch x length x num_features
-            labels = batch[-1].to(device)  # [batch, seq_len]
-            # Forward pass
-            outputs = modified_model(spike_features, labels=labels)
-
-            #breakpoint()
-            loss = outputs.loss
-
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-
-            total_loss += loss.item()
-            # Add gradient clipping here
-            torch.nn.utils.clip_grad_norm_(modified_model.parameters(), max_norm=1.0)
- 
-            optimizer.step()
-
-            # Decode and calculate WER
-            predictions = processor.batch_decode(outputs.logits.argmax(dim=-1), skip_special_tokens=True)
-            references = processor.batch_decode(labels, skip_special_tokens=True)
-            batch_wer = wer_metric.compute(predictions=predictions, references=references)
-
-            print("True sequence: ", references)
-            print("Prediction: ", predictions)
-            wer_sum += batch_wer * spike_features.size(0)
-            total_samples += spike_features.size(0)
-        avg_loss = total_loss / len(train_loader)
-        avg_wer = wer_sum / total_samples
-
-        print(f"Epoch {epoch + 1}/{num_epochs}, Train Loss: {avg_loss:.4f}, Train WER: {avg_wer:.4f}")
-
-        # Update the scheduler at the end of each epoch
-        scheduler.step(avg_loss)
-
-        # calculate test time 
-    print("Fine-tuning complete.")
 
 
 if __name__ == "__main__":
