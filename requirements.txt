@@ -1,15 +1,12 @@
-datasets==2.4.0
-omegaconf==2.2.3
-ml-collections==0.1.1
-hydra-core==1.2.0
+datasets
+omegaconf
+ml-collections
+hydra-core
 pandas
-lightning==2.3.3
-scikit-learn==1.5.1
-transformers==4.42.4
+lightning
+scikit-learn
 wandb
 torchtyping
-causal-conv1d
-triton==2.2.0
-mamba-ssm[causal-conv1d]  # temporary flag to install selective_scan_cuda 
+triton
 edit-distance
 pyparsing
