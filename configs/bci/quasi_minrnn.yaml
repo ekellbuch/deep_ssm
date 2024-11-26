@@ -8,7 +8,7 @@ experiment_name: "quasi_minrnn"
 seed: 0
 
 data_cfg:
-  batchSize: 32 # 64
+  batchSize: 64 # 64
   num_workers: 0
   datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
   # transformations:
