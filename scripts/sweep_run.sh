@@ -1,7 +1,7 @@
 #!/usr/bin/bash
-#SBATCH --job-name=bci
-#SBATCH --error=bci_%j_%a.err
-#SBATCH --out=bci_%j_%a.out
+#SBATCH --job-name=bci_sweep
+#SBATCH --error=bci_sweep_%j_%a.err
+#SBATCH --out=bci_sweep_%j_%a.out
 #SBATCH --time=6-23:59:59
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4
