@@ -15,7 +15,7 @@ import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
 
 
-@hydra.main(config_path="../configs/bci", config_name="baseline_gru", version_base=None)
+@hydra.main(config_path="../configs/bci", config_name="quasi_minrnn", version_base=None)
 def main(args: DictConfig) -> None:
     train(args)
     return
