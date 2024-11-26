@@ -7,6 +7,7 @@
 #SBATCH --cpus-per-gpu=4
 #SBATCH --mail-type=ALL
 
+export DEEP_SSM_DATA=/scratch/groups/swl1
 module load cuda/12.4
 
 
