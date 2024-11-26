@@ -59,7 +59,7 @@ lora_cfg:
 optimizer_cfg:
   type: "adamw"
   configs:
-    lr: 1e-3
+    lr: 1e-4
   
 scheduler_cfg:
   type: "reduce_on_plateau"
