@@ -5,6 +5,7 @@
 #SBATCH --time=04:59:59
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4
+#SBATCH --constraint='GPU_SKU:A100_SXM4&GPU_MEM:80GB'
 #SBATCH --mail-type=ALL
 
 export DEEP_SSM_DATA=/scratch/groups/swl1
