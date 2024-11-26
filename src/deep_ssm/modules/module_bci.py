@@ -47,7 +47,7 @@ class BCIDecoder(L.LightningModule):
     return loss
 
   def validation_step(self, batch, batch_idx):
-    self._custom_step(batch, batch_idx, flag_name='validation', compute_cer=False)
+    self._custom_step(batch, batch_idx, flag_name='validation', compute_cer=True)
 
   def test_step(self, batch, batch_idx):
     self._custom_step(batch, batch_idx, flag_name='test')
