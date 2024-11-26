@@ -74,6 +74,7 @@ trainer_cfg:
 
 
 eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
 
 hydra:
   run:
