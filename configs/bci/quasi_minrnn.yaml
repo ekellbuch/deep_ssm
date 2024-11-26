@@ -1,0 +1,81 @@
+Comment: >
+  # This trains the baseline model (fast_dev_run is a debugging flag)
+  python run.py --config-name="quasi_minrnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+
+project_name: "speech_bci"
+experiment_name: "quasi_minrnn"
+
+seed: 0
+
+data_cfg:
+  batchSize: 64
+  num_workers: 0
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
+  # transformations:
+  whiteNoiseSD: 0.8  # add white noise
+  constantOffsetSD: 0.2  # add constant offset
+  # masking:
+  mask_value: 0.0
+  speckled_mask_p: 0
+  feature_mask_p: 0
+  temporal_mask_n: 0
+  temporal_mask_len: 0
+  renormalize_masking: false
+
+
+module_cfg:
+  type: "bci"
+
+model_cfg:
+  type: "bci_minrnn"
+  configs:
+    neural_dim: 256 #nInputFeatures
+    n_classes: 40 #nClasses
+    # gru params
+    hidden_dim: 1024 #nUnits
+    layer_dim: 5 #nLayers
+    dropout: 0.4
+    bidirectional: true
+    # base decoder parameters:
+    gaussianSmoothWidth: 2.0
+    unfolding: true
+    strideLen: 4
+    kernelLen: 32
+    input_nonlinearity: "softsign"
+
+optimizer_cfg:
+  type: "adam"
+  configs:
+    lr: 0.02  # lrStart
+    betas: [0.9, 0.999]
+    eps: 0.1
+    weight_decay: 1e-5  #l2_decay
+
+scheduler_cfg:
+  type: "linear"
+  interval: "step"
+  frequency: 1
+  configs:
+    start_factor : 1.0
+    end_factor: 1.0
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+  grad_norm:
+    type:
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_steps: 10000
+  log_every_n_steps: 100
+
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
