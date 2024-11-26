@@ -91,12 +91,22 @@ def train(args):
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
-    # Train model
-    if not args.eval_cfg.get("eval_only", 0):
-      trainer.fit(model=model, datamodule=datamodule)
-      ckpt_path = None
-    else:
-      ckpt_path = args.eval_cfg.get("ckpt_path", None)
+    # Train model (trying to be graceful to oom erros in sweeps)
+    # if not args.eval_cfg.get("eval_only", 0):
+    #   trainer.fit(model=model, datamodule=datamodule)
+    #   ckpt_path = None
+    # else:
+    #   ckpt_path = args.eval_cfg.get("ckpt_path", None)
+    try:
+      if not args.eval_cfg.get("eval_only", 0):
+        trainer.fit(model=model, datamodule=datamodule)
+        ckpt_path = None
+      else:
+        ckpt_path = args.eval_cfg.get("ckpt_path", None)
+    except RuntimeError as e:
+      print(e)
+      torch.cuda.empty_cache()
+      return
 
     # Test model
     trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
