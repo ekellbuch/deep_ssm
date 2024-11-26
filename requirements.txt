@@ -1,3 +1,5 @@
+ninja
+accelerated-scan
 datasets
 omegaconf
 ml-collections
