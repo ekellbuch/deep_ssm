@@ -41,7 +41,8 @@ def train(args):
           kwargs = dict()
 
         logger = WandbLogger(name=args.experiment_name,
-                             project=args.project_name, **kwargs)
+                             project=args.project_name, 
+                             entity=xavier_gonzalez, **kwargs)
 
         args_as_dict = OmegaConf.to_container(args)
         logger.log_hyperparams(args_as_dict)
