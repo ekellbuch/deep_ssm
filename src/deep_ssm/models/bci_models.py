@@ -153,6 +153,7 @@ class MinRNN(nn.Module):
         batch_first=True,
         dropout=0,
         bidirectional=True,
+        num_iters=2, # number of iterations for quasi-DEER
     ):
         super(MinRNN, self).__init__()
         self.input_size = input_size
@@ -186,6 +187,7 @@ class MinRNN(nn.Module):
             )
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
+        self.num_iters = num_iters # number of iterations for quasi-DEER
 
     def forward(self, input, hx=None):
         if not self.batch_first:
@@ -250,7 +252,7 @@ class MinRNN(nn.Module):
             initial_state=h0[:, 0],
             states_guess=states_guess,
             drivers=input,
-            num_iters=10,
+            num_iters=self.num_iters,
         ) # (B,D,T)
 
         return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
@@ -462,6 +464,7 @@ class MinRNNDecoder(BaseDecoder):
         unfolding=True,
         bidirectional=False,
         input_nonlinearity="softsign",
+        num_iters=2, # number of iterations for quasi-DEER
     ):
         super(MinRNNDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -490,6 +493,7 @@ class MinRNNDecoder(BaseDecoder):
             batch_first=True,
             dropout=dropout,
             bidirectional=True,
+            num_iters=num_iters,
         )
 
         # for name, param in self.gru_decoder.named_parameters():

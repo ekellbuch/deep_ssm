@@ -42,6 +42,7 @@ model_cfg:
     strideLen: 4
     kernelLen: 32
     input_nonlinearity: "softsign"
+    num_iters: 2 # number of deer iterations
 
 optimizer_cfg:
   type: "adam"
