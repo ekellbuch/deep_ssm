@@ -89,7 +89,9 @@ def quasi_deer_torch(
 
         # run appropriate parallel alg
         new_states = scan(A, b)[..., :T]  # (B, D, T)
-        new_states = torch.nan_to_num(new_states)  # zero out nans
+        # trying in place modification to be more memory efficient
+        new_states.nan_to_num() # zero out nans
+        # new_states = torch.nan_to_num(new_states)  # zero out nans
         return new_states
 
     deer_traces = []
