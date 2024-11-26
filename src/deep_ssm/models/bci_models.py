@@ -4,6 +4,8 @@ import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
 import torch.nn.functional as F
+from deep_ssm.mixers.s5 import SequenceLayer
+from typing import Optional, List
 
 
 class BaseDecoder(nn.Module):
@@ -202,25 +204,28 @@ class MambaDecoder(BaseDecoder):
         self,
         neural_dim,
         n_classes,
+        # model parameters
         d_model,
         d_state,
         d_conv,
         expand_factor,
         layer_dim,
-        nDays=24,
-        strideLen=4,
-        kernelLen=14,
-        gaussianSmoothWidth=0,
         bidirectional_input=False,
         bidirectional=False,
-        unfolding=True,
         mamba_bi_new=True,
-        input_nonlinearity="softsign",
         fused_add_norm=False,
         rms_norm=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
         dropout=0.0,
+        # preprocessing parameters
+        unfolding=True,
+        nDays=24,
+        strideLen=4,
+        kernelLen=14,
+        gaussianSmoothWidth=0,
+        input_nonlinearity="softsign",
+        # additional preprocessing parameters
         normalize_batch=False,
         init_embedding_layer=False,
         include_relu=False,
@@ -337,6 +342,145 @@ class MambaDecoder(BaseDecoder):
         return seq_out
 
 
+class S5Decoder(BaseDecoder):
+    def __init__(
+        self,
+        neural_dim,
+        n_classes,
+        # preprocessing parameters
+        nDays=24,
+        strideLen=4,
+        kernelLen=14,
+        gaussianSmoothWidth=0,
+        unfolding=True,
+        input_nonlinearity="softsign",
+        # processing parameters
+        normalize_batch=False,
+        init_embedding_layer=False,
+        include_relu=False,
+        fcc_layers=False,
+        # model parameters
+        d_model=256,
+        ssm_size=384,
+        n_layers=4, 
+        bidirectional=False,
+        conj_sym=False,
+        dropout=0.1,
+        prenorm=False,
+        batchnorm=False,
+        bn_momentum=0.95,
+        bandlimit=None,
+    ):
+        super(S5Decoder, self).__init__(
+            neural_dim=neural_dim,
+            nDays=nDays,
+            strideLen=strideLen,
+            kernelLen=kernelLen,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            unfolding=unfolding,
+            input_nonlinearity=input_nonlinearity,
+        )
+        self.normalize_batch = normalize_batch
+        self.fcc_layers = fcc_layers
+        self.n_layers = n_layers
+        self.include_relu = include_relu
+
+        if unfolding:
+          input_dims = self.neural_dim * kernelLen
+        else:
+          input_dims = self.neural_dim
+
+        # input dimension to model dimension
+        self.linear_input = nn.Linear(input_dims, d_model)
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Block of model layers
+        self.backbone = nn.Sequential(*[
+            SequenceLayer(d_model=d_model,
+                    ssm_size=ssm_size,
+                    bidirectional=bidirectional,
+                    conj_sym=conj_sym,
+                    dropout=dropout,
+                    prenorm=prenorm,
+                    batchnorm=batchnorm,
+                    bn_momentum=bn_momentum,
+                    bandlimit=bandlimit,
+                    ) for _ in range(self.n_layers)
+        ])
+
+        self.fc_decoder_out = nn.Linear(d_model, n_classes + 1)  # +1 for CTC blank
+
+        # Initialize embedding weights:
+        if init_embedding_layer:
+            for layer in [self.linear_input, self.fc_decoder_out]:
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
+
+        if self.fcc_layers:
+            d_ff = dff or 4*d_output
+            self.activation = F.relu if activation == 'relu' else F.gelu
+            self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
+            self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
+            self.norm2 = nn.LayerNorm(d_model)
+
+
+    def forward(self, neuralInput: torch.Tensor, dayIdx: torch.Tensor, states: Optional[List[torch.Tensor]] = None):
+        """
+        Forward pass of the Decoder
+        Args:
+            neuralInput: (batch_size x seq_len x num_features)
+            dayIdx: (batch_size, )
+
+        Returns:
+
+        """
+        if self.normalize_batch:
+            dim_ = 1
+            means = neuralInput.mean(dim_, keepdim=True).detach() # B x 1 x D
+            neuralInput = neuralInput - means
+            stdev = torch.sqrt(torch.var(neuralInput, dim=dim_, keepdim=True, unbiased=False) + 1e-5)  # B x 1 x D
+            neuralInput /= stdev
+
+        # Preprocess batch
+        stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
+
+        hidden_states = self.linear_input(stridedInputs)
+        # include relu
+        if self.include_relu:
+            hidden_states = torch.relu(hidden_states)
+    
+        #hidden_states = self.dropout(hidden_states)
+
+        if states is None:
+            states = self.initial_state(hidden_states.shape[0])
+
+        new_states = []
+        for i, layer in enumerate(self.backbone):
+            hidden_states, state = layer(hidden_states, states[i])  # Pass the current state to the current layer
+            new_states.append(state)  # Collect the updated state
+
+        #hidden_states, states = self.backbone(hidden_states, states)
+
+        # Pass through FCC layers:
+        if self.fcc_layers:
+            y = hidden_states
+            y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
+            y = self.dropout(self.conv2(y).transpose(-1, 1))
+            hidden_states = self.norm2(hidden_states + y)
+
+        seq_out = self.fc_decoder_out(hidden_states)
+
+        return seq_out
+
+    def initial_state(self, batch_size):
+        # init different A layer:
+        states = []
+        for layer_idx in range(self.n_layers):
+
+            state_layer_idx = self.backbone[layer_idx].seq.initial_state(batch_size)
+            states.append(state_layer_idx)
+        return states
+
 class SashimiDecoder(BaseDecoder):
     def __init__(
         self,
@@ -422,5 +566,6 @@ class SashimiDecoder(BaseDecoder):
 
         # Project the hidden states to the number of classes
         seq_out = self.fc_decoder_out(hidden_states)
+
         return seq_out
 

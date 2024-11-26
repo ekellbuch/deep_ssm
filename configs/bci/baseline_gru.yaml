@@ -74,6 +74,7 @@ trainer_cfg:
 
 
 eval_cfg:
+  eval_only: 0
 
 hydra:
   run:
