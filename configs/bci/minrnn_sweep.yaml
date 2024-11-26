@@ -31,8 +31,8 @@ model_cfg:
     neural_dim: 256 #nInputFeatures
     n_classes: 40 #nClasses
     # gru params
-    hidden_dim: 1024, 2048, 4096 #nUnits
-    layer_dim: 1,2,3,4 #nLayers
+    hidden_dim: choice(1024, 2048, 4096) #nUnits
+    layer_dim: choice(1,2,3,4) #nLayers
     dropout: 0.4
     bidirectional: true
     # base decoder parameters:
@@ -41,12 +41,12 @@ model_cfg:
     strideLen: 4
     kernelLen: 32
     input_nonlinearity: "softsign"
-    num_iters: 2,3 # number of deer iterations
+    num_iters: choice(2,3) # number of deer iterations
 
 optimizer_cfg:
   type: "adam"
   configs:
-    lr: 0.002, 0.006, 0.02, 0.06 # lrStart
+    lr: choice(0.002, 0.006, 0.02, 0.06) # lrStart
     betas: [0.9, 0.999]
     eps: 0.1
     weight_decay: 1e-5  #l2_decay
