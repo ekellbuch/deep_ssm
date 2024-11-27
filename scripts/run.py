@@ -15,7 +15,7 @@ import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
 
 
-@hydra.main(config_path="../configs/bci", config_name="quasi_minrnn", version_base=None)
+@hydra.main(config_path="../configs/bci", config_name="baseline_gru", version_base=None)
 def main(args: DictConfig) -> None:
     train(args)
     return
@@ -41,8 +41,7 @@ def train(args):
           kwargs = dict()
 
         logger = WandbLogger(name=args.experiment_name,
-                             project=args.project_name, 
-                             entity="xavier_gonzalez", **kwargs)
+                             project=args.project_name, **kwargs)
 
         args_as_dict = OmegaConf.to_container(args)
         logger.log_hyperparams(args_as_dict)
@@ -91,22 +90,12 @@ def train(args):
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
-    # Train model (trying to be graceful to oom erros in sweeps)
-    # if not args.eval_cfg.get("eval_only", 0):
-    #   trainer.fit(model=model, datamodule=datamodule)
-    #   ckpt_path = None
-    # else:
-    #   ckpt_path = args.eval_cfg.get("ckpt_path", None)
-    try:
-      if not args.eval_cfg.get("eval_only", 0):
-        trainer.fit(model=model, datamodule=datamodule)
-        ckpt_path = None
-      else:
-        ckpt_path = args.eval_cfg.get("ckpt_path", None)
-    except RuntimeError as e:
-      print(e)
-      torch.cuda.empty_cache()
-      return
+    # Train model
+    if not args.eval_cfg.get("eval_only", 0):
+      trainer.fit(model=model, datamodule=datamodule)
+      ckpt_path = None
+    else:
+      ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
     # Test model
     trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
