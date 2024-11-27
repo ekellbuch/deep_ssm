@@ -10,7 +10,7 @@ seed: 0
 data_cfg:
   batchSize: 64
   num_workers: 0
-  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/brain2text_competition_data.pkl" # ptDecoder_ctc"
   # transformations:
   whiteNoiseSD: 0.8  # add white noise
   constantOffsetSD: 0.2  # add constant offset
@@ -74,6 +74,7 @@ trainer_cfg:
 
 
 eval_cfg:
+  eval_only: false
 
 hydra:
   run:

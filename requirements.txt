@@ -8,8 +8,8 @@ scikit-learn==1.5.1
 transformers==4.42.4
 wandb
 torchtyping
-causal-conv1d
-triton==2.2.0
-mamba-ssm[causal-conv1d]  # temporary flag to install selective_scan_cuda 
+#causal-conv1d
+#triton==2.2.0
+#mamba-ssm[causal-conv1d]  # temporary flag to install selective_scan_cuda 
 edit-distance
 pyparsing
