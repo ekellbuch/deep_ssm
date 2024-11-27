@@ -12,3 +12,5 @@ torchtyping
 triton
 edit-distance
 pyparsing
+causal-conv1d
+mamba-ssm[causal-conv1d]
