@@ -12,7 +12,8 @@ export DEEP_SSM_DATA=/scratch/groups/swl1
 module load cuda/12.4
 
 
-source /scratch/users/xavier18/miniconda3/bin/activate deep_ssm
+eval "$(conda shell.bash hook)"
+conda activate deep_ssm
 
 # Debugging
 env | grep PATH
