@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
-from deep_ssm.mixers.minrnn import pRNN
+from deep_ssm.mixers.prnn import pRNN
 import torch.nn.functional as F
 
 class BaseDecoder(nn.Module):
