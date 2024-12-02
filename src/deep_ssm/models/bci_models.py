@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
-from deep_ssm.mixers.minrnn import MinRNN
+from deep_ssm.mixers.minrnn import pRNN
 import torch.nn.functional as F
 
 class BaseDecoder(nn.Module):
@@ -197,7 +197,7 @@ class GRUDecoder(BaseDecoder):
         return seq_out
 
 
-class MinRNNDecoder(BaseDecoder):
+class pRNNDecoder(BaseDecoder):
     def __init__(
         self,
         neural_dim,
@@ -212,9 +212,11 @@ class MinRNNDecoder(BaseDecoder):
         unfolding=True,
         bidirectional=False,
         input_nonlinearity="softsign",
-        num_iters=2, # number of iterations for quasi-DEER
+        num_iters=2,  # number of iterations for quasi-DEER
+        method="minrnn",  # minrnn or gru
+        parallel=True,  # parallel implementation
     ):
-        super(MinRNNDecoder, self).__init__(
+        super(pRNNDecoder, self).__init__(
             neural_dim=neural_dim,
             nDays=nDays,
             strideLen=strideLen,
@@ -234,7 +236,7 @@ class MinRNNDecoder(BaseDecoder):
         else:
             input_dims = self.neural_dim
 
-        self.minrnn_decoder = MinRNN(
+        self.rnn_decoder = pRNN(
             input_size=input_dims,
             hidden_size=hidden_dim,
             num_layers=layer_dim,
@@ -242,13 +244,16 @@ class MinRNNDecoder(BaseDecoder):
             dropout=dropout,
             bidirectional=True,
             num_iters=num_iters,
+            method=method,
+            parallel=parallel,
         )
 
-        # for name, param in self.gru_decoder.named_parameters():
-        #     if "weight_hh" in name:
-        #         nn.init.orthogonal_(param)
-        #     if "weight_ih" in name:
-        #         nn.init.xavier_uniform_(param)
+        if method == "gru":
+            for name, param in self.rnn_decoder.named_parameters():
+                if "weight_hh" in name:
+                    nn.init.orthogonal_(param)
+                if "weight_ih" in name:
+                    nn.init.xavier_uniform_(param)
 
         self.fc_decoder_out = nn.Linear(
             self.hidden_dim * (2 if self.bidirectional else 1), n_classes + 1
@@ -267,7 +272,7 @@ class MinRNNDecoder(BaseDecoder):
         ).requires_grad_()
 
         # Apply GRU Layer
-        hid, _ = self.minrnn_decoder(stridedInputs, h0.detach())
+        hid, _ = self.rnn_decoder(stridedInputs, h0.detach())
 
         # Apply Decoder
         seq_out = self.fc_decoder_out(hid)
