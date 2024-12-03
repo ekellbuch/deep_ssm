@@ -50,7 +50,7 @@ def test_prnn():
     assert output.shape == (batch, seqlen, hidden_size)
     assert hidden.shape == (D, batch, cfg.hidden_size)
 
-gi    torch.manual_seed(42)
+    torch.manual_seed(42)
     gru_model = nn.GRU(cfg.input_size,
                        cfg.hidden_size, 
                        cfg.num_layers, 
