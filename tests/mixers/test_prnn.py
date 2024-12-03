@@ -21,6 +21,7 @@ def test_prnn():
                  batch_first=True, 
                  dropout=0, 
                  bidirectional=True, 
+                 num_iters=2,
                  method="gru", 
                  parallel=False):
             self.input_size = input_size
@@ -31,6 +32,7 @@ def test_prnn():
             self.bidirectional = bidirectional
             self.method = method
             self.parallel = parallel
+            self.num_iters = num_iters
 
     # Create an instance of Arguments
     cfg = Arguments()
@@ -68,7 +70,48 @@ def test_prnn():
     assert gru_params == gru_params
     assert torch.allclose(output, output1)
     assert torch.allclose(hidden, hidden1)
+
+    # Test backward pass
+    loss_fn = nn.MSELoss()
+
+    # Compute loss and gradients for pRNN
+    prnn_loss = loss_fn(output, torch.zeros_like(output))
+    prnn_loss.backward()
+    prnn_grads = [p.grad.clone() for p in prnn.parameters()]
+
+    # Compute loss and gradients for GRU
+    gru_loss = loss_fn(output1, torch.zeros_like(output1))
+    gru_loss.backward()
+    gru_grads = [p.grad.clone() for p in gru_model.parameters()]
+
+    # Compare gradients
+    for prnn_grad, gru_grad in zip(prnn_grads, gru_grads):
+        assert torch.allclose(prnn_grad, gru_grad, atol=1e-5), "Gradient mismatch between pRNN and GRU"
+
+
+    # now check convergence runs with fixed number of iterations
+    cfg2 = Arguments(parallel=True, num_iters=10)
+
+    torch.manual_seed(42)
+    prnn2 = pRNN(**vars(cfg2))
+    output2, hidden2 = prnn2(x)
+
+    assert output2.shape == (batch, seqlen, hidden_size)
+    assert hidden2.shape == (D, batch, cfg.hidden_size)
+
+    #print((output2- output).abs().max())
+    assert torch.allclose(output, output2)
+    assert torch.allclose(hidden, hidden2)
     print("All tests passed")
+
+    # Compute loss and gradients for pRNN2
+    prnn2_loss = loss_fn(output2, torch.zeros_like(output2))
+    prnn2_loss.backward()
+    prnn2_grads = [p.grad.clone() for p in prnn2.parameters()]
+
+    # Compare gradients
+    for prnn2_grad, gru_grad in zip(prnn2_grads, gru_grads):
+        assert torch.allclose(prnn2_grad, gru_grad, atol=1e-5), "Gradient mismatch between pRNN and GRU"
 
 
 if __name__ == "__main__":
