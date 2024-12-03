@@ -12,6 +12,7 @@ torch.autograd.set_detect_anomaly(True)
 
 parallel_scan = jax.lax.associative_scan
 
+
 def discretize_jax(Lambda, B_tilde, Delta):
     """ Discretize a diagonalized, continuous-time linear SSM
     Args:
@@ -59,46 +60,6 @@ def apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence):
     # Compute SSM output sequence
     ys = jax.vmap(lambda x, u: (C_tilde @ x + D * u).real)(xs, input_sequence)
     return ys, xs[-1]
-
-
-def torch_associative_scan(gates, tokens):
-    """
-    PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
-
-    Args:
-        gates: Complex tensor representing the gates of shape (batch_size, seq_len, dim).
-        tokens: Complex tensor representing the tokens of shape (batch_size, seq_len, dim).
-
-    Returns:
-        A tuple of tensors (scanned_gates, scanned_tokens) where:
-            scanned_gates: The cumulative product of gates.
-            scanned_tokens: The cumulative result of applying the recurrence relation.
-
-    """
-    seq_len = gates.shape[-2]
-
-    # Initialize outputs
-    scanned_gates = torch.zeros_like(gates)
-    scanned_tokens = torch.zeros_like(tokens)
-
-    # Set the initial values
-    scanned_gates[..., 0, :] = gates[..., 0, :]
-    scanned_tokens[..., 0, :] = tokens[..., 0, :]
-
-    # Temporary tensors for computation
-    current_gates = gates[..., 0, :]
-    current_tokens = tokens[..., 0, :]
-
-    for t in range(1, seq_len):
-        # Compute new values
-        current_gates = gates[..., t, :] * current_gates
-        current_tokens = gates[..., t, :] * current_tokens + tokens[..., t, :]
-
-        # Assign to output tensors
-        scanned_gates[..., t, :] = current_gates
-        scanned_tokens[..., t, :] = current_tokens
-
-    return scanned_gates, scanned_tokens
 
 
 def apply_ssm_jax_naive(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
@@ -165,6 +126,7 @@ def batch_apply_S5_layer_jax(params, input_sequences):
     return jax.vmap(apply_S5_layer_jax, in_axes=(None, 0))(params, input_sequences)
 
 
+# ----------------- PyTorch functions ----------------- 
 @torch.jit.script
 def binary_operator(
   q_i: Tuple[torch.Tensor, torch.Tensor], q_j: Tuple[torch.Tensor, torch.Tensor]
@@ -212,6 +174,47 @@ def discretize(Lambda: torch.Tensor,
   Lambda_bar = torch.exp(Lambda * Delta)
   B_bar = (1/ Lambda * (Lambda_bar - Identity))[..., None] * B_tilde
   return Lambda_bar, B_bar
+
+
+
+def torch_associative_scan(gates, tokens):
+    """
+    PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
+
+    Args:
+        gates: Complex tensor representing the gates of shape (batch_size, seq_len, dim).
+        tokens: Complex tensor representing the tokens of shape (batch_size, seq_len, dim).
+
+    Returns:
+        A tuple of tensors (scanned_gates, scanned_tokens) where:
+            scanned_gates: The cumulative product of gates.
+            scanned_tokens: The cumulative result of applying the recurrence relation.
+
+    """
+    seq_len = gates.shape[-2]
+
+    # Initialize outputs
+    scanned_gates = torch.zeros_like(gates)
+    scanned_tokens = torch.zeros_like(tokens)
+
+    # Set the initial values
+    scanned_gates[..., 0, :] = gates[..., 0, :]
+    scanned_tokens[..., 0, :] = tokens[..., 0, :]
+
+    # Temporary tensors for computation
+    current_gates = gates[..., 0, :]
+    current_tokens = tokens[..., 0, :]
+
+    for t in range(1, seq_len):
+        # Compute new values
+        current_gates = gates[..., t, :] * current_gates
+        current_tokens = gates[..., t, :] * current_tokens + tokens[..., t, :]
+
+        # Assign to output tensors
+        scanned_gates[..., t, :] = current_gates
+        scanned_tokens[..., t, :] = current_tokens
+
+    return scanned_gates, scanned_tokens
 
 
 def apply_ssm(
@@ -270,42 +273,6 @@ def apply_ssm(
     return y, xs[-1][:Lambda_bars.shape[-1]]
   else:
     return y, xs[-1]
-
-
-def apply_ssm_broken(Lambda_bar, B_bar, C_tilde, D, input_sequence):
-    """
-    Compute the LxH output of discretized SSM given an LxH input.
-    Args:
-        Lambda_bar (complex64): discretized diagonal state matrix (P,)
-        B_bar (complex64): discretized input matrix (P, H)
-        C_tilde (complex64): output matrix (H, P)
-        D (float32): feedthrough matrix (H,)
-        input_sequence (float32): input sequence of features (L, H)
-    Returns:
-        ys (float32): the SSM outputs (S5 layer preactivations) (L, H)
-    """
-    cinput_sequence = input_sequence.type(Lambda_bar.dtype)
-
-    L, H = cinput_sequence.shape  # Sequence length and input feature dimension
-    P = Lambda_bar.shape[0]     # Number of states
-
-    # Initialize latent state sequence (x_t)
-    xs = torch.zeros(L, P, dtype=Lambda_bar.dtype, device=input_sequence.device)
-    
-    # Compute the first latent state (initial condition)
-    Bu_elements = B_bar @ cinput_sequence.T  # Shape: (P, L)
-    Bu_elements = Bu_elements.T  # Shape: (L, P)
-
-    # Iteratively compute latent state sequence
-    for t in range(1, L):
-        xs[t] = Lambda_bar * xs[t - 1] + Bu_elements[t]
-
-    # Compute the output sequence
-    ys = torch.empty(L, H, dtype=input_sequence.dtype, device=input_sequence.device)
-    for t in range(L):
-        ys[t] = (C_tilde @ xs[t] + D * input_sequence[t]).real
-
-    return ys, xs[-1]
 
 
 def apply_S5_layer(params, input_sequence):
