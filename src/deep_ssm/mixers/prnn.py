@@ -6,9 +6,12 @@ Using quasi-DEER!
 import torch
 import torch.nn as nn
 import numpy as np
-from accelerated_scan.warp import (
-    scan,
-)  # from https://github.com/proger/accelerated-scan
+try:
+    from accelerated_scan.warp import (
+        scan,
+    )  # from https://github.com/proger/accelerated-scan
+except:
+    from accelerated_scan.ref import scan
 
 
 def quasi_deer_torch(
@@ -94,7 +97,7 @@ def quasi_deer_torch(
 
 
 class MinRNNCell(nn.Module):
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size, hidden_size, bias=False):
         super(MinRNNCell, self).__init__()
         self.hidden_size = hidden_size
         self.input_size = input_size
@@ -209,35 +212,26 @@ class pRNN(nn.Module):
         self.num_directions = num_directions
         self.parallel = parallel
 
-        if method == "minrnn":
-            self.forward_cells = nn.ModuleList(
-                [
-                    MinRNNCell(
-                        input_size if i == 0 else hidden_size * num_directions,
-                        hidden_size,
-                    )
-                    for i in range(num_layers)
-                ]
-            )
-        elif method == "gru":
-            self.forward_cells = nn.ModuleList(
-                [
-                    AugmentedGRUCell(
-                        input_size if i == 0 else hidden_size * num_directions,
-                        hidden_size,
-                    )
-                    for i in range(num_layers)
-                ]
-            )
-        else:
-            raise ValueError(f"Unknown method {method}")
+        method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
+        self.forward_cells = nn.ModuleList(
+            [
+                method_fn[method](
+                    input_size if i == 0 else hidden_size * num_directions,
+                    hidden_size,
+                    bias=bias,
+                )
+                for i in range(num_layers)
+            ]
+        )
+ 
         if bidirectional:
             self.backward_cells = nn.ModuleList(
                 [
-                    MinRNNCell(
+                    method_fn[method](
                         input_size if i == 0 else hidden_size * num_directions,
                         hidden_size,
+                        bias=bias,
                     )
                     for i in range(num_layers)
                 ]
