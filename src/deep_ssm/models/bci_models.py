@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
+from deep_ssm.mixers.prnn import pRNN
 import torch.nn.functional as F
-
 
 class BaseDecoder(nn.Module):
     def __init__(
@@ -154,9 +154,9 @@ class GRUDecoder(BaseDecoder):
         self.dropout = dropout
 
         if unfolding:
-          input_dims = self.neural_dim * kernelLen
+            input_dims = self.neural_dim * kernelLen
         else:
-          input_dims = self.neural_dim
+            input_dims = self.neural_dim
 
         self.gru_decoder = nn.GRU(
             input_dims,
@@ -191,6 +191,88 @@ class GRUDecoder(BaseDecoder):
 
         # Apply GRU Layer
         hid, _ = self.gru_decoder(stridedInputs, h0.detach())
+
+        # Apply Decoder
+        seq_out = self.fc_decoder_out(hid)
+        return seq_out
+
+
+class pRNNDecoder(BaseDecoder):
+    def __init__(
+        self,
+        neural_dim,
+        n_classes,
+        hidden_dim,
+        layer_dim,
+        nDays=24,
+        dropout=0,
+        strideLen=4,
+        kernelLen=14,
+        gaussianSmoothWidth=0,
+        unfolding=True,
+        bidirectional=False,
+        input_nonlinearity="softsign",
+        num_iters=2,  # number of iterations for quasi-DEER
+        method="minrnn",  # minrnn or gru
+        parallel=True,  # parallel implementation
+    ):
+        super(pRNNDecoder, self).__init__(
+            neural_dim=neural_dim,
+            nDays=nDays,
+            strideLen=strideLen,
+            kernelLen=kernelLen,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            unfolding=unfolding,
+            input_nonlinearity=input_nonlinearity,
+        )
+
+        self.layer_dim = layer_dim
+        self.bidirectional = bidirectional
+        self.hidden_dim = hidden_dim
+        self.dropout = dropout
+
+        if unfolding:
+            input_dims = self.neural_dim * kernelLen
+        else:
+            input_dims = self.neural_dim
+
+        self.rnn_decoder = pRNN(
+            input_size=input_dims,
+            hidden_size=hidden_dim,
+            num_layers=layer_dim,
+            batch_first=True,
+            dropout=dropout,
+            bidirectional=True,
+            num_iters=num_iters,
+            method=method,
+            parallel=parallel,
+        )
+
+        if method == "gru":
+            for name, param in self.rnn_decoder.named_parameters():
+                if "weight_hh" in name:
+                    nn.init.orthogonal_(param)
+                if "weight_ih" in name:
+                    nn.init.xavier_uniform_(param)
+
+        self.fc_decoder_out = nn.Linear(
+            self.hidden_dim * (2 if self.bidirectional else 1), n_classes + 1
+        )  # +1 for CTC blank
+
+    def forward(self, neuralInput, dayIdx):
+        # Preprocess the input (e.g., Gaussian smoothing and unfolding)
+        stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
+
+        # Initialize hidden state
+        h0 = torch.zeros(
+            self.layer_dim * (2 if self.bidirectional else 1),
+            stridedInputs.size(0),
+            self.hidden_dim,
+            device=neuralInput.device,
+        ).requires_grad_()
+
+        # Apply GRU Layer
+        hid, _ = self.rnn_decoder(stridedInputs, h0.detach())
 
         # Apply Decoder
         seq_out = self.fc_decoder_out(hid)
@@ -319,7 +401,7 @@ class MambaDecoder(BaseDecoder):
         # include relu
         if self.include_relu:
             hidden_states = torch.relu(hidden_states)
-    
+
         hidden_states = self.dropout(hidden_states)
 
         # Pass through the mixer
@@ -423,4 +505,3 @@ class SashimiDecoder(BaseDecoder):
         # Project the hidden states to the number of classes
         seq_out = self.fc_decoder_out(hidden_states)
         return seq_out
-

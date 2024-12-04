@@ -1,9 +1,8 @@
 Comment: >
-  # This trains the baseline model (fast_dev_run is a debugging flag)
-  python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+  # parallel rnn
 
 project_name: "speech_bci"
-experiment_name: "baseline_gru"
+experiment_name: "parallel_rnn"
 
 seed: 0
 
@@ -27,7 +26,7 @@ module_cfg:
   type: "bci"
 
 model_cfg:
-  type: "bci_gru"
+  type: "bci_prnn"
   configs:
     neural_dim: 256 #nInputFeatures
     n_classes: 40 #nClasses
@@ -42,6 +41,9 @@ model_cfg:
     strideLen: 4
     kernelLen: 32
     input_nonlinearity: "softsign"
+    num_iters: 2 # number of deer iterations
+    parallel: true
+    method: "gru"
 
 optimizer_cfg:
   type: "adam"

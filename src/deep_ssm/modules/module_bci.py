@@ -47,7 +47,7 @@ class BCIDecoder(L.LightningModule):
     return loss
 
   def validation_step(self, batch, batch_idx):
-    self._custom_step(batch, batch_idx, flag_name='validation', compute_cer=False)
+    self._custom_step(batch, batch_idx, flag_name='validation', compute_cer=True) # xg switch to true to look at CER on val
 
   def test_step(self, batch, batch_idx):
     self._custom_step(batch, batch_idx, flag_name='test')

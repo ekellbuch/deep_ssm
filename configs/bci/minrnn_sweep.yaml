@@ -1,14 +1,13 @@
 Comment: >
-  # This trains the baseline model (fast_dev_run is a debugging flag)
-  python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+  # Try to set up a sweep for the minrnn model. sweeps over hidden_dim, layer_dim, num_iters, and lr.
 
 project_name: "speech_bci"
-experiment_name: "baseline_gru"
+experiment_name: "quasi_minrnn"
 
 seed: 0
 
 data_cfg:
-  batchSize: 64
+  batchSize: 64 # 64
   num_workers: 0
   datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
   # transformations:
@@ -27,13 +26,13 @@ module_cfg:
   type: "bci"
 
 model_cfg:
-  type: "bci_gru"
+  type: "bci_minrnn"
   configs:
     neural_dim: 256 #nInputFeatures
     n_classes: 40 #nClasses
     # gru params
-    hidden_dim: 1024 #nUnits
-    layer_dim: 5 #nLayers
+    hidden_dim: choice(1024, 2048, 4096) #nUnits
+    layer_dim: choice(1,2,3,4) #nLayers
     dropout: 0.4
     bidirectional: true
     # base decoder parameters:
@@ -42,11 +41,12 @@ model_cfg:
     strideLen: 4
     kernelLen: 32
     input_nonlinearity: "softsign"
+    num_iters: choice(2,3) # number of deer iterations
 
 optimizer_cfg:
   type: "adam"
   configs:
-    lr: 0.02  # lrStart
+    lr: choice(0.002, 0.006, 0.02, 0.06) # lrStart
     betas: [0.9, 0.999]
     eps: 0.1
     weight_decay: 1e-5  #l2_decay
@@ -76,6 +76,10 @@ trainer_cfg:
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
 
+defaults:
+  - override hydra/sweeper: basic
+  - override hydra/launcher: basic
+
 hydra:
-  run:
-    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ./sweeps/${now:%Y-%m-%d}/${now:%H-%M-%S}
