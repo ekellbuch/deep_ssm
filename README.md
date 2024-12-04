@@ -53,7 +53,7 @@ For the rest of these instructions, make sure you are in this `deep_ssm` repo.
 8. `pip install --no-cache-dir -r requirements.txt`
 9. `pip install -e src/`
 
-At this point, you should be able to go into `scripts` and execute `python run.py` (there will be a lot of text, but eventaully you should see the progress bar from tqdm!
+At this point, you should be able to go into `scripts` and execute `python run.py` (there will be a lot of text, but eventually you should see the progress bar from tqdm!
 
 
 ## Baselines:
