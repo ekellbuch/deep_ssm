@@ -160,40 +160,26 @@ class ComplexLinearScan(Function):
         grad_gates = torch.zeros_like(gates, dtype=torch.cfloat)
 
         # Gradient of the loss with respect to the last output
-        grad_current = grad_outputs[..., -1]
-        #grad_tokens[..., -1] = grad_current
+        padded_shifted_gates = torch.cat([gates, torch.ones_like(gates[:, :, :1])], dim=-1)[:, :, 1:].contiguous().conj()
 
-        # tokens not used 
-        """
-        print("Initial grad_outputs: ", grad_outputs)
-        print("Initial grad_current: ", grad_current)
-        print("Initial grad gates", grad_gates)
-        print("Initial grad tokens", grad_tokens)
-        """
-        # Backward scan
-        for t in reversed(range(seq_len)):
-            #print(f"Step {t} backward:")
-            # Gradient for tokens
-            grad_tokens[..., t] += grad_current
-            #print("grad_tokens[..., t]:", grad_tokens[..., t])
+        padded_shifted_gates_rev = torch.flip(padded_shifted_gates, dims=[-1])
+        grad_outputs_rev = torch.flip(grad_outputs, dims=[-1])
 
-            # Gradients for gates
-            if t > 0:
-                grad_gates[..., t] += grad_current * outputs[..., t-1].conj()
-                #print("grad_gates[..., t-1]:", grad_gates[..., t-1])
+        # Forward scan
+        grad_tokens[..., 0] = grad_outputs_rev[..., 0]
+        a_prefix = padded_shifted_gates_rev[..., 0]
+        b_prefix = grad_outputs_rev[..., 0]
 
-                # Propagate to previous state
-                grad_current = grad_current * gates[..., t].conj() + grad_outputs[..., t-1]
-                #print("Updated grad_current:", grad_current)
+        for t in range(1, seq_len):
+            # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (shifted_gates[..., t], grads[..., t])
+            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (padded_shifted_gates_rev[..., t], grad_outputs_rev[..., t]))
+            grad_tokens[..., t] = b_prefix
 
-        #print("Final grad_gates:", grad_gates)
-        #print("Final grad_tokens:", grad_tokens)
-        # Shift grad_gates to match the PyTorch sequential implementation
-        #grad_gates = torch.roll(grad_gates, shifts=1, dims=-1)
-        #grad_gates[..., 0] = 0  # First element should have no gradient
+        padded_outputs = torch.cat([torch.zeros_like(outputs[..., :1]), outputs], dim=-1)[..., :-1]
 
+        grad_tokens = torch.flip(grad_tokens, dims=[-1])
+        grad_gates = grad_tokens * padded_outputs.conj()
         return grad_tokens, grad_gates
-
 
 # -------------------------------------------------------------------------------------------------
 @triton.jit
@@ -408,7 +394,7 @@ class ScanBCT(torch.autograd.Function):
         # grad_tokens: dL / db_t = dL / dx_t
     
         # Padded reverse scan
-        gates, tokens, output_gates, output_tokens = ctx.saved_tensors
+        gates, tokens,  output_tokens = ctx.saved_tensors
         B, C, T = tokens.shape
 
         # Allocate output tensors
@@ -418,9 +404,9 @@ class ScanBCT(torch.autograd.Function):
         d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype)
 
         # Split into real and imaginary parts
+        gates = gates.conj()
         gates_real, gates_imag = gates.real, gates.imag
         grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
-        #tokens_real, tokens_imag = tokens.real, tokens.imag
 
         # Create shifted gates for backward pass
         padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
@@ -453,9 +439,8 @@ class ScanBCT(torch.autograd.Function):
     def setup_context(ctx, inputs, outputs):
         # Define the context setup required for functorch transforms
         gates, tokens = inputs
-        output_gates, output_tokens = outputs
-
-        ctx.save_for_backward(gates, tokens, output_tokens, output_tokens)  # Example: saving inputs that may be needed later
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
         return ctx  # Return context
 
     @staticmethod
@@ -523,8 +508,6 @@ only_reals =[True,False]
 complexities = ["v0", "v1", "v2", "v3", "v4"]
 
 
-#only_reals =[False]
-#complexities = ["v4"]
 @pytest.mark.parametrize("only_real", only_reals)
 @pytest.mark.parametrize("complexity", complexities)
 def test_scan_functions(only_real, complexity):
