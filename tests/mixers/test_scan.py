@@ -1,5 +1,5 @@
 """
-    Compare the forward and backward pass of a parallel scan for linear recurrence using gates and tokens.
+    Compare the forward and backward pass of an associative scan for linear recurrence using gates and tokens.
 
     Example usage for test v0:
     x_t = a_t x_{t-1} + b_t
@@ -91,11 +91,31 @@ def torch_associative_scan(gates, tokens):
     return scanned_gates, scanned_tokens
 
 
+def binary_operator(
+  q_i, q_j
+):
+  """Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
+  Args:
+      q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
+      q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
+  Returns:
+      new element ( A_out, Bu_out )
+      A_out = A_j * A_i
+      Bu_out = A_j * b_i + b_j
+  """
+  A_i, b_i = q_i
+  A_j, b_j = q_j
+
+  return A_j * A_i,  torch.addcmul(b_j, A_j, b_i)
+
+
+
 class ComplexLinearScan(Function):
     @staticmethod
     def forward(ctx, tokens, gates):
         """
         Forward pass for the complex linear scan.
+        x_t = g_t * x_{t-1} + b_t
         Args:
             tokens: Complex tensor of shape (batch, dim, len).
             gates: Complex tensor of shape (batch, dim, len).
@@ -104,16 +124,25 @@ class ComplexLinearScan(Function):
         """
         seq_len = tokens.shape[-1]
         outputs = torch.zeros_like(tokens, dtype=torch.cfloat)
+
+        # Initialize (a_prefix, b_prefix) variables
+        a_prefix = gates[..., 0]
+        b_prefix = tokens[..., 0]
+
+        # initialize x_0 = a_0 * x_0 + b_prefix,  but we assume x_0 = 0
         outputs[..., 0] = tokens[..., 0]
 
-        # Forward scan
         for t in range(1, seq_len):
-            outputs[..., t] = gates[..., t] * outputs[..., t-1] + tokens[..., t]
+            #outputs[..., t] = gates[..., t] * outputs[..., t-1] + tokens[..., t]
 
-        # Save tensors for the backward pass
+            # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (gates[..., t], tokens[..., t])
+            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (gates[..., t], tokens[..., t]))
+            # x_t = a_prefix * x_0 + b_prefix
+            outputs[..., t] = b_prefix
         ctx.save_for_backward(tokens, gates, outputs)
         return outputs
 
+        
     @staticmethod
     def backward(ctx, grad_outputs):
         """
@@ -166,6 +195,7 @@ class ComplexLinearScan(Function):
         return grad_tokens, grad_gates
 
 
+# -------------------------------------------------------------------------------------------------
 @triton.jit
 def complex_mul(a_real, a_imag, b_real, b_imag):
     """Compute complex multiplication."""
@@ -489,8 +519,12 @@ seq_lens = [4]
 def test_scan(batch, dim, seq_len):
 """
 
-only_reals =[False]
-complexities = ["v0", "v4"] #, "v1", "v2", "v3", "v4"]
+only_reals =[True,False]
+complexities = ["v0", "v1", "v2", "v3", "v4"]
+
+
+#only_reals =[False]
+#complexities = ["v4"]
 @pytest.mark.parametrize("only_real", only_reals)
 @pytest.mark.parametrize("complexity", complexities)
 def test_scan_functions(only_real, complexity):
@@ -568,11 +602,11 @@ def test_scan_functions(only_real, complexity):
     tri_tokens_grad = tokens.grad.clone()
 
     # Check forward pass match
-    assert torch.allclose(out_token, outputs, atol=1e-5), f"Forward pass mismatch vanilla {out_token} and custom {outputs}" 
-    assert torch.allclose(out_token, new_t, atol=1e-5),  f"Forward pass mismatch vanilla {out_token} and triton {new_t}" 
+    assert torch.allclose(out_token, outputs, atol=1e-5), print(f"Forward pass mismatch vanilla {out_token} and custom {outputs}" )
+    assert torch.allclose(out_token, new_t, atol=1e-5),  print(f"Forward pass mismatch vanilla {out_token} and triton {new_t}" )
 
     # Check backward pass match
-    assert torch.allclose(seq_tokens_grad, seq2_tokens_grad, atol=1e-5), f"Backward pass mismatch token vanilla {seq_tokens_grad} and custom {seq2_tokens_grad}"
+    assert torch.allclose(seq_tokens_grad, seq2_tokens_grad, atol=1e-5), print(f"Backward pass mismatch token vanilla {seq_tokens_grad} and custom {seq2_tokens_grad}" )
     assert torch.allclose(seq_tokens_grad, tri_tokens_grad, atol=1e-5), f"Backward pass mismatch token vanilla {seq_tokens_grad} and triton {tri_tokens_grad}" 
     assert torch.allclose(seq_gates_grad, seq2_gates_grad, atol=1e-5), f"Backward pass mismatch gates vanilla {seq_gates_grad} and custom {seq2_gates_grad}"
     assert torch.allclose(seq_gates_grad, tri_gates_grad, atol=1e-5), f"Backward pass mismatch gates  vanilla {seq_gates_grad} and triton {tri_gates_grad}"
