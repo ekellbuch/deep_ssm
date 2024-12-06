@@ -54,7 +54,7 @@ def binary_operator_jax(element_i, element_j):
     return A_j * A_i, A_j * Bu_i + Bu_j
 
 
-def apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence):
+def apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence, conj_sym=False, bidirectional=False):
     """ Compute the LxH output of discretized SSM given an LxH input.
     Args:
         Lambda_bar (complex64): discretized diagonal state matrix (P,)
@@ -70,10 +70,17 @@ def apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence):
     elements = (Lambda_elements, Bu_elements) # (L, P), (L, P)
 
     # Compute latent state sequence given input sequence using parallel scan
-    new_gates, xs = parallel_scan(binary_operator_jax, elements) # (L, P)
+    _, xs = parallel_scan(binary_operator_jax, elements) # (L, P)
+
+    if bidirectional:
+       _, xs2 = parallel_scan(binary_operator_jax, elements, reverse=True) # (L, P)
+       xs = jnp.concatenate([xs, xs2], axis=0)
 
     # Compute SSM output sequence
-    ys = jax.vmap(lambda x, u: (C_tilde @ x + D * u).real)(xs, input_sequence)
+    if conj_sym:
+        ys = jax.vmap(lambda x, u: 2 * (C_tilde @ x).real + D * u)(xs, input_sequence)
+    else:
+        ys = jax.vmap(lambda x, u: (C_tilde @ x + D * u).real)(xs, input_sequence)
     return ys, xs[-1]
 
 
@@ -240,6 +247,7 @@ if load_triton:
         return (a_real * b_real - a_imag * b_imag,
                 a_real * b_imag + a_imag * b_real)
 
+
     @triton.jit
     def first_order_op_complex(l_real, l_imag, l_gates_real, l_gates_imag,
                             r_real, r_imag, r_gates_real, r_gates_imag):
@@ -259,10 +267,11 @@ if load_triton:
         # mul =   A_j * Bu_i + Bu_j
         mul_real, mul_imag = complex_mul(r_gates_real, r_gates_imag, l_real, l_imag)
 
-        x_real = mul_real + r_real
-        x_imag = mul_imag + r_imag
+        mul_real = mul_real + r_real
+        mul_imag = mul_imag + r_imag
 
-        return x_real, x_imag, f_real, f_imag
+        return mul_real, mul_imag, f_real, f_imag
+
 
     @triton.jit
     def forward_scan_complex(
@@ -272,34 +281,40 @@ if load_triton:
         tokens_imag,
         output_gates_real,
         output_gates_imag,
-        output_states_real,
-        output_states_imag,
+        output_tokens_real,
+        output_tokens_imag,
         SEQUENCE_LENGTH: tl.constexpr,
         ):
         """
         Forward scan with direct complex number handling.
         """
         sequence_id = tl.num_programs(axis=1) * tl.program_id(axis=0) + tl.program_id(axis=1)
-        strides = tl.arange(0, SEQUENCE_LENGTH) + sequence_id * SEQUENCE_LENGTH
+        strides = 1*(tl.arange(0, SEQUENCE_LENGTH) + sequence_id * SEQUENCE_LENGTH)
 
         # Load data
-        tokens_r = tl.load(tokens_real + strides)
-        tokens_i = tl.load(tokens_imag + strides)
+        #breakpoint()
         gates_r = tl.load(gates_real + strides)
         gates_i = tl.load(gates_imag + strides)
+        tokens_r = tl.load(tokens_real + strides)
+        tokens_i = tl.load(tokens_imag + strides)
+
+        print('\n fwd triton in gates_r, gates_i, tokens_r, tokens_i:')
+        print(gates_r, gates_i,tokens_r, tokens_i)
 
         # Perform scan operation
-        states_r, states_i, gates_r_out, gates_i_out = tl.associative_scan(
+        tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
             (tokens_r, tokens_i, gates_r, gates_i),
             axis=0,
             combine_fn=first_order_op_complex
         )
+        print("\n fwd triton out gates_r_out, gates_i_out:, tokens_new_r, tokens_new_i, ")
+        print(gates_r_out, gates_i_out,tokens_new_r, tokens_new_i)
 
         # Store results
         tl.store(output_gates_real + strides, gates_r_out)
         tl.store(output_gates_imag + strides, gates_i_out)
-        tl.store(output_states_real + strides, states_r)
-        tl.store(output_states_imag + strides, states_i)
+        tl.store(output_tokens_real + strides, tokens_new_r)
+        tl.store(output_tokens_imag + strides, tokens_new_i)
 
     @triton.jit
     def backward_scan_complex(
@@ -321,12 +336,13 @@ if load_triton:
         # Load data in reverse order
         gates_r = tl.load(gates_real + reverse_strides)
         gates_i = tl.load(gates_imag + reverse_strides)
-        grad_r = tl.load(grad_real + reverse_strides *2)
-        grad_i = tl.load(grad_imag + reverse_strides *2)
+        grad_r = tl.load(grad_real + reverse_strides)
+        grad_i = tl.load(grad_imag + reverse_strides)
 
-        #print("Loaded gates_r, gates_i, grad_r, grad_i:")
-        #print(gates_r, gates_i, grad_r, grad_i)
+        print("\n bwd triton in gates_r, gates_i, grad_r, grad_i: )should be flipped)")
+        print(gates_r, gates_i, grad_r, grad_i)
 
+        #breakpoint()
         # Perform backward scan
         tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
             (grad_r, grad_i, gates_r, gates_i),
@@ -334,8 +350,8 @@ if load_triton:
             combine_fn=first_order_op_complex
         )
         # Debug intermediate results
-        #print("tokens_new_r, tokens_new_i, gates_r_out, gates_i_out:")
-        #print(tokens_new_r, tokens_new_i, gates_r_out, gates_i_out)
+        print("\nbwd triton out gates_r_out, gates_i_out, tokens_new_r, tokens_new_i")
+        print( gates_r_out, gates_i_out,tokens_new_r, tokens_new_i)
 
         #print('d_tokens_real computed', tokens_new_r)
         #print('d_gates_real computed', gates_r_out)
@@ -368,6 +384,8 @@ class ScanBCT(torch.autograd.Function):
         tokens_new_real = tokens_new.real
         tokens_new_imag = tokens_new.imag
 
+        print("\nfwd gates_real, gates_imag,tokens_real, tokens_imag, :")
+        print(gates_real, gates_imag,tokens_real, tokens_imag)
         # Forward pass
         forward_scan_complex[(B, C)](
             gates_real, gates_imag,
@@ -377,6 +395,8 @@ class ScanBCT(torch.autograd.Function):
             SEQUENCE_LENGTH=T,
             enable_fp_fusion=False
         )
+        print("\n fwd from triton gates_new, tokens_new:")
+        print(gates_new, tokens_new)
         return gates_new, tokens_new
 
     @staticmethod
@@ -405,6 +425,8 @@ class ScanBCT(torch.autograd.Function):
         padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
         padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[:, :, :1])], dim=-1)[:, :, 1:].contiguous()
 
+        print('\n bwd to triton, padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag:')
+        print(padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag)
         # Backward scan
         backward_scan_complex[(B, C)](
             padded_shifted_gates_real, padded_shifted_gates_imag,
@@ -418,32 +440,17 @@ class ScanBCT(torch.autograd.Function):
         #print('d_gates_real computed', d_gates_real)
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
        
+        print("bwd d_gates_real, d_gates_imag, d_tokens_real, d_tokens_imag:")
+        print(d_gates_real, d_gates_imag, d_tokens_real, d_tokens_imag)
+    
         padded_outputs = torch.cat([torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1)[..., :-1]
-        d_gates =  torch.complex(d_tokens_real,d_tokens_imag) * padded_outputs.conj()
+        d_gates =  torch.complex(d_tokens_real,d_tokens_imag) * padded_outputs.conj() 
 
         # grad_tokens: dL / db_t = dL / dx_{t+1} * g*_{t+1}
-        d_tokens = torch.complex(d_tokens_real, d_tokens_imag) # * gates.conj()
-
+        d_tokens = torch.complex(d_tokens_real, d_tokens_imag) #output_tokens.conj()
+        
         return d_gates, d_tokens
 
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-
-
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-
-    @staticmethod
     def vmap(info, in_dims, gates, tokens):
         """
         Vectorized map for the scan operation:
@@ -468,10 +475,12 @@ class ScanBCT(torch.autograd.Function):
             outputs = [ScanBCT.apply(gates, tokens[i]) for i in range(batch_size)]
             #outputs = [Scan.apply(gates[None,...], x[None,...]) for x in tokens]
             output_gates, output_tokens = zip(*outputs)
-            output_gates = torch.stack(output_gates, dim=0).squeeze()
+            output_gates = torch.stack(output_gates, dim=0)#.squeeze(0)
             output_tokens = torch.stack(output_tokens, dim=0).squeeze(0)
             outputs =output_gates, output_tokens
-
+            # output_gates = torch.Size([1, 1, 2]) 
+            # output_tokens = torch.Size([1, 1, 2]) 
+            output_dims = (0, None)
         #    return torch.vmap(lambda x: Scan.apply(gates, x))(tokens)
         ## Case when gates and tokens are both mapped (same dimensions)
         #elif gate_dim == token_dim:
@@ -479,7 +488,25 @@ class ScanBCT(torch.autograd.Function):
         else:
             raise NotImplementedError("vmap over mismatched dimensions is not supported.")
 
-        return outputs, in_dims
+        return outputs, output_dims
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        # Define the context setup required for functorch transforms
+        gates, tokens = inputs
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
+        return ctx  # Return context
+
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        # Define the context setup required for functorch transforms
+        gates, tokens = inputs
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
+        return ctx  # Return context
+
 
 def scan_tri_complex(gates, tokens):
     """
@@ -491,6 +518,7 @@ def scan_tri_complex(gates, tokens):
     gates = gates.contiguous()
     tokens = tokens.contiguous()
     return ScanBCT.apply(gates, tokens)
+
 
 
 def apply_ssm(
@@ -538,17 +566,11 @@ def apply_ssm(
   # passes 
   #new_gates, xs = torch_associative_scan(Lambda_bars, Bu_elements)
   
-  new_gates2, xs2 = torch_associative_scan(Lambda_bars, Bu_elements)
-  new_gates, xs = scan_tri_complex(Lambda_bars.T[None,...], Bu_elements.T[None,...])
-  new_gates = new_gates.squeeze(0).T
-  xs = xs.squeeze(0).T
-  breakpoint()
-  assert new_gates.shape == new_gates2.shape, f"{new_gates2.shape} vs {new_gates.shape}"
-  assert xs.shape == xs2.shape, f"{xs2.shape} vs {xs.shape}"
+  #new_gates2, xs2 = torch_associative_scan(Lambda_bars, Bu_elements)
+  new_gates, xs = scan_tri_complex(Lambda_bars.mT[None,...], Bu_elements.mT[None,...])
+  new_gates = new_gates.squeeze(0).mT
+  xs = xs.squeeze(0).mT
   if bidirectional:
-    #_, xs2 = associative_scan(Lambda_bars, Bu_element), reverse=True
-    #)
-    #xs = torch.cat((xs, xs2), dim=-1)
     raise NotImplementedError("Bidirectional SSM not implemented")
   # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
 
@@ -650,8 +672,9 @@ def test_match_output(seqlen,num_states,d_model):
     torch_output, torch2 = apply_ssm(Lambda_bar_torch, B_bar_torch, C_tilde, D, input_sequences[0])
     jax_output, jaz2 = apply_ssm_jax(Lambda_bar_jax, B_bar_jax, C_tilde_jax, D_jax, input_sequences_jax[0])
     
-    assert jnp.allclose(torch_output.cpu().detach().numpy(), jax_output, atol=atol, rtol=rtol), "Outputs of apply_ssm do not match"
-    assert jnp.allclose(torch2.cpu().detach().numpy(), jaz2, atol=atol, rtol=rtol), "Outputs of apply_ssm do not match"
+    breakpoint()
+    assert jnp.allclose(torch_output.cpu().detach().numpy(), jax_output, atol=atol, rtol=rtol), print(f"apply_ssm out1 torch{torch_output.cpu().detach().numpy()} jax {jax_output}")
+    assert jnp.allclose(torch2.cpu().detach().numpy(), jaz2, atol=atol, rtol=rtol), print(f"apply_ssm out2 do not match torch{torch2.cpu().detach().numpy()} jax {jaz2}")
 
     # Single sequence example
     output_sequence = batch_apply_S5_layer(params, input_sequences)
@@ -683,7 +706,7 @@ def test_match_output(seqlen,num_states,d_model):
             # pytorch uses the conjugate transpose for complex gradients: (https://github.com/jax-ml/jax/issues/9110)
             # If complex, compare real and imaginary parts separately
             assert jnp.allclose(torch_grad_np.real, jax_grad.real, atol=atol, rtol=rtol), \
-                f"Real parts of gradients {param_id}do not match: {torch_grad_np.real} vs {jax_grad.real}"
+                f"Real parts of gradients {param_id} do not match: {torch_grad_np.real} vs {jax_grad.real}"
             assert jnp.allclose(-1*torch_grad_np.imag, jax_grad.imag, atol=atol, rtol=rtol), \
                 f"Imaginary parts of gradients {param_id} do not match: {-1*torch_grad_np.imag} vs {jax_grad.imag}"
         else:

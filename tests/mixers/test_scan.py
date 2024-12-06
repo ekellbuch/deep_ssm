@@ -189,55 +189,6 @@ def complex_mul(a_real, a_imag, b_real, b_imag):
             a_real * b_imag + a_imag * b_real)
 
 @triton.jit
-def first_order_op_complex_v1(l_real, l_imag, l_gates_real, l_gates_imag,
-                           r_imag, r_real, r_gates_imag, r_gates_real):
-    """Compute the first-order operation directly with real/imag components.
-
-    A_i, Bu_i = (l_real, l_gates_real)
-    A_j, Bu_j = (r_real, r_gates_real)
-    return 
-        A_j * A_i
-        A_j * Bu_i + Bu_j
-    """
-    # Complex multiplication for the gate update
-    # f = A_j * A_i
-    f_real, f_imag = complex_mul(r_real, r_imag, l_real, l_imag)
-
-    # Complex multiplication and addition for state update
-    # mul =   A_j * Bu_i + Bu_j
-    mul_real, mul_imag = complex_mul(r_real, r_imag, l_gates_real, l_gates_imag)
-    mul_real = mul_real + r_gates_real
-    mul_real = mul_real + r_gates_imag
-    # (array([0.40386596], dtype=float32), array([0.], dtype=float32), array([1.], dtype=float32), array([0.], dtype=float32))
-    # l_real, l_imag, l_gates_real, l_gates_imag
-
-    return f_real, f_imag, mul_real, mul_imag
-
-@triton.jit
-def first_order_op_complex_v0(l_real, l_imag, l_gates_real, l_gates_imag,
-                        r_real, r_imag, r_gates_real, r_gates_imag):
-    """Compute the first-order operation directly with real/imag components.
-
-    A_i, Bu_i = (l_gates_real, l_real)
-    A_j, Bu_j = (r_gates_real, r_real)
-    return 
-        A_j * A_i
-        A_j * Bu_i + Bu_j
-    """
-    # Complex multiplication for the gate update
-    # f = A_j * A_i
-    f_real, f_imag = complex_mul(r_gates_real, r_gates_imag,l_gates_real, l_gates_imag)
-
-    # Complex multiplication and addition for state update
-    # mul =   A_j * Bu_i + Bu_j
-    mul_real, mul_imag = complex_mul(r_gates_real, r_gates_imag, l_real, l_imag)
-
-    x_real = mul_real + r_real
-    x_imag = mul_imag + r_imag
-
-    return x_real, x_imag, f_real, f_imag
-
-@triton.jit
 def first_order_op_complex(l_real, l_imag, l_gates_real, l_gates_imag,
                         r_real, r_imag, r_gates_real, r_gates_imag):
     """Compute the first-order operation directly with real/imag components.
@@ -259,15 +210,6 @@ def first_order_op_complex(l_real, l_imag, l_gates_real, l_gates_imag,
     mul_real = mul_real + r_real
     mul_imag = mul_imag + r_imag
 
-    """
-    print("Combine Function Inputs here:")
-    print(f"l_real={l_real}, l_imag={l_imag}")
-    print(f"r_real={r_real}, r_imag={r_imag}")
-    print(f"l_gates_real={l_gates_real}, l_gates_imag={l_gates_imag}")
-    print(f"r_gates_real={r_gates_real}, r_gates_imag={r_gates_imag}")
-    print("Combine Function Outputs:")
-    print(f"mul_real={mul_real}, mul_imag={mul_imag}, f_real={f_real}, f_imag={f_imag}")
-    """
     return mul_real, mul_imag, f_real, f_imag
 
 @triton.jit
@@ -290,11 +232,13 @@ def forward_scan_complex(
     strides = 2 * (tl.arange(0, SEQUENCE_LENGTH) + sequence_id * SEQUENCE_LENGTH)
 
     # Return a tensor whose values are loaded from memory at located specified by the pointer
-    gates_r = tl.load(gates_real + strides)
-    gates_i = tl.load(gates_imag + strides)
     tokens_r = tl.load(tokens_real + strides)
     tokens_i = tl.load(tokens_imag + strides)
+    gates_r = tl.load(gates_real + strides)
+    gates_i = tl.load(gates_imag + strides)
 
+    print("fwd gates_r, gates_i, tokens_r, tokens_i:")
+    print(gates_r, gates_i, tokens_r, tokens_i)
     # Perform scan operation
     tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
         (tokens_r, tokens_i, gates_r, gates_i),
@@ -330,9 +274,6 @@ def backward_scan_complex(
     gates_i = tl.load(gates_imag + reverse_strides)
     grad_r = tl.load(grad_real + reverse_strides *2)
     grad_i = tl.load(grad_imag + reverse_strides *2)
-
-    #print("Loaded gates_r, gates_i, grad_r, grad_i:")
-    #print(gates_r, gates_i, grad_r, grad_i)
 
     # Perform backward scan
     tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
@@ -374,6 +315,9 @@ class ScanBCT(torch.autograd.Function):
         gates_new_imag = gates_new.imag
         tokens_new_real = tokens_new.real
         tokens_new_imag = tokens_new.imag
+
+        print("fwd gates_real, gates_imag,tokens_real, tokens_imag, :")
+        print(gates_real, gates_imag,tokens_real, tokens_imag)
 
         # Forward pass
         forward_scan_complex[(B, C)](
@@ -433,17 +377,6 @@ class ScanBCT(torch.autograd.Function):
 
         return d_gates, d_tokens
 
-
-
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-
-    @staticmethod
     def vmap(info, in_dims, gates, tokens):
         """
         Vectorized map for the scan operation:
@@ -468,10 +401,12 @@ class ScanBCT(torch.autograd.Function):
             outputs = [ScanBCT.apply(gates, tokens[i]) for i in range(batch_size)]
             #outputs = [Scan.apply(gates[None,...], x[None,...]) for x in tokens]
             output_gates, output_tokens = zip(*outputs)
-            output_gates = torch.stack(output_gates, dim=0).squeeze()
+            output_gates = torch.stack(output_gates, dim=0)#.squeeze(0)
             output_tokens = torch.stack(output_tokens, dim=0).squeeze(0)
             outputs =output_gates, output_tokens
-
+            # output_gates = torch.Size([1, 1, 2]) 
+            # output_tokens = torch.Size([1, 1, 2]) 
+            output_dims = (0, None)
         #    return torch.vmap(lambda x: Scan.apply(gates, x))(tokens)
         ## Case when gates and tokens are both mapped (same dimensions)
         #elif gate_dim == token_dim:
@@ -479,8 +414,16 @@ class ScanBCT(torch.autograd.Function):
         else:
             raise NotImplementedError("vmap over mismatched dimensions is not supported.")
 
-        return outputs, in_dims
+        return outputs, output_dims
 
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        # Define the context setup required for functorch transforms
+        gates, tokens = inputs
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
+        return ctx  # Return context
+        
 def scan_tri_complex(gates, tokens):
     """
     Solve a first-order recurrence relation for complex numbers.
