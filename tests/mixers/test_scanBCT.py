@@ -51,7 +51,7 @@ os.environ["TRITON_INTERPRET"]="1"
 os.environ["TRITON_LOG_LEVEL"] = "debug"
 from timeit import timeit
 
-def torch_associative_scan(gates, tokens):
+def torch_associative_scanBCT(gates, tokens):
     """
     PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
 
@@ -110,7 +110,7 @@ def binary_operator(
 
 
 
-class ComplexLinearScan(Function):
+class ComplexLinearScanBCT(Function):
     @staticmethod
     def forward(ctx, gates, tokens):
         """
@@ -406,7 +406,7 @@ class ScanBCT(torch.autograd.Function):
         ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
         return ctx  # Return context
         
-def scan_tri_complex(gates, tokens):
+def scan_BCT_complex(gates, tokens):
     """
     Solve a first-order recurrence relation for complex numbers.
     x_t = a_t x_{t-1} + b_t
@@ -433,31 +433,19 @@ seq_lens = [8]
 """
 
 
-@pytest.mark.parametrize("only_real", only_reals)
-@pytest.mark.parametrize("complexity", complexities)
-@pytest.mark.parametrize("batch", batch_dims)
-@pytest.mark.parametrize("dim", feature_dims)
-@pytest.mark.parametrize("seq_len", seq_lens)
-def test_scan_functions(only_real, complexity, batch, dim, seq_len):
-    # For a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
-    # compare a vanilla pytorch implementation, a custom autograd implementation, and
-    torch.manual_seed(42)
-    #batch, dim, seq_len = 1, 1, 4
-
+def create_inputs(batch, dim, seq_len, complexity, only_real):
     if complexity == "v0":
-        # g_t = 1, 1, 1, 1
-        # b_t = 0, 1, 2, 3
         gates = torch.ones(batch, dim, seq_len, dtype=torch.cfloat)
         tokens = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
     elif complexity == "v1":
         gates = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
-        tokens = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
+        tokens = torch.arange(batch*dim*seq_len).view(batch,dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
     elif complexity == "v2":
         gates = torch.ones(batch, dim, seq_len, dtype=torch.cfloat)
         tokens = torch.randn(batch, dim, seq_len, dtype=torch.cfloat)
     elif complexity == "v3":
         gates = torch.randn(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)
-        tokens = torch.ones(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)
+        tokens = torch.ones(batch*dim*seq_len).view(batch, dim,seq_len).type(torch.cfloat)
     elif complexity == "v4":
         gates = torch.randn(batch, dim, seq_len, dtype=torch.cfloat)
         tokens = torch.randn(batch, dim, seq_len, dtype=torch.cfloat)
@@ -470,12 +458,27 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tokens = tokens.contiguous()
     tokens.requires_grad_(True)
     gates.requires_grad_(True)
+    return gates, tokens
+
+
+@pytest.mark.parametrize("only_real", only_reals)
+@pytest.mark.parametrize("complexity", complexities)
+@pytest.mark.parametrize("batch", batch_dims)
+@pytest.mark.parametrize("dim", feature_dims)
+@pytest.mark.parametrize("seq_len", seq_lens)
+def test_scan_functions(only_real, complexity, batch, dim, seq_len):
+    # For a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
+    # compare a vanilla pytorch implementation, a custom autograd implementation, and
+    torch.manual_seed(42)
+    #batch, dim, seq_len = 1, 1, 4
+
+    gates, tokens = create_inputs(batch, dim, seq_len, complexity, only_real)
 
     # ----------------------------
     # PyTorch Sequential Implementation
     tokens.grad = None  # Reset gradients
     gates.grad = None
-    out_g, out_token = torch_associative_scan(gates, tokens)
+    out_g, out_token = torch_associative_scanBCT(gates, tokens)
 
     # Compute a loss
     loss_seq = out_token.abs().sum()
@@ -489,7 +492,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tokens.grad = None  # Reset gradients
     gates.grad = None
 
-    outputs = ComplexLinearScan.apply(gates, tokens)
+    outputs = ComplexLinearScanBCT.apply(gates, tokens)
 
     # Compute a loss
     loss = outputs.abs().sum()
@@ -503,7 +506,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tokens.grad = None  # Reset gradients
     gates.grad = None
 
-    new_g, new_t = scan_tri_complex(gates, tokens)
+    new_g, new_t = scan_BCT_complex(gates, tokens)
 
     # Compute a loss
     loss_tri = new_t.abs().sum()

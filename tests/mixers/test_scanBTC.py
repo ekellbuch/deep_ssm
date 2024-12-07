@@ -9,7 +9,7 @@ os.environ["TRITON_INTERPRET"]="1"
 os.environ["TRITON_LOG_LEVEL"] = "debug"
 
 
-def torch_associative_scan(gates, tokens):
+def torch_associative_scanBTC(gates, tokens):
     """
     PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
 
@@ -68,7 +68,7 @@ def binary_operator(
 
 
 
-class ComplexLinearScan(Function):
+class ComplexLinearScanBTC(Function):
     @staticmethod
     def forward(ctx, gates, tokens):
         """
@@ -280,7 +280,7 @@ def backward_scan_complex(
     tl.store(d_gates_imag + strides, gates_i_out)
 
 
-class ScanBCT(torch.autograd.Function):
+class ScanBTC(torch.autograd.Function):
     
     @staticmethod
     def forward(gates, tokens):
@@ -379,7 +379,7 @@ class ScanBCT(torch.autograd.Function):
         ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
         return ctx  # Return context
         
-def scan_tri_complex(gates, tokens):
+def scan_BTC_complex(gates, tokens):
     """
     Solve a first-order recurrence relation for complex numbers.
     x_t = a_t x_{t-1} + b_t
@@ -388,7 +388,7 @@ def scan_tri_complex(gates, tokens):
     """
     gates = gates.contiguous()
     tokens = tokens.contiguous()
-    return ScanBCT.apply(gates, tokens)
+    return ScanBTC.apply(gates, tokens)
 
 
 
@@ -448,7 +448,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     # PyTorch Sequential Implementation
     tokens.grad = None  # Reset gradients
     gates.grad = None
-    out_g, out_token = torch_associative_scan(gates, tokens)
+    out_g, out_token = torch_associative_scanBTC(gates, tokens)
 
     # Compute a loss
     loss_seq = out_token.abs().sum()
@@ -462,7 +462,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tokens.grad = None  # Reset gradients
     gates.grad = None
 
-    outputs = ComplexLinearScan.apply(gates,tokens)
+    outputs = ComplexLinearScanBTC.apply(gates,tokens)
 
     # Compute a loss
     loss = outputs.abs().sum()
@@ -476,7 +476,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tokens.grad = None  # Reset gradients
     gates.grad = None
 
-    new_g, new_t = scan_tri_complex(gates, tokens)
+    new_g, new_t = scan_BTC_complex(gates, tokens)
 
     # Compute a loss
     loss_tri = new_t.abs().sum()
