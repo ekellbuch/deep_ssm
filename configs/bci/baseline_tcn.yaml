@@ -33,9 +33,9 @@ model_cfg:
     n_classes: 40 #nClasses
     # tcn params
     hidden_dim: 1024 #nUnits
-    layer_dim: 5 #nLayers
+    layer_dim: 7 #nLayers
     kernel_size: 6
-    dropout: 0.1
+    dropout: 0.4
     # base decoder parameters:
     gaussianSmoothWidth: 2.0
     unfolding: true
