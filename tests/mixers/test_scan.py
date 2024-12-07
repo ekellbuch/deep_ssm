@@ -39,7 +39,7 @@
     df/da_2 = df/dx_2 * dx_2/da_2 + df/dx_3 * dx_3/dx_2 * dx_2/da_2 + df/dx_4 * dx_4/dx_3 * dx_3/dx_2 * dx_2/da_2 = 0
     df/da_1 = 0 (given that x1 = x0 =0)
 
-    """
+"""
 
 import torch
 from torch.autograd import Function
@@ -449,24 +449,30 @@ def test_scan(batch, dim, seq_len):
 
 only_reals =[True,False]
 complexities = ["v0", "v1", "v2", "v3", "v4"]
+batch_dims = [1,2,4, 8]
+feature_dims = [1, 2, 4]
+seq_lens = [4, 8, 16, 256]
 
 
 @pytest.mark.parametrize("only_real", only_reals)
 @pytest.mark.parametrize("complexity", complexities)
-def test_scan_functions(only_real, complexity):
+@pytest.mark.parametrize("batch", batch_dims)
+@pytest.mark.parametrize("dim", feature_dims)
+@pytest.mark.parametrize("seq_len", seq_lens)
+def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     # For a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
     # compare a vanilla pytorch implementation, a custom autograd implementation, and
     torch.manual_seed(42)
-    batch, dim, seq_len = 1, 1, 4
+    #batch, dim, seq_len = 1, 1, 4
 
     if complexity == "v0":
         # g_t = 1, 1, 1, 1
         # b_t = 0, 1, 2, 3
         gates = torch.ones(batch, dim, seq_len, dtype=torch.cfloat)
-        tokens = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)
+        tokens = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
     elif complexity == "v1":
-        gates = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)
-        tokens = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)
+        gates = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
+        tokens = torch.arange(batch*dim*seq_len).view(batch, dim, seq_len).type(torch.cfloat)/(batch*dim*seq_len)
     elif complexity == "v2":
         gates = torch.ones(batch, dim, seq_len, dtype=torch.cfloat)
         tokens = torch.randn(batch, dim, seq_len, dtype=torch.cfloat)
