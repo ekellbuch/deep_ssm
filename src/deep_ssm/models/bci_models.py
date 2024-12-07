@@ -2,7 +2,6 @@ from deep_ssm.data.data_transforms import GaussianSmoothing
 import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
-from deep_ssm.models.audio_models import Sashimi
 from deep_ssm.mixers.prnn import pRNN
 import torch.nn.functional as F
 
@@ -472,6 +471,7 @@ class SashimiDecoder(BaseDecoder):
         )
 
         # Initialize the Sashimi backbone with the necessary parameters
+        from deep_ssm.models.audio_models import Sashimi  # KAW: put import here to avoid other imports
         self.sashimi = Sashimi(
           d_model=d_model,
           n_layers=layer_dim,
