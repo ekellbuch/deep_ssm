@@ -140,6 +140,11 @@ class MinRNNCell(nn.Module):
         return derivative
 
 
+def checkpoint(f):
+    def f_(*args):
+        return torch.utils.checkpoint.checkpoint(f, *args, use_reentrant=True)
+    return f_
+
 class AugmentedGRUCell(nn.GRUCell):
     """
     torch.nn.GRUCell with diagonal derivative
@@ -293,6 +298,7 @@ class pRNN(nn.Module):
 
         return output, h_n
 
+    @checkpoint
     def _process_layer(self, input, h0, cell):
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
