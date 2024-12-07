@@ -11,7 +11,10 @@ try:
         scan,
     )  # from https://github.com/proger/accelerated-scan
 except:
-    from accelerated_scan.ref import scan
+    try:
+        from accelerated_scan.ref import scan
+    except ImportError:
+        print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 
 
 def quasi_deer_torch(
