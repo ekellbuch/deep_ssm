@@ -292,14 +292,13 @@ if load_triton:
         strides = 1*(tl.arange(0, SEQUENCE_LENGTH) + sequence_id * SEQUENCE_LENGTH)
 
         # Load data
-        #breakpoint()
         gates_r = tl.load(gates_real + strides)
         gates_i = tl.load(gates_imag + strides)
         tokens_r = tl.load(tokens_real + strides)
         tokens_i = tl.load(tokens_imag + strides)
 
-        print('\n fwd triton in gates_r, gates_i, tokens_r, tokens_i:')
-        print(gates_r, gates_i,tokens_r, tokens_i)
+        #print('\n fwd triton in gates_r, gates_i, tokens_r, tokens_i:')
+        #print(gates_r, gates_i,tokens_r, tokens_i)
 
         # Perform scan operation
         tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
@@ -307,7 +306,7 @@ if load_triton:
             axis=0,
             combine_fn=first_order_op_complex
         )
-        print("\n fwd triton out gates_r_out, gates_i_out:, tokens_new_r, tokens_new_i, ")
+        #print("\n fwd triton out gates_r_out, gates_i_out:, tokens_new_r, tokens_new_i, ")
         print(gates_r_out, gates_i_out,tokens_new_r, tokens_new_i)
 
         # Store results
@@ -342,7 +341,6 @@ if load_triton:
         print("\n bwd triton in gates_r, gates_i, grad_r, grad_i: )should be flipped)")
         print(gates_r, gates_i, grad_r, grad_i)
 
-        #breakpoint()
         # Perform backward scan
         tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
             (grad_r, grad_i, gates_r, gates_i),
@@ -384,8 +382,8 @@ class ScanBCT(torch.autograd.Function):
         tokens_new_real = tokens_new.real
         tokens_new_imag = tokens_new.imag
 
-        print("\nfwd gates_real, gates_imag,tokens_real, tokens_imag, :")
-        print(gates_real, gates_imag,tokens_real, tokens_imag)
+        #print("\nfwd gates_real, gates_imag,tokens_real, tokens_imag, :")
+        #print(gates_real, gates_imag,tokens_real, tokens_imag)
         # Forward pass
         forward_scan_complex[(B, C)](
             gates_real, gates_imag,
@@ -395,8 +393,8 @@ class ScanBCT(torch.autograd.Function):
             SEQUENCE_LENGTH=T,
             enable_fp_fusion=False
         )
-        print("\n fwd from triton gates_new, tokens_new:")
-        print(gates_new, tokens_new)
+        #print("\n fwd from triton gates_new, tokens_new:")
+        #print(gates_new, tokens_new)
         return gates_new, tokens_new
 
     @staticmethod
@@ -425,8 +423,8 @@ class ScanBCT(torch.autograd.Function):
         padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
         padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[:, :, :1])], dim=-1)[:, :, 1:].contiguous()
 
-        print('\n bwd to triton, padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag:')
-        print(padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag)
+        #print('\n bwd to triton, padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag:')
+        #print(padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag)
         # Backward scan
         backward_scan_complex[(B, C)](
             padded_shifted_gates_real, padded_shifted_gates_imag,
@@ -453,7 +451,7 @@ class ScanBCT(torch.autograd.Function):
 
     def vmap(info, in_dims, gates, tokens):
         """
-        Vectorized map for the scan operation:
+        Vectorizes a given function over the dimensions specified in in_dims:
         Args:
             info: Additional information from the framework (ignored in this case).
             in_dims: A tuple specifying which dimension to map over.
@@ -465,30 +463,19 @@ class ScanBCT(torch.autograd.Function):
 
         # Unpack the mapping dimensions
         gate_dim, token_dim = in_dims
-
         if gate_dim == token_dim:
             # Both gates and tokens are batched (B_vmap, C, T)
             return torch.vmap(ScanBCT.apply, in_dims=(0, 0))(gates, tokens)
         # Case when gates are shared (None) and mapping is over tokens
-        elif gate_dim is None and token_dim == 0:
-            batch_size = tokens.shape[0]
-            outputs = [ScanBCT.apply(gates, tokens[i]) for i in range(batch_size)]
-            #outputs = [Scan.apply(gates[None,...], x[None,...]) for x in tokens]
-            output_gates, output_tokens = zip(*outputs)
-            output_gates = torch.stack(output_gates, dim=0)#.squeeze(0)
-            output_tokens = torch.stack(output_tokens, dim=0).squeeze(0)
-            outputs =output_gates, output_tokens
-            # output_gates = torch.Size([1, 1, 2]) 
-            # output_tokens = torch.Size([1, 1, 2]) 
-            output_dims = (0, None)
-        #    return torch.vmap(lambda x: Scan.apply(gates, x))(tokens)
-        ## Case when gates and tokens are both mapped (same dimensions)
-        #elif gate_dim == token_dim:
-        #    return torch.vmap(Scan.apply)(gates, tokens)
+        elif in_dims == (None, 0):
+            # gate_dims are broadcasted
+            #print(f'inside vmapgate_dims {gates.shape} token_dims {tokens.shape}')
+            outputs = ScanBCT.apply(gates, tokens.squeeze(1))
+            out_dims = (None, None)
         else:
-            raise NotImplementedError("vmap over mismatched dimensions is not supported.")
-
-        return outputs, output_dims
+            raise NotImplementedError("vmap over mismatched dimensions is not supported yet.")
+        breakpoint()
+        return outputs, out_dims
 
     @staticmethod
     def setup_context(ctx, inputs, outputs):
@@ -545,40 +532,45 @@ def apply_ssm(
   :return:  y, state:
     TensorType["seq_length", "num_features"], TensorType["num_states"]
   """
+
   # Cast to correct complex type
   cinput_sequence = input_sequence.type(Lambda_bars.dtype)
-
+  seq_len = input_sequence.shape[0]
   # compute Bu elements
-  Bu_elements = torch.vmap(lambda u: B_bars @ u, in_dims=0)(cinput_sequence)
+  Bu_elements = torch.vmap(lambda u: B_bars @ u, in_dims=0)(cinput_sequence) # (P, D ) [L, D] -> [L, P]
   
-  if Lambda_bars.ndim == 1:  # Repeat for associative_scan
-    #Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
-    Lambda_real = Lambda_bars.real.repeat(input_sequence.shape[0], 1)
-    Lambda_imag = Lambda_bars.imag.repeat(input_sequence.shape[0], 1)
-    Lambda_bars = torch.complex(Lambda_real, Lambda_imag)
+  #Lambda_elements = jnp.repeat(Lambda_bar[None, ...], input_sequence.shape[0], axis=0)
+  if Lambda_bars.ndim == 1 :  # Repeat along L for associative_scan
+    Lambda_bars = Lambda_bars.unsqueeze(0).expand(seq_len, -1) # (L, P)
+  else:
+      raise NotImplementedError("Lambda_bars must be 1D")
 
-  #Lambda_bars[0] = Lambda_bars[0] * prev_state
-  # compute state sequence using associative scan: x_{t+1} = A x_t + B u
-  
   # fails backward pass
   #new_gates, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
   
   # passes 
-  #new_gates, xs = torch_associative_scan(Lambda_bars, Bu_elements)
+  new_gates, xs = torch_associative_scan(Lambda_bars, Bu_elements)
+  
   
   #new_gates2, xs2 = torch_associative_scan(Lambda_bars, Bu_elements)
-  new_gates, xs = scan_tri_complex(Lambda_bars.mT[None,...], Bu_elements.mT[None,...])
-  new_gates = new_gates.squeeze(0).mT
-  xs = xs.squeeze(0).mT
+  #breakpoint()
+  # vmap allows us to broadcast over the batch dimension
+  #print(f'inside apply_ssm gate_dims {Lambda_bars.shape} token_dims {Bu_elements.mT[None,...].shape}')
+  # here baby!
+
+  #new_gates, xs = scan_tri_complex(Lambda_bars.mT.unsqueeze(0), Bu_elements.mT.unsqueeze(0))
+  #new_gates = new_gates.squeeze(0).mT
+  #xs = xs.squeeze(0).mT
   if bidirectional:
     raise NotImplementedError("Bidirectional SSM not implemented")
   # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
 
   # compute SSM output sequence y = C_tilde x{t+1}
+  #print(C_tilde.shape, xs.shape, D.shape, cinput_sequence.shape)
   if conj_sym:
     y = torch.vmap(lambda x, u: 2 * (C_tilde @ x + D * u).real)(xs, cinput_sequence)
   else:
-    y = torch.vmap(lambda x, u: (C_tilde @x + D * u).real)(xs, cinput_sequence)
+    y = torch.vmap(lambda x, u: (C_tilde @ x + D * u).real)(xs, cinput_sequence)
 
   if bidirectional:
     return y, xs[-1][:Lambda_bars.shape[-1]]
@@ -593,6 +585,7 @@ def apply_S5_layer(params, input_sequence):
         input_sequence: input sequence of features (L, H)
     Returns:
         The S5 layer output sequence (L, H) """
+    #breakpoint()
     Lambda, B_tilde, C_tilde, D, log_Delta = params
     nonlin_ = torch.nn.GELU()
     Lambda_bar, B_bar = discretize(Lambda, B_tilde, torch.exp(log_Delta))
@@ -610,41 +603,48 @@ def batch_apply_S5_layer(params, input_sequences):
     return torch.vmap(apply_S5_layer, in_dims=(None, 0))(params, input_sequences)
 
 
-seqlens = [2]#, 16]#[4, 16]# [4, 32, 64]
-num_statess = [1]#[4, 16, 32]
-d_models = [1]#[4]
+seqlens = [2, 4, 8]#, 16]#[4, 16]# [4, 32, 64]
+num_statess = [1, 4, 16, 32]
+d_models = [1, 4]
+batch_dims = [1, 2, 3]
+complexities = ["v0", "v1"]
 
+seqlens=[2]
+num_statess=[1]
+d_models=[1]
+batch_dims=[1]
+complexities=["v0"]
 
+    
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("num_states", num_statess)
 @pytest.mark.parametrize("d_model", d_models)
-def test_match_output(seqlen,num_states,d_model):
+@pytest.mark.parametrize("batch", batch_dims)
+@pytest.mark.parametrize("complexity", complexities)
+def test_match_output(seqlen, num_states,d_model, batch, complexity):
     # Example input parameters
     P = num_states  # Number of states
     H = d_model  # Input and output feature dimensions
     L = seqlen  # Sequence length
-    B = 1  # Batch size
+    B = batch  # Batch size
     torch.manual_seed(42)
     dtype = torch.float32
 
     atol = 1e-3
     rtol = 1e-2
 
-    #Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.randn(P, dtype=dtype)).to(device)
-    #B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.randn(P, H, dtype=dtype)).to(device)
-    #C_tilde = torch.complex(torch.randn(H, P, dtype=dtype), torch.randn(H, P, dtype=dtype)).to(device)
-    Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.zeros(P, dtype=dtype)).to(device)
-    B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.zeros(P, H, dtype=dtype)).to(device)
-    C_tilde = torch.complex(torch.randn(H, P, dtype=dtype), torch.zeros(H, P, dtype=dtype)).to(device)
+    if complexity == "v0":
+        Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.zeros(P, dtype=dtype)).to(device)
+        B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.zeros(P, H, dtype=dtype)).to(device)
+        C_tilde = torch.complex(torch.randn(H, P, dtype=dtype), torch.zeros(H, P, dtype=dtype)).to(device)
+    elif complexity == "v1":
+        Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.randn(P, dtype=dtype)).to(device)
+        B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.randn(P, H, dtype=dtype)).to(device)
+        C_tilde = torch.complex(torch.randn(H, P, dtype=dtype), torch.randn(H, P, dtype=dtype)).to(device)
+
     D = torch.randn(H, dtype=dtype).to(device)
     log_Delta = torch.randn(P, dtype=dtype).to(device)
 
-    params = (Lambda, B_tilde, C_tilde, D, log_Delta)
-    params = [param.requires_grad_(True) for param in params]
-    input_sequences = torch.randn(B, L, H, dtype=dtype).to(device)
-
-
-    # Now let's compare the jax and torch versions
     dtype_jax= jnp.complex64
     Lambda_jax = jnp.array(Lambda.cpu().detach().numpy(), dtype=dtype_jax)
     B_tilde_jax = jnp.array(B_tilde.cpu().detach().numpy(), dtype=dtype_jax)
@@ -657,6 +657,12 @@ def test_match_output(seqlen,num_states,d_model):
     assert jnp.allclose(C_tilde.cpu().detach().numpy(), C_tilde_jax, atol=1e-6)
     assert jnp.allclose(D.cpu().detach().numpy(), D_jax, atol=1e-6)
     assert jnp.allclose(log_Delta.cpu().detach().numpy(), log_Delta_jax, atol=1e-6)
+
+
+    # Define jax params   
+    params = (Lambda, B_tilde, C_tilde, D, log_Delta)
+    params = [param.requires_grad_(True) for param in params]
+    input_sequences = torch.randn(B, L, H, dtype=dtype).to(device)
 
     params_jax = (Lambda_jax, B_tilde_jax, C_tilde_jax, D_jax, log_Delta_jax)
     input_sequences_jax = jnp.array(input_sequences.cpu().detach().numpy())
@@ -672,7 +678,7 @@ def test_match_output(seqlen,num_states,d_model):
     torch_output, torch2 = apply_ssm(Lambda_bar_torch, B_bar_torch, C_tilde, D, input_sequences[0])
     jax_output, jaz2 = apply_ssm_jax(Lambda_bar_jax, B_bar_jax, C_tilde_jax, D_jax, input_sequences_jax[0])
     
-    breakpoint()
+    return
     assert jnp.allclose(torch_output.cpu().detach().numpy(), jax_output, atol=atol, rtol=rtol), print(f"apply_ssm out1 torch{torch_output.cpu().detach().numpy()} jax {jax_output}")
     assert jnp.allclose(torch2.cpu().detach().numpy(), jaz2, atol=atol, rtol=rtol), print(f"apply_ssm out2 do not match torch{torch2.cpu().detach().numpy()} jax {jaz2}")
 

@@ -181,6 +181,27 @@ class ComplexLinearScanBCT(Function):
         grad_gates = grad_tokens * padded_outputs.conj()
         return grad_gates, grad_tokens
 
+    def vmap(info, in_dims, gates, tokens):
+        """
+        A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
+        
+        Args:
+             info: Metadata or additional info for vmap (not used here).
+            in_dims: Tuple specifying the dimension to slice for each input.
+            gates: Input gates tensor of shape (B, T, C) if in_dims[0] is None.
+            tokens: Input tokens tensor of shape (B', B, T, C) if in_dims[1] is 0.
+        Returns:
+            outputs: Output tensor of shape (B', B, T, C).
+        """
+
+        # Handle case where gates is constant (None in in_dims)
+        if in_dims == (None, 0):
+            outputs = ComplexLinearScanBCT.apply(gates, tokens.squeeze(1))
+            out_dims = (None, None)
+        else:
+            raise NotImplementedError("Only (None, 0) is implemented")
+
+        return outputs, out_dims
 # -------------------------------------------------------------------------------------------------
 @triton.jit
 def complex_mul(a_real, a_imag, b_real, b_imag):
@@ -352,6 +373,10 @@ class ScanBCT(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_gates, grad_tokens):
+        """
+        Given the linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
+        we want to compute the gradients of the loss with respect to the gates and tokens.
+        """
         # Given a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
         # dL / dx_t = dL / dx_{t+1} * dx_{t+1}/dx_t = dL / dx_{t+1} * g*_{t+1}
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
@@ -397,6 +422,29 @@ class ScanBCT(torch.autograd.Function):
         d_tokens = torch.complex(d_tokens_real, d_tokens_imag) # * gates.conj()
 
         return d_gates, d_tokens
+
+    @staticmethod
+    def vmap(info, in_dims, gates, tokens):
+        """
+        A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
+        
+        Args:
+             info: Metadata or additional info for vmap (not used here).
+            in_dims: Tuple specifying the dimension to slice for each input.
+            gates: Input gates tensor of shape (B, T, C) if in_dims[0] is None.
+            tokens: Input tokens tensor of shape (B', B, T, C) if in_dims[1] is 0.
+        Returns:
+            outputs: Output tensor of shape (B', B, T, C).
+        """
+
+        # Handle case where gates is constant (None in in_dims)
+        if in_dims == (None, 0):
+            outputs = ComplexLinearScanBCT.apply(gates, tokens.squeeze(1))
+            out_dims = (None, None)
+        else:
+            raise NotImplementedError("Only (None, 0) is implemented")
+
+        return outputs, out_dims
 
     @staticmethod
     def setup_context(ctx, inputs, outputs):
@@ -470,7 +518,6 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     # For a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
     # compare a vanilla pytorch implementation, a custom autograd implementation, and
     torch.manual_seed(42)
-    #batch, dim, seq_len = 1, 1, 4
 
     gates, tokens = create_inputs(batch, dim, seq_len, complexity, only_real)
 
@@ -525,3 +572,92 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     assert torch.allclose(seq_gates_grad, seq2_gates_grad, atol=1e-5), print(f"Backward pass mismatch gates vanilla {seq_gates_grad} and custom {seq2_gates_grad}" )
     assert torch.allclose(seq_gates_grad, tri_gates_grad, atol=1e-5), print(f"Backward pass mismatch gates  vanilla {seq_gates_grad} and triton {tri_gates_grad}" )
 
+in_dims_pairs = [(None, 0)]#, (0, 1), (1, 0), (1, 1)]
+
+
+@pytest.mark.parametrize("only_real", only_reals)
+@pytest.mark.parametrize("complexity", complexities)
+@pytest.mark.parametrize("batch", batch_dims)
+@pytest.mark.parametrize("dim", feature_dims)
+@pytest.mark.parametrize("seq_len", seq_lens)
+@pytest.mark.parametrize("in_dims", in_dims_pairs)
+def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
+    """
+    vmap: slice over dimension and applies function to each slide:
+    Example: (None, 0) 
+        First input is treated as constant and the same value is used for all iterations
+        Second input is sliced over the specified dimension, function is applied to each slice independently.
+    """
+    torch.manual_seed(42)
+    atol = 1e-5
+    gates, tokens = create_inputs(batch, dim, seq_len, complexity, only_real)
+
+    if in_dims[0] is None:
+        # gates has shape (T, C) and is constant over batch dimension
+        gates = gates[0].detach().requires_grad_()
+
+    # Let's define a function:
+    func_ = lambda x: x.abs().sum((-1,-2)).mean()
+    
+    # Let's calculate the outputs and grad_outputs structure:
+    gates.grad = None
+    tokens.grad = None
+
+    outputs_seq_g, outputs_seq_token = torch_associative_scanBCT(gates, tokens)
+    loss = func_(outputs_seq_token)
+    loss.backward()
+    seq_gates_grad = gates.grad.clone()
+    seq_tokens_grad = tokens.grad.clone()
+
+    # Now compare the vmap forward pass:
+    gates.grad = None
+    tokens.grad = None
+    vmap_forward = torch.vmap(torch_associative_scanBCT, in_dims=in_dims, out_dims=in_dims)
+    outputs_vmap_g, outputs_vmap_token = vmap_forward(gates, tokens)
+    loss = func_(outputs_vmap_token)
+    loss.backward()
+    vmap_gates_grad = gates.grad.clone()
+    vmap_tokens_grad = tokens.grad.clone()
+
+    assert torch.allclose(outputs_seq_g, outputs_vmap_g, atol=atol), print(f"Vmap forward outputs gates {outputs_vmap_g} do not match standard {outputs_seq_g}")
+    assert torch.allclose(outputs_seq_token, outputs_vmap_token, atol=atol), print(f"Vmap forward outputs token {outputs_vmap_token} do not match standard {outputs_seq_token}")
+    assert torch.allclose(seq_gates_grad, vmap_gates_grad, atol=atol), print(f"Vmap forward gate gradients {vmap_gates_grad} do not match standard {seq_gates_grad}")
+    assert torch.allclose(seq_tokens_grad, vmap_tokens_grad, atol=atol), print(f"Vmap forward token gradients {vmap_tokens_grad} do not match standard {seq_tokens_grad}")
+
+    # -------------------------------------
+    # Vmap ComplexLinearScanBTC:
+    gates.grad = None
+    tokens.grad = None
+    vmap_forward2 = torch.vmap(ComplexLinearScanBCT.apply, in_dims=in_dims, out_dims=in_dims)
+    outputs2_vmap_g, outputs2_vmap_token = vmap_forward2(gates, tokens)
+    loss = func_(outputs2_vmap_token)
+    loss.backward()
+
+    # Get the gradients from the standard backward pass
+    vmap2_gates_grad = gates.grad.clone()
+    vmap2_tokens_grad = tokens.grad.clone()
+
+    assert torch.allclose(outputs_seq_g, outputs2_vmap_g, atol=atol), print(f"Vmap forward 2 outputs gates {outputs2_vmap_g} do not match standard {outputs_seq_g}")
+    assert torch.allclose(outputs_seq_token, outputs2_vmap_token, atol=atol), print(f"Vmap forward 2 outputs token {outputs2_vmap_token} do not match standard {outputs_seq_token}")
+    assert torch.allclose(seq_gates_grad, vmap2_gates_grad, atol=atol), print(f"Vmap forward 2 gate gradients {vmap2_gates_grad} do not match standard {seq_gates_grad}")
+    assert torch.allclose(seq_tokens_grad, vmap2_tokens_grad, atol=atol), print(f"Vmap forward 2 token gradients {vmap2_tokens_grad} do not match standard {seq_tokens_grad}")
+
+    # -------------------------------------
+    # Vmap triton scan_BTC_complex:
+    gates.grad = None
+    tokens.grad = None
+    vmap_forward3 = torch.vmap(scan_BCT_complex, in_dims=in_dims, out_dims=in_dims)
+    outputs3_vmap_g, outputs3_vmap_token = vmap_forward3(gates, tokens)
+    loss = func_(outputs3_vmap_token)
+    loss.backward()
+
+    # Get the gradients from the standard backward pass
+    vmap3_gates_grad = gates.grad.clone()
+    vmap3_tokens_grad = tokens.grad.clone()
+
+    assert torch.allclose(outputs_seq_g, outputs3_vmap_g, atol=atol), print(f"Vmap forward 3 outputs gates {outputs3_vmap_g} do not match standard {outputs_seq_g}")
+    assert torch.allclose(outputs_seq_token, outputs3_vmap_token, atol=atol), print(f"Vmap forward 3 outputs token {outputs3_vmap_token} do not match standard {outputs_seq_token}")
+    assert torch.allclose(seq_gates_grad, vmap3_gates_grad, atol=atol), print(f"Vmap forward 3 gate gradients {vmap3_gates_grad} do not match standard {seq_gates_grad}")
+    assert torch.allclose(seq_tokens_grad, vmap3_tokens_grad, atol=atol), print(f"Vmap forward 3 token gradients {vmap3_tokens_grad} do not match standard {seq_tokens_grad}")
+
+    return
