@@ -1,0 +1,15 @@
+ninja
+accelerated-scan
+datasets
+omegaconf
+ml-collections
+hydra-core
+pandas
+lightning
+scikit-learn
+wandb
+torchtyping
+edit-distance
+pyparsing
+sentencepiece
+einops
