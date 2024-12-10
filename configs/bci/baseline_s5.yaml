@@ -18,10 +18,10 @@ data_cfg:
   constantOffsetSD: 0.2
   # masking
   mask_value: 0.0
-  speckled_mask_p: 0.45
-  feature_mask_p: 0.03
-  temporal_mask_n: 1
-  temporal_mask_len: 2
+  speckled_mask_p: 0
+  feature_mask_p: 0
+  temporal_mask_n: 0
+  temporal_mask_len: 0
   renormalize_masking: false
 
 module_cfg:
@@ -36,7 +36,7 @@ model_cfg:
     # s5 params
     ssm_size: 384
     bidirectional: true
-    n_layers: 1 #nLayers
+    n_layers: 5 #nLayers
     dropout: 0.1 #dropout
     # base decoder parameters:
     gaussianSmoothWidth: 2.0

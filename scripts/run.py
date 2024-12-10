@@ -14,6 +14,20 @@ from deep_ssm.utils.callbacks import all_callbacks
 import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
 
+device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+
+
+def print_memory_usage(device="cuda"):
+    if torch.cuda.is_available() and device == "cuda":
+        print(f"Allocated memory: {torch.cuda.memory_allocated() / 1e6} MB")
+        print(f"Cached memory: {torch.cuda.memory_reserved() / 1e6} MB")
+    elif torch.backends.mps.is_available() and device == "mps":
+        print(f"Current allocated memory: {torch.mps.current_allocated_memory() / 1e6} MB")
+        print(f"Max allocated memory: {torch.mps.driver_allocated_memory() / 1e6} MB")
+    else:
+        print("No GPU available or specified device is not supported.")
+
+
 
 @hydra.main(config_path="../configs/bci", config_name="baseline_gru", version_base=None)
 def main(args: DictConfig) -> None:
@@ -98,6 +112,7 @@ def train(args):
       ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
     # Test model
+    torch.mps.empty_cache()
     trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # End logging

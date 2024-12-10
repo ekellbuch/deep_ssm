@@ -124,10 +124,8 @@ class S5Model(nn.Module):
 
   def __init__(
     self,
-    d_input,
-    d_output=10,
-    ssm_size=384,
     d_model=256,
+    ssm_size=384,
     n_layers=4,
     blocks: int = 1,
     dt_min: float = 0.001,
@@ -151,7 +149,6 @@ class S5Model(nn.Module):
     self.n_layers = n_layers
 
     # Linear encoder (d_input = 1 for grayscale and 3 for RGB)
-    self.encoder = nn.Linear(d_input, d_model)
 
     self.layers = nn.Sequential(*[
       SequenceLayer(d_model=d_model,
@@ -174,11 +171,8 @@ class S5Model(nn.Module):
                     ) for _ in range(self.n_layers)
     ])
 
-    # Linear decoder
-    self.decoder = nn.Linear(d_model, d_output)
-
   def initial_state(self, batch_size):
-    # init different A layer:
+    # init different A per layer:
     states = []
     for layer_idx in range(self.n_layers):
       state_layer_idx = self.layers[layer_idx].seq.initial_state(batch_size)
@@ -187,25 +181,20 @@ class S5Model(nn.Module):
 
   def forward(self, x: torch.Tensor, states: Optional[List[torch.Tensor]] = None) -> Tuple[torch.Tensor,torch.Tensor]:
     """
-    Input x is shape (B, L, d_input)
+    Input x is shape (B, L, d_model)
     """
-    output = self.encoder(x)  # (B, L, d_input) -> (B, L, d_model)
 
     # Map the layers
     # Each iteration of this loop will map (B, L, d_model) -> (B, L, d_model)
     if states is None:
       states = self.initial_state(x.shape[0])
 
-    # Process each layer with its corresponding state
+    # old output 
+    output = x
+    # Process each layer with its corresponding state:
     new_states = []
     for i, layer in enumerate(self.layers):
         output, state = layer(output, states[i])  # Pass the current state to the current layer
         new_states.append(state)  # Collect the updated state
 
-    # Pooling: average pooling over the sequence length
-    output = output.mean(dim=-2)
-
-    # Decode the outputs
-    output = self.decoder(output)  # (B, d_model) -> (B, d_output)
-
-    return output, states
+    return output, state
