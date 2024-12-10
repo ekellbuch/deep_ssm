@@ -437,7 +437,7 @@ class ScanBCT(torch.autograd.Function):
         #print('d_tokens_real computed', d_tokens_real)
         #print('d_gates_real computed', d_gates_real)
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
-       
+    
         print("bwd d_gates_real, d_gates_imag, d_tokens_real, d_tokens_imag:")
         print(d_gates_real, d_gates_imag, d_tokens_real, d_tokens_imag)
     
@@ -495,6 +495,117 @@ class ScanBCT(torch.autograd.Function):
         return ctx  # Return context
 
 
+
+class ComplexLinearScanBTC(torch.autograd.Function):
+    @staticmethod
+    def forward(gates, tokens):
+        """
+        Forward pass for the complex linear scan.
+        x_t = g_t * x_{t-1} + b_t
+        Args:
+            gates: Complex tensor of shape (batch, len, dim).
+            tokens: Complex tensor of shape (batch, len, dim).
+        Returns:
+            outputs: Complex tensor of shape (batch, len, dim).
+        """
+        seq_len = tokens.shape[-2]
+        outputs = torch.zeros_like(tokens, dtype=torch.cfloat)
+        outputs_gates = torch.zeros_like(gates, dtype=torch.cfloat)
+        # Initialize (a_prefix, b_prefix) variables
+        a_prefix = gates[..., 0, :]
+        b_prefix = tokens[..., 0, :]
+
+        # initialize x_0 = a_0 * x_0 + b_prefix,  but we assume x_0 = 0
+        outputs[..., 0, :] = tokens[..., 0, :]
+        outputs_gates[..., 0, :] = gates[..., 0, :]
+    
+        for t in range(1, seq_len):
+            #outputs[..., t] = gates[..., t] * outputs[..., t-1] + tokens[..., t]
+
+            # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (gates[..., t], tokens[..., t])
+            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (gates[..., t, :], tokens[..., t, :]))
+            # x_t = a_prefix * x_0 + b_prefix
+            outputs[..., t, :] = b_prefix
+            outputs_gates[..., t, :] = a_prefix
+        return outputs_gates, outputs
+
+        
+    @staticmethod
+    def backward(ctx, grads_gates, grad_outputs):
+        """
+        Backward pass for the complex linear scan.
+        Args:
+            grad_outputs: Complex tensor of shape (batch, dim, len).
+        Returns:
+            Gradients for tokens, gates, and contributions (all complex tensors).
+        """
+        gates, tokens, outputs = ctx.saved_tensors
+        seq_len = tokens.shape[-2]
+
+        # Initialize gradients
+        grad_tokens = torch.zeros_like(tokens, dtype=tokens.dtype)
+        grad_gates = torch.zeros_like(gates, dtype=gates.dtype)
+
+        # Gradient of the loss with respect to the last output
+        padded_shifted_gates = torch.cat([gates, torch.ones_like(gates[..., :1, :])], dim=-2)[..., 1:, :].contiguous().conj()
+
+        padded_shifted_gates_rev = torch.flip(padded_shifted_gates, dims=[-2])
+        grad_outputs_rev = torch.flip(grad_outputs, dims=[-2])
+
+        # Forward scan
+        grad_tokens[..., 0, :] = grad_outputs_rev[..., 0, :]
+        a_prefix = padded_shifted_gates_rev[..., 0, :]
+        b_prefix = grad_outputs_rev[..., 0, :]
+
+        for t in range(1, seq_len):
+            # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (shifted_gates[..., t], grads[..., t])
+            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (padded_shifted_gates_rev[..., t, :], grad_outputs_rev[..., t, :]))
+            grad_tokens[..., t, :] = b_prefix
+
+        padded_outputs = torch.cat([torch.zeros_like(outputs[..., :1, :]), outputs], dim=-2)[..., :-1, :]
+
+        grad_tokens = torch.flip(grad_tokens, dims=[-2])
+        grad_gates = grad_tokens * padded_outputs.conj()
+        return grad_gates, grad_tokens
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        # Define the context setup required for functorch transforms
+        gates, tokens = inputs
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
+        return ctx  # Return context
+
+    @staticmethod
+    def vmap(info, in_dims, gates, tokens):
+        """
+        A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
+        with vmap we slice over dimension and applies function to each slide:
+
+        Args:
+             info: Metadata or additional info for vmap (not used here).
+            in_dims: Tuple specifying the dimension to slice for each input.
+            gates: Input gates tensor of shape (B, T, C) if in_dims[0] is None.
+            tokens: Input tokens tensor of shape (B', B, T, C) if in_dims[1] is 0.
+        Returns:
+            outputs: Output tensor of shape (B', B, T, C).
+            out_dims: Tuple specifying the dimension to slice for each output.
+        """
+
+        # Handle case where gates is constant (None in in_dims)
+        if in_dims == (None, 0):
+            outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates.unsqueeze(0), tokens)
+            outputs_g = outputs_g.squeeze(0)
+            outputs_k = outputs_k.squeeze(0)
+            out_dims = (None, 0)
+        else:
+            raise NotImplementedError("Only (None, 0) is implemented")
+
+        return (outputs_g, outputs_k), out_dims
+
+
+
+
 def scan_tri_complex(gates, tokens):
     """
     Solve a first-order recurrence relation for complex numbers.
@@ -504,7 +615,7 @@ def scan_tri_complex(gates, tokens):
     """
     gates = gates.contiguous()
     tokens = tokens.contiguous()
-    return ScanBCT.apply(gates, tokens)
+    return ComplexLinearScanBTC.apply(gates, tokens)
 
 
 
@@ -551,7 +662,7 @@ def apply_ssm(
   # passes 
   new_gates, xs = torch_associative_scan(Lambda_bars, Bu_elements)
   
-  
+
   #new_gates2, xs2 = torch_associative_scan(Lambda_bars, Bu_elements)
   #breakpoint()
   # vmap allows us to broadcast over the batch dimension
