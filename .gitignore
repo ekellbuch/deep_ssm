@@ -1,8 +1,9 @@
 #
-wandb/
+**/wandb/
 outputs/
 data/
 speech_bci/
+*.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

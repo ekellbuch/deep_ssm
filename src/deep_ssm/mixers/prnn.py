@@ -6,6 +6,7 @@ Using quasi-DEER!
 import torch
 import torch.nn as nn
 import numpy as np
+from torch.utils.checkpoint import checkpoint as checkpoint_torch
 try:
     from accelerated_scan.warp import (
         scan,
@@ -141,8 +142,11 @@ class MinRNNCell(nn.Module):
 
 
 def checkpoint(f):
-    def f_(*args):
-        return torch.utils.checkpoint.checkpoint(f, *args, use_reentrant=True)
+    def f_(self, *args):
+        if self.checkpoint:
+            return checkpoint_torch(f, self, *args, use_reentrant=True)  # need reentrant because we use torch.func.vmap
+        else:
+            return f(self, *args)
     return f_
 
 class AugmentedGRUCell(nn.GRUCell):
@@ -206,6 +210,7 @@ class pRNN(nn.Module):
         num_iters=2,  # number of iterations for quasi-DEER
         method="minrnn",  # minrrn or gru
         parallel=True,  # parallel implementation
+        checkpoint=True,
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -215,6 +220,7 @@ class pRNN(nn.Module):
         self.batch_first = batch_first
         self.dropout = dropout
         self.bidirectional = bidirectional
+        self.checkpoint = checkpoint
 
         num_directions = 2 if bidirectional else 1
         self.num_directions = num_directions
