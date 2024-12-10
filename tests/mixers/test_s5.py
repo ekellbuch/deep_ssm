@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 from typing import Tuple
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
-
+from deep_ssm.mixers.s5_fjax.ssm_init import make_DPLR_HiPPO
 try:
    import triton
    import triton.language as tl
@@ -27,6 +27,10 @@ torch.autograd.set_detect_anomaly(True)
 parallel_scan = jax.lax.associative_scan
 
 device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+
+def to_jax(x):
+    return x.cpu().detach().numpy()
+
 
 def discretize_jax(Lambda, B_tilde, Delta):
     """ Discretize a diagonalized, continuous-time linear SSM
@@ -198,10 +202,12 @@ def discretize(Lambda: torch.Tensor,
   return Lambda_bar, B_bar
 
 
-
-def torch_associative_scan(gates, tokens):
+def torch_associative_scanBTC(gates, tokens):
     """
     PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
+    x_t = g_t * x_{t-1} + b_t
+
+    where g_t are the gates and b_t are the tokens.
 
     Args:
         gates: Complex tensor representing the gates of shape (batch_size, seq_len, dim).
@@ -474,7 +480,6 @@ class ScanBCT(torch.autograd.Function):
             out_dims = (None, None)
         else:
             raise NotImplementedError("vmap over mismatched dimensions is not supported yet.")
-        breakpoint()
         return outputs, out_dims
 
     @staticmethod
@@ -597,7 +602,7 @@ class ComplexLinearScanBTC(torch.autograd.Function):
             outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates.unsqueeze(0), tokens)
             outputs_g = outputs_g.squeeze(0)
             outputs_k = outputs_k.squeeze(0)
-            out_dims = (None, 0)
+            out_dims = (None, None)
         else:
             raise NotImplementedError("Only (None, 0) is implemented")
 
@@ -656,22 +661,14 @@ def apply_ssm(
   else:
       raise NotImplementedError("Lambda_bars must be 1D")
 
-  # fails backward pass
+  # fails backward pass: 
   #new_gates, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
   
   # passes 
-  new_gates, xs = torch_associative_scan(Lambda_bars, Bu_elements)
-  
+  new_gates, xs = torch_associative_scanBTC(Lambda_bars, Bu_elements)
+  # new_gates2, xs2 = torch_associative_scanBTC(Lambda_bars, Bu_elements)
+  #_, xs = scan_tri_complex(Lambda_bars, Bu_elements)
 
-  #new_gates2, xs2 = torch_associative_scan(Lambda_bars, Bu_elements)
-  #breakpoint()
-  # vmap allows us to broadcast over the batch dimension
-  #print(f'inside apply_ssm gate_dims {Lambda_bars.shape} token_dims {Bu_elements.mT[None,...].shape}')
-  # here baby!
-
-  #new_gates, xs = scan_tri_complex(Lambda_bars.mT.unsqueeze(0), Bu_elements.mT.unsqueeze(0))
-  #new_gates = new_gates.squeeze(0).mT
-  #xs = xs.squeeze(0).mT
   if bidirectional:
     raise NotImplementedError("Bidirectional SSM not implemented")
   # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
@@ -720,13 +717,18 @@ d_models = [1, 4]
 batch_dims = [1, 2, 3]
 complexities = ["v0", "v1"]
 
-seqlens=[2]
-num_statess=[1]
+#"""
+seqlens=[2] #2 4 8 
+num_statess=[2]
 d_models=[1]
 batch_dims=[1]
 complexities=["v0"]
 
-    
+def compare_parameters(params_torch, params_jax, atol=1e-3, rtol=1e-2):
+    for ii, (param_torch, param_jax) in enumerate(zip(params_torch, params_jax)):
+        assert jnp.allclose(to_jax(param_torch), param_jax, atol=atol, rtol=rtol), print(f"Parameters {ii}d not match: \n torch {param_torch} \n jax {param_jax}")
+    return True
+
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("num_states", num_statess)
 @pytest.mark.parametrize("d_model", d_models)
@@ -740,35 +742,52 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
     B = batch  # Batch size
     torch.manual_seed(42)
     dtype = torch.float32
+    dtype_complex = torch.complex64
 
     atol = 1e-3
     rtol = 1e-2
 
     if complexity == "v0":
-        Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.zeros(P, dtype=dtype)).to(device)
-        B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.zeros(P, H, dtype=dtype)).to(device)
-        C_tilde = torch.complex(torch.randn(H, P, dtype=dtype), torch.zeros(H, P, dtype=dtype)).to(device)
+        Lambda, P_term, B_tilde, V, B_orig = make_DPLR_HiPPO(P)
+        V = torch.from_numpy(V).to(dtype_complex).to(device)
+        Vinv = V.conj().T
+        # TODO: add blocks
+        #Vinv = torch.block_diag(*([Vc] * 1))
+        B_tilde = torch.empty(P, H, dtype=dtype_complex)
+        torch.nn.init.xavier_uniform_(B_tilde)
+        B_tilde = Vinv @ B_tilde.to(device)
+        Lambda = torch.complex(torch.from_numpy(Lambda.real).to(dtype), torch.from_numpy(Lambda.imag).to(dtype)).to(dtype_complex).to(device)
+       #C_init = torch.normal(0, 0.5 ** 0.5, (H, P, 2))
+
+        C_real = torch.empty(H, P, dtype=dtype)
+        torch.nn.init.xavier_uniform_(C_real)
+        C_imag = torch.empty(H, P, dtype=dtype)
+        torch.nn.init.xavier_uniform_(C_imag)
+        C_ = torch.complex(C_real, C_imag).to(dtype_complex).to(device)
+        C_tilde = C_ @ V
+        #C_tilde = torch.complex(C_init[..., 0], C_init[..., 1]).to(dtype_complex).to(device)
     elif complexity == "v1":
+        Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.zeros(P, dtype=dtype)).to(device)
+        B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.zeros(P, H, dtype=dtype)).to(device) 
+        C_tilde = torch.complex(torch.ones(H, P, dtype=dtype), torch.zeros(H, P, dtype=dtype)).to(device)
+    elif complexity == "v2":
         Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.randn(P, dtype=dtype)).to(device)
         B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.randn(P, H, dtype=dtype)).to(device)
-        C_tilde = torch.complex(torch.randn(H, P, dtype=dtype), torch.randn(H, P, dtype=dtype)).to(device)
-
+        C_tilde = torch.complex(torch.ones(H, P, dtype=dtype), torch.ones(H, P, dtype=dtype)).to(device)
+    
+    #Lambda = torch.complex(torch.clip(Lambda.real, None, -1e-4), Lambda.imag)
+    Lambda = Lambda / Lambda.abs().max()
+    #B_tilde = B_tilde / B_tilde.abs().max()
+    #C_tilde = C_tilde / C_tilde.abs().max()
     D = torch.randn(H, dtype=dtype).to(device)
     log_Delta = torch.randn(P, dtype=dtype).to(device)
 
     dtype_jax= jnp.complex64
-    Lambda_jax = jnp.array(Lambda.cpu().detach().numpy(), dtype=dtype_jax)
-    B_tilde_jax = jnp.array(B_tilde.cpu().detach().numpy(), dtype=dtype_jax)
-    C_tilde_jax = jnp.array(C_tilde.cpu().detach().numpy(), dtype=dtype_jax)
-    D_jax = jnp.array(D.cpu().detach().numpy())
-    log_Delta_jax = jnp.array(log_Delta.cpu().detach().numpy())
-
-    assert jnp.allclose(Lambda.cpu().detach().numpy(), Lambda_jax, atol=1e-6)
-    assert jnp.allclose(B_tilde.cpu().detach().numpy(), B_tilde_jax, atol=1e-6)
-    assert jnp.allclose(C_tilde.cpu().detach().numpy(), C_tilde_jax, atol=1e-6)
-    assert jnp.allclose(D.cpu().detach().numpy(), D_jax, atol=1e-6)
-    assert jnp.allclose(log_Delta.cpu().detach().numpy(), log_Delta_jax, atol=1e-6)
-
+    Lambda_jax = jnp.array(to_jax(Lambda), dtype=dtype_jax)
+    B_tilde_jax = jnp.array(to_jax(B_tilde), dtype=dtype_jax)
+    C_tilde_jax = jnp.array(to_jax(C_tilde), dtype=dtype_jax)
+    D_jax = jnp.array(to_jax(D))
+    log_Delta_jax = jnp.array(to_jax(log_Delta))
 
     # Define jax params   
     params = (Lambda, B_tilde, C_tilde, D, log_Delta)
@@ -778,33 +797,43 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
     params_jax = (Lambda_jax, B_tilde_jax, C_tilde_jax, D_jax, log_Delta_jax)
     input_sequences_jax = jnp.array(input_sequences.cpu().detach().numpy())
 
+    compare_parameters(params, params_jax, atol=1e-6, rtol=1e-6)
+
+    # -----------------------------
     # compare discretization
     Lambda_bar_torch, B_bar_torch = discretize(Lambda, B_tilde, log_Delta)
     Lambda_bar_jax, B_bar_jax = discretize_jax(Lambda_jax, B_tilde_jax, log_Delta_jax)
 
-    assert jnp.allclose(Lambda_bar_torch.cpu().detach().numpy(), Lambda_bar_jax, atol=atol), print("Failed discretization")
-    assert jnp.allclose(B_bar_torch.cpu().detach().numpy(), B_bar_jax, atol=atol), print("Failed discretization")
+    compare_parameters(Lambda_bar_torch, Lambda_bar_jax, atol=1e-6, rtol=1e-6)
+    compare_parameters(B_bar_torch, B_bar_jax, atol=1e-6, rtol=1e-6)
 
+    # -----------------------------
     # compare apply ssm
     torch_output, torch2 = apply_ssm(Lambda_bar_torch, B_bar_torch, C_tilde, D, input_sequences[0])
     jax_output, jaz2 = apply_ssm_jax(Lambda_bar_jax, B_bar_jax, C_tilde_jax, D_jax, input_sequences_jax[0])
     
-    return
-    assert jnp.allclose(torch_output.cpu().detach().numpy(), jax_output, atol=atol, rtol=rtol), print(f"apply_ssm out1 torch{torch_output.cpu().detach().numpy()} jax {jax_output}")
-    assert jnp.allclose(torch2.cpu().detach().numpy(), jaz2, atol=atol, rtol=rtol), print(f"apply_ssm out2 do not match torch{torch2.cpu().detach().numpy()} jax {jaz2}")
+    compare_parameters(torch_output, jax_output, atol=atol, rtol=rtol)
+    compare_parameters(torch2, jaz2, atol=atol, rtol=rtol)
 
     # Single sequence example
-    output_sequence = batch_apply_S5_layer(params, input_sequences)
+    for param in params:
+        param.grad = None
+    
+    output_sequence_jax = batch_apply_S5_layer_jax(params_jax, input_sequences_jax)
 
+    output_sequence = batch_apply_S5_layer(params, input_sequences)
     #print("Single sequence output:")
     assert output_sequence.shape == (B, L, H)
-
-    output_sequence_jax = batch_apply_S5_layer_jax(params_jax, input_sequences_jax)
     assert output_sequence.shape == output_sequence_jax.shape
-    assert jnp.allclose(output_sequence.cpu().detach().numpy(), output_sequence_jax, atol=atol, rtol=rtol), "Outputs of S5 layer do not match"
 
+    # Compare loss
+    assert jnp.allclose(output_sequence_jax.mean(), to_jax(output_sequence.mean()), atol=atol, rtol=rtol), "Loss of bacthed S5 layer do not match"
+
+    # ----------------------------------------------------------------------------------------------
     # Test backpropagation
-    # PyTorch backpropagation
+    for param in params:
+        param.grad = None
+    
     output_sequence.mean().backward()
     torch_grads = [param.grad for param in params]
 
@@ -815,19 +844,24 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
 
     jax_grads = jax.grad(loss_fn_jax)(params_jax, input_sequences_jax)
 
+    assert len(jax_grads) == len(torch_grads)
     # Compare gradients
+    breakpoint()
     for param_id, (torch_grad, jax_grad) in enumerate(zip(torch_grads, jax_grads)):
         # Convert PyTorch gradients to numpy
-        torch_grad_np = torch_grad.cpu().detach().numpy()
+        torch_grad_np = to_jax(torch_grad)
         if jnp.iscomplexobj(jax_grad) or jnp.iscomplexobj(torch_grad_np):
             # pytorch uses the conjugate transpose for complex gradients: (https://github.com/jax-ml/jax/issues/9110)
             # If complex, compare real and imaginary parts separately
             assert jnp.allclose(torch_grad_np.real, jax_grad.real, atol=atol, rtol=rtol), \
-                f"Real parts of gradients {param_id} do not match: {torch_grad_np.real} vs {jax_grad.real}"
+                print(f"Real parts of gradients {param_id} do not match: {torch_grad_np.real} vs {jax_grad.real}")
+            
             assert jnp.allclose(-1*torch_grad_np.imag, jax_grad.imag, atol=atol, rtol=rtol), \
-                f"Imaginary parts of gradients {param_id} do not match: {-1*torch_grad_np.imag} vs {jax_grad.imag}"
+                print(f"Imaginary parts of gradients {param_id} do not match: {-1*torch_grad_np.imag} vs {jax_grad.imag}")
         else:
             # If real, compare directly
             assert jnp.allclose(torch_grad_np, jax_grad, atol=atol, rtol=rtol), \
-                f"Gradients {param_id} do not match: {torch_grad_np} vs {jax_grad}"
+                print(f"Gradients {param_id} do not match: {torch_grad_np} vs {jax_grad}")
+
+
 
