@@ -240,7 +240,7 @@ class pRNN(nn.Module):
         )
  
         if bidirectional:
-            self.backward_cells = nn.ModuleList(
+            self.reverse_cells = nn.ModuleList(
                 [
                     method_fn[method](
                         input_size if i == 0 else hidden_size * num_directions,
@@ -277,14 +277,14 @@ class pRNN(nn.Module):
                 output, hx[layer * num_directions], self.forward_cells[layer]
             )
             if self.bidirectional:
-                backward_layer_output = self._process_layer(
+                reverse_layer_output = self._process_layer(
                     output.flip(1),
                     hx[layer * num_directions + 1],
-                    self.backward_cells[layer],
+                    self.reverse_cells[layer],
                 )
-                backward_layer_output = backward_layer_output.flip(1)
+                reverse_layer_output = reverse_layer_output.flip(1)
                 layer_output = torch.cat(
-                    [forward_layer_output, backward_layer_output], dim=2
+                    [forward_layer_output, reverse_layer_output], dim=2
                 )
             else:
                 layer_output = forward_layer_output
