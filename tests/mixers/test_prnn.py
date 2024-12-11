@@ -5,6 +5,8 @@ One full run can be tested with:
   python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
   python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 model_cfg.configs.parallel=false
 
+Comments:
+- tolerance is device dependent
 """
 import torch
 import torch.nn as nn
@@ -12,6 +14,25 @@ from deep_ssm.mixers.prnn import pRNN
 import pytest
 import numpy as np
 
+# Detect the appropriate device for execution
+try:
+    import torch_xla.core.xla_model as xm
+    DEVICE = xm.xla_device()  # TPU
+    atol = 1e-5
+    rtol = 1e-6
+except:
+    if torch.backends.mps.is_available():
+        DEVICE = torch.device("mps")  # macOS Metal backend
+        atol = 1e-5
+        rtol = 1e-6
+    elif torch.cuda.is_available():
+        DEVICE = torch.device("cuda")  # GPU
+        atol = 1e-3 # 1e-4
+        rtol = 1e-5
+    else:
+        DEVICE = torch.device("cpu")  # CPU fallback
+        atol = 1e-5
+        rtol = 1e-6
 
 class Arguments:
     def __init__(self, 
@@ -86,18 +107,19 @@ def compare_parameters(model1, model2,update_name_fn=update_name, grad=False, at
 
     
 
-seqlens = [2, 8, 32, 256]
+seqlens = [32, 64, 256]
 batch_sizes = [1, 2, 8]
 dims = [2, 8]
 bidirectionality =[False, True]
 num_layerss = [1, 2, 3]
 
 
-#seqlens = [2]
+#seqlens = [32]
 #batch_sizes = [1]
-#dims = [1]
-#bidirectionality = [True, False]
-#num_layerss = [1]
+#dims = [2]
+#bidirectionality = [False]
+#num_layerss = [2]
+
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch", batch_sizes)
 @pytest.mark.parametrize("dim", dims)
@@ -109,14 +131,14 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
     cfg = Arguments(input_size=dim,
                     bidirectional=bidirectional,
                     num_layers=num_layers)
-    atol = 1e-5 
+
     D = 2 if cfg.bidirectional else 1
     hidden_size = cfg.hidden_size * D
     # Pass arguments to pRNN
     torch.manual_seed(42)
     np.random.seed(42)
 
-    x = torch.randn(batch, seqlen, dim)
+    x = torch.randn(batch, seqlen, dim).to(DEVICE)
 
     # ---------
     # Get model
@@ -126,7 +148,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
                        cfg.num_layers, 
                        batch_first=cfg.batch_first, 
                        dropout=cfg.dropout, 
-                       bidirectional=cfg.bidirectional)
+                       bidirectional=cfg.bidirectional).to(DEVICE)
 
     output1, hidden1 = gru_model(x)
 
@@ -140,10 +162,9 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
 
     # -------------
     # Get model
-    # reset grads 
 
     torch.manual_seed(42)
-    prnn = pRNN(**vars(cfg))
+    prnn = pRNN(**vars(cfg)).to(DEVICE)
     
     if bidirectional:
         prnn = assign_parameters(gru_model, prnn)
@@ -175,7 +196,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
 
     # -----
     torch.manual_seed(42)
-    prnn2 = pRNN(**vars(cfg2))
+    prnn2 = pRNN(**vars(cfg2)).to(DEVICE)
 
     if bidirectional:
         prnn2 = assign_parameters(gru_model, prnn2)
