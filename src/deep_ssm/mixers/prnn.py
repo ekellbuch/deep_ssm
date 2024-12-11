@@ -17,6 +17,14 @@ except:
     except ImportError:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 
+def _batch_along_time(x):
+    assert x.ndim == 3, "Expects x to be (B, D, T)"
+    return x.permute(0, 2, 1).flatten(0, 1)
+
+def _unbatch_to_time(x, B):
+    assert x.ndim == 2, "Expects x to be (B*T, D)"
+    T = x.shape[0] // B
+    return x.view(B, T, -1).permute(0, 2, 1)
 
 def quasi_deer_torch(
     f,
@@ -65,14 +73,15 @@ def quasi_deer_torch(
         states: B,D,T
         """
         # Evaluate f and its Jacobian in parallel across timesteps 1,..,T-1
-        fs = torch.func.vmap(f, in_dims=-1, out_dims=-1)(
-            inputs[..., 1:], states[..., :-1]
-        )  # (B,D,T-1), in your diagram above, the first interacton is f(e1, h1)
+        B, D, T = states.shape
+        # inputs and states are (B,D,T-1), the first interacton is f(e1, h1)
+        fs = f(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        fs = _unbatch_to_time(fs, B)  # (B,D,T-1)
 
         # Compute the As and bs from fs and Jfs
-        As = (1.0 - k) * torch.func.vmap(diagonal_derivative, in_dims=-1, out_dims=-1)(
-            inputs[..., 1:], states[..., :-1]
-        )  # (B, D, T-1)
+        # inputs and states are (B,D,T-1)
+        As = (1.0 - k) * diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        As = _unbatch_to_time(As, B)  # (B, D, T-1)
         bs = fs - As * states[..., :-1]  # (B, D, T-1)
 
         # initial_state is h0
@@ -144,7 +153,7 @@ class MinRNNCell(nn.Module):
 def checkpoint(f):
     def f_(self, *args):
         if self.checkpoint:
-            return checkpoint_torch(f, self, *args, use_reentrant=True)  # need reentrant because we use torch.func.vmap
+            return checkpoint_torch(f, self, *args, use_reentrant=False)
         else:
             return f(self, *args)
     return f_
