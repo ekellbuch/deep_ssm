@@ -112,20 +112,22 @@ batch_sizes = [1, 2, 8]
 dims = [2, 8]
 bidirectionality =[False, True]
 num_layerss = [1, 2, 3]
-
+num_iterss = [2, 10, 20]
 
 #seqlens = [32]
 #batch_sizes = [1]
 #dims = [2]
 #bidirectionality = [False]
 #num_layerss = [2]
+#num_iterss = [5]
 
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch", batch_sizes)
 @pytest.mark.parametrize("dim", dims)
 @pytest.mark.parametrize("bidirectional", bidirectionality)
 @pytest.mark.parametrize("num_layers", num_layerss)
-def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
+@pytest.mark.parametrize("num_iters", num_iterss)
+def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
     
     # Create an instance of Arguments
     cfg = Arguments(input_size=dim,
@@ -192,7 +194,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
 
     cfg2 = cfg
     cfg2.parallel = True
-    cfg2.num_iters = 10
+    cfg2.num_iters = num_iters
 
     # -----
     torch.manual_seed(42)
