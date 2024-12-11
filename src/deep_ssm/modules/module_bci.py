@@ -1,6 +1,10 @@
 import lightning as L
 import torch
 from deep_ssm.metrics.bci_metrics import calculate_cer
+try:
+  from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
+except:
+  pass
 
 class BCIDecoder(L.LightningModule):
   def __init__(self, args, model):
@@ -59,6 +63,15 @@ class BCIDecoder(L.LightningModule):
       optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
     elif self.args.optimizer_cfg.type == "adamw":
       optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
+    elif self.args.optimizer_cfg.type == "shampoo":
+      optimizer = DistributedShampoo(self.parameters(),
+                                     **self.args.optimizer_cfg.configs,
+                                     grafting_config=AdamGraftingConfig(
+                                       beta2=0.999,
+                                        epsilon=1e-8,
+                                     )
+                                     )
+
     else:
       raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
 
