@@ -1,11 +1,14 @@
 """
-Compare memory
+Compare memory and timing:
 """
 import torch
 import torch.nn as nn
 from deep_ssm.mixers.prnn import pRNN
 import pytest
 import numpy as np
+import gc
+from torch.profiler import profile, ProfilerActivity
+import time
 
 # Detect the appropriate device for execution
 try:
@@ -30,8 +33,6 @@ except:
 torch.set_default_dtype(torch.float32)
 
 
-from torch.profiler import profile, ProfilerActivity
-
 
 def profile_memory(model, x, device="cuda"):
     model.to(device)
@@ -39,8 +40,9 @@ def profile_memory(model, x, device="cuda"):
 
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        record_shapes=True,
-        on_trace_ready=torch.profiler.tensorboard_trace_handler("./log")
+        profile_memory=True,
+        #record_shapes=True,
+        #on_trace_ready=torch.profiler.tensorboard_trace_handler("./log")
     ) as prof:
         # Forward pass
         output, hidden = model(x)
@@ -48,7 +50,75 @@ def profile_memory(model, x, device="cuda"):
         loss = output.mean()
         loss.backward()
 
-    print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
+    #print(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+
+    return "Timing profiling done."
+
+def clear_memory():
+    gc.collect()  # Free CPU memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear PyTorch's memory cache
+        torch.cuda.reset_peak_memory_stats()  # Reset peak memory tracking
+        torch.cuda.synchronize()  # Ensure all GPU operations are complete
+    
+
+def measure_gpu_memory(model, x, device="cuda"):
+    model.to(device)
+    x = x.to(device)
+
+    # Clear any existing cache
+    torch.cuda.empty_cache()
+
+    # Measure memory before forward pass
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.synchronize()
+    before_fwd = torch.cuda.memory_allocated(device)
+
+    # Forward pass
+    output, hidden = model(x)
+    torch.cuda.synchronize()
+    after_fwd = torch.cuda.memory_allocated(device)
+    peak_fwd = torch.cuda.max_memory_allocated(device)
+
+    # Backward pass
+    loss = output.mean()
+    loss.backward()
+    torch.cuda.synchronize()
+    after_bwd = torch.cuda.memory_allocated(device)
+    peak_bwd = torch.cuda.max_memory_allocated(device)
+
+    # Results
+    return {
+        "memory_before_fwd": before_fwd,
+        "memory_after_fwd": after_fwd,
+        "peak_memory_fwd": peak_fwd,
+        "memory_after_bwd": after_bwd,
+        "peak_memory_bwd": peak_bwd,
+    }
+
+
+def measure_timing(model, x, device="cuda"):
+    model.to(device)
+    x = x.to(device)
+
+    # Forward pass timing
+    torch.cuda.synchronize()
+    start = time.time()
+    output, hidden = model(x)
+    torch.cuda.synchronize()
+    forward_time = time.time() - start
+
+    # Backward pass timing
+    loss = output.mean()
+    torch.cuda.synchronize()
+    start = time.time()
+    loss.backward()
+    torch.cuda.synchronize()
+    backward_time = time.time() - start
+
+    return forward_time, backward_time
+
 
 
 class Arguments:
@@ -74,37 +144,15 @@ class Arguments:
         self.num_iters = num_iters
         self.checkpoint = checkpoint
 
-import time
-
-def measure_timing(model, x, device="cuda"):
-    model.to(device)
-    x = x.to(device)
-
-    # Forward pass timing
-    torch.cuda.synchronize()
-    start = time.time()
-    output, hidden = model(x)
-    torch.cuda.synchronize()
-    forward_time = time.time() - start
-
-    # Backward pass timing
-    loss = output.mean()
-    torch.cuda.synchronize()
-    start = time.time()
-    loss.backward()
-    torch.cuda.synchronize()
-    backward_time = time.time() - start
-
-    return forward_time, backward_time
 
 
 def main():
-    dim = 1
-    bidirectional = False
-    num_layers = 1
-    batch = 1
-    seqlen = 8
-    num_iters = 2
+    dim = 2
+    bidirectional = True
+    num_layers = 2
+    batch = 2
+    seqlen = 32
+    num_iters = 10
 
     # Create an instance of Arguments
     cfg = Arguments(input_size=dim,
@@ -117,34 +165,47 @@ def main():
     torch.manual_seed(42)
     np.random.seed(42)
 
-    x = torch.randn(batch, seqlen, dim).to(DEVICE)
+    x = torch.randn(batch, seqlen, dim)#.to(DEVICE)
 
+    if DEVICE.type in ("cpu","mps"):
+        f_eval = profile_memory
+    else:
+        #f_eval = measure_gpu_memory
+        f_eval = measure_timing
+    print(f_eval)
     # ---------
     # Get model
     torch.manual_seed(42)
+    
     gru_model = nn.GRU(cfg.input_size,
                        cfg.hidden_size, 
                        cfg.num_layers, 
                        batch_first=cfg.batch_first, 
                        dropout=cfg.dropout, 
-                       bidirectional=cfg.bidirectional).to(DEVICE)
+                       bidirectional=cfg.bidirectional)
 
-    print("Profiling GRU:")
-    profile_memory(gru_model, x, device=DEVICE)
+    print("\n Profiling GRU:")
+    memory_usage = f_eval(gru_model, x, device=DEVICE)
+    print(memory_usage)
+    del gru_model
 
-    
-    prnn = pRNN(**vars(cfg)).to(DEVICE)
+    clear_memory()
+    """
+    prnn_model = pRNN(**vars(cfg))
 
-    print("Profiling pRNN:")
-    profile_memory(prnn, x, device=DEVICE)
-
+    print("\n Profiling pRNN:")
+    memory_usage = f_eval(prnn_model, x, device=DEVICE)
+    print(memory_usage)
+    del prnn_model
+    clear_memory()
+    """
     cfg2 = cfg
     cfg2.parallel = True
     cfg2.num_iters = num_iters
-    prnn2 = pRNN(**vars(cfg2)).to(DEVICE)
-
-    print("Profiling pRNN parallel:")
-    profile_memory(prnn2, x, device=DEVICE)
+    prnn2 = pRNN(**vars(cfg2))
+    print("\n Profiling pRNN parallel:")
+    memory_usage = f_eval(prnn2, x, device=DEVICE)
+    print(memory_usage)
 
 
 if __name__ == "__main__":
