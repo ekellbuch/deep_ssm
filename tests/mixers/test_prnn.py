@@ -34,6 +34,8 @@ except:
         atol = 1e-5
         rtol = 1e-6
 
+torch.set_default_dtype(torch.float32)
+
 class Arguments:
     def __init__(self, 
                 input_size=10, 
@@ -112,7 +114,7 @@ batch_sizes = [1, 2, 8]
 dims = [2, 8]
 bidirectionality =[False, True]
 num_layerss = [1, 2, 3]
-num_iterss = [2, 10, 20]
+num_iterss = [10, 20]
 
 #seqlens = [32]
 #batch_sizes = [1]
