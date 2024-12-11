@@ -101,12 +101,12 @@ def quasi_deer_torch(
         new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states
 
-    deer_traces = []
+    #deer_traces = []
     for _ in range(num_iters):
         states_guess = step(states_guess)
-        deer_traces.append(states_guess)
+        #deer_traces.append(states_guess)
 
-    return deer_traces[-1]  # (B, D, T)
+    return states_guess #deer_traces[-1]  # (B, D, T)
 
 
 class MinRNNCell(nn.Module):
@@ -279,8 +279,8 @@ class pRNN(nn.Module):
             )
 
         output = input
-        h_n = []
-
+        h_n = torch.empty_like(hx)
+        
         for layer in range(self.num_layers):
             forward_layer_output = self._process_layer(
                 output, hx[layer * num_directions], self.forward_cells[layer]
@@ -297,16 +297,14 @@ class pRNN(nn.Module):
                 )
             else:
                 layer_output = forward_layer_output
-
-            h_n.append(layer_output[:, -1, : self.hidden_size])
+            
+            h_n[layer*num_directions] = layer_output[:, -1, : self.hidden_size]
             if self.bidirectional:
-                h_n.append(layer_output[:, 0, self.hidden_size :])
+                h_n[layer*num_directions + 1] = layer_output[:, 0, self.hidden_size:]
 
             output = layer_output
             if self.dropout_layer and layer < self.num_layers - 1:
                 output = self.dropout_layer(output)
-
-        h_n = torch.stack(h_n)
 
         if not self.batch_first:
             output = output.transpose(0, 1)
@@ -317,11 +315,11 @@ class pRNN(nn.Module):
     def _process_layer(self, input, h0, cell):
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
-        input = input.transpose(1, 2)  # (batch_size, hidden_size, seq_len)
 
         device = input.device
         states_guess = torch.zeros(batch_size, self.hidden_size, seq_len, device=device)
         if self.parallel:
+            input = input.transpose(1, 2)  # (batch_size, hidden_size, seq_len)
             output = quasi_deer_torch(
                 f=cell,
                 diagonal_derivative=cell.diagonal_derivative,
@@ -332,10 +330,9 @@ class pRNN(nn.Module):
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
-            output = []
+            output = torch.empty_like(h0)
             h = h0[:, 0]  # Initial hidden state
             for t in range(seq_len):
-                h = cell(input[:, :, t], h)
-                output.append(h)
-            output = torch.stack(output, dim=1)  # (batch_size, seq_len, hidden_size)
+                h = cell(input[:, t, :], h)
+                output[:, t, :] = h
             return output
