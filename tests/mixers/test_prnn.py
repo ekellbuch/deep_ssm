@@ -9,49 +9,117 @@ One full run can be tested with:
 import torch
 import torch.nn as nn
 from deep_ssm.mixers.prnn import pRNN
+import pytest
+import numpy as np
 
 
-def test_prnn():
+class Arguments:
+    def __init__(self, 
+                input_size=10, 
+                hidden_size=10, 
+                num_layers=1, 
+                batch_first=True, 
+                dropout=0, 
+                bidirectional=True, 
+                num_iters=2,
+                method="gru", 
+                parallel=False,
+                checkpoint=False):
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.batch_first = batch_first
+        self.dropout = dropout
+        self.bidirectional = bidirectional
+        self.method = method
+        self.parallel = parallel
+        self.num_iters = num_iters
+        self.checkpoint = checkpoint
+
+
+
+def update_name(param_name):
+    "change from {weight_ih_l0} to ''forward_cells.0.weight_ih'"
+    if "reverse" in param_name:
+        new_name = "reverse_cells"
+        param_name, _ = param_name.rsplit("_", 1)
+    else:
+        new_name = "forward_cells" 
+
+    name, layer = param_name.rsplit("_",1)
+    layer_name = layer[1:]   
+    new_name = f"{new_name}.{layer_name}.{name}"
+    return new_name
+
+
+def assign_parameters(model1, model2, update_name_fn=update_name):
+    # assign params in model 1 to model2:
+    m2_sd = model2.state_dict()
+    for name1, p1 in model1.named_parameters():        
+        name2 = update_name_fn(name1)
+        assert p1.shape ==  m2_sd[name2].shape
+        m2_sd[name2] = p1.clone().detach()
+
+
+    model2.load_state_dict(m2_sd)
+    return model2
+
+
+
+def compare_parameters(model1, model2,update_name_fn=update_name, grad=False, atol=1e-6):
+    # check that parameters are the same:
+    model2_params = dict(model2.named_parameters())
+
+    for name1, p1 in model1.named_parameters():
+        name2 = update_name_fn(name1)
+        p2 = model2_params[name2]
+        try:
+            if grad:
+                assert torch.allclose(p1.grad, p2.grad, atol=atol), f"{name2} did not match"
+            else:
+                assert torch.allclose(p1, p2, atol=atol), f"{name2} did not match"
+        except:
+            breakpoint()
+            # would fail for backward if not weights are not reassigned
+            return False
+    return True
+
     
-    class Arguments:
-        def __init__(self, 
-                 input_size=10, 
-                 hidden_size=10, 
-                 num_layers=1, 
-                 batch_first=True, 
-                 dropout=0, 
-                 bidirectional=True, 
-                 num_iters=2,
-                 method="gru", 
-                 parallel=False):
-            self.input_size = input_size
-            self.hidden_size = hidden_size
-            self.num_layers = num_layers
-            self.batch_first = batch_first
-            self.dropout = dropout
-            self.bidirectional = bidirectional
-            self.method = method
-            self.parallel = parallel
-            self.num_iters = num_iters
 
+seqlens = [2, 8, 32, 256]
+batch_sizes = [1, 2, 8]
+dims = [2, 8]
+bidirectionality =[False, True]
+num_layerss = [1, 2, 3]
+
+
+#seqlens = [2]
+#batch_sizes = [1]
+#dims = [1]
+#bidirectionality = [True, False]
+#num_layerss = [1]
+@pytest.mark.parametrize("seqlen", seqlens)
+@pytest.mark.parametrize("batch", batch_sizes)
+@pytest.mark.parametrize("dim", dims)
+@pytest.mark.parametrize("bidirectional", bidirectionality)
+@pytest.mark.parametrize("num_layers", num_layerss)
+def test_prnn(batch, seqlen, dim, bidirectional,num_layers):
+    
     # Create an instance of Arguments
-    cfg = Arguments()
+    cfg = Arguments(input_size=dim,
+                    bidirectional=bidirectional,
+                    num_layers=num_layers)
+    atol = 1e-5 
     D = 2 if cfg.bidirectional else 1
     hidden_size = cfg.hidden_size * D
-
-
     # Pass arguments to pRNN
     torch.manual_seed(42)
-    prnn = pRNN(**vars(cfg))
-
-    batch, seqlen, dim = 1, 10, 10
+    np.random.seed(42)
 
     x = torch.randn(batch, seqlen, dim)
-    output, hidden = prnn(x)
 
-    assert output.shape == (batch, seqlen, hidden_size)
-    assert hidden.shape == (D, batch, cfg.hidden_size)
-
+    # ---------
+    # Get model
     torch.manual_seed(42)
     gru_model = nn.GRU(cfg.input_size,
                        cfg.hidden_size, 
@@ -59,59 +127,75 @@ def test_prnn():
                        batch_first=cfg.batch_first, 
                        dropout=cfg.dropout, 
                        bidirectional=cfg.bidirectional)
+
     output1, hidden1 = gru_model(x)
 
     assert output1.shape == (batch, seqlen, hidden_size)
-    assert hidden1.shape == (D, batch, cfg.hidden_size)
+    assert hidden1.shape == (D * num_layers, batch, cfg.hidden_size)
+
+    # Compute loss and gradients for GRU
+    gru_model.zero_grad()
+    gru_loss = output1.mean()
+    gru_loss.backward()
+
+    # -------------
+    # Get model
+    # reset grads 
+
+    torch.manual_seed(42)
+    prnn = pRNN(**vars(cfg))
+    
+    if bidirectional:
+        prnn = assign_parameters(gru_model, prnn)
+
+    assert compare_parameters(gru_model, prnn, atol=atol)
+
+    output, hidden = prnn(x)
+
+    assert output.shape == (batch, seqlen, hidden_size), f"prnn output has incorrect dimensions"
+    assert hidden.shape == (D * num_layers, batch, cfg.hidden_size), f"prnn hidden var has incorrect dimensions"
 
     gru_params = sum(p.numel() for p in gru_model.parameters())
     prnn_params = sum(p.numel() for p in prnn.parameters())
     
-    assert gru_params == gru_params
-    assert torch.allclose(output, output1)
-    assert torch.allclose(hidden, hidden1)
-
-    # Test backward pass
-    loss_fn = nn.MSELoss()
-
-    # Compute loss and gradients for pRNN
-    prnn_loss = loss_fn(output, torch.zeros_like(output))
-    prnn_loss.backward()
-    prnn_grads = [p.grad.clone() for p in prnn.parameters()]
-
-    # Compute loss and gradients for GRU
-    gru_loss = loss_fn(output1, torch.zeros_like(output1))
-    gru_loss.backward()
-    gru_grads = [p.grad.clone() for p in gru_model.parameters()]
+    assert gru_params == prnn_params, f"gru and prnn parameters do not match"
+    assert torch.allclose(output, output1, atol=atol), f"gru and prnn outputs do not match"
+    assert torch.allclose(hidden, hidden1, atol=atol), f"gru and prnn hidden vars do not match"
 
     # Compare gradients
-    for prnn_grad, gru_grad in zip(prnn_grads, gru_grads):
-        assert torch.allclose(prnn_grad, gru_grad, atol=1e-5), "Gradient mismatch between pRNN and GRU"
+    # Compute loss and gradients for pRNN
+    prnn_loss = output.mean()
+    prnn_loss.backward()
 
+    assert compare_parameters(gru_model, prnn, grad=True, atol=atol)
 
-    # now check convergence runs with fixed number of iterations
-    cfg2 = Arguments(parallel=True, num_iters=10)
+    cfg2 = cfg
+    cfg2.parallel = True
+    cfg2.num_iters = 10
 
+    # -----
     torch.manual_seed(42)
     prnn2 = pRNN(**vars(cfg2))
+
+    if bidirectional:
+        prnn2 = assign_parameters(gru_model, prnn2)
+    assert compare_parameters(gru_model, prnn2, atol=atol)
+
     output2, hidden2 = prnn2(x)
 
-    assert output2.shape == (batch, seqlen, hidden_size)
-    assert hidden2.shape == (D, batch, cfg.hidden_size)
+    assert output2.shape == (batch, seqlen, hidden_size),  f"prnn_parallel outputs dimension mismatch"
+    assert hidden2.shape == (D *num_layers, batch, cfg.hidden_size),  f"prnn_parallel hidden vars dimension mismatch"
 
-    #print((output2- output).abs().max())
-    assert torch.allclose(output, output2)
-    assert torch.allclose(hidden, hidden2)
-    print("All tests passed")
+    assert torch.allclose(output, output2, atol=atol),  f"gru and prnn_parallel outputs not match"
+    assert torch.allclose(hidden, hidden2, atol=atol),  f"gru and prnn_parallel hidden vars not match"
 
     # Compute loss and gradients for pRNN2
-    prnn2_loss = loss_fn(output2, torch.zeros_like(output2))
+    prnn2_loss = output2.mean()
     prnn2_loss.backward()
-    prnn2_grads = [p.grad.clone() for p in prnn2.parameters()]
 
     # Compare gradients
-    for prnn2_grad, gru_grad in zip(prnn2_grads, gru_grads):
-        assert torch.allclose(prnn2_grad, gru_grad, atol=1e-5), "Gradient mismatch between pRNN and GRU"
+    assert compare_parameters(gru_model, prnn2, grad=True, atol=atol)
+
 
 
 if __name__ == "__main__":
