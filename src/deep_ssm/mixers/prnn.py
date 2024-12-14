@@ -17,6 +17,14 @@ except:
     except ImportError:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 
+def _batch_along_time(x):
+    assert x.ndim == 3, "Expects x to be (B, D, T)"
+    return x.permute(0, 2, 1).flatten(0, 1)
+
+def _unbatch_to_time(x, B):
+    assert x.ndim == 2, "Expects x to be (B*T, D)"
+    T = x.shape[0] // B
+    return x.view(B, T, -1).permute(0, 2, 1)
 
 def quasi_deer_torch(
     f,
@@ -65,14 +73,15 @@ def quasi_deer_torch(
         states: B,D,T
         """
         # Evaluate f and its Jacobian in parallel across timesteps 1,..,T-1
-        fs = torch.func.vmap(f, in_dims=-1, out_dims=-1)(
-            inputs[..., 1:], states[..., :-1]
-        )  # (B,D,T-1), in your diagram above, the first interacton is f(e1, h1)
+        B, D, T = states.shape
+        # inputs and states are (B,D,T-1), the first interacton is f(e1, h1)
+        fs = f(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        fs = _unbatch_to_time(fs, B)  # (B,D,T-1)
 
         # Compute the As and bs from fs and Jfs
-        As = (1.0 - k) * torch.func.vmap(diagonal_derivative, in_dims=-1, out_dims=-1)(
-            inputs[..., 1:], states[..., :-1]
-        )  # (B, D, T-1)
+        # inputs and states are (B,D,T-1)
+        As = (1.0 - k) * diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        As = _unbatch_to_time(As, B)  # (B, D, T-1)
         bs = fs - As * states[..., :-1]  # (B, D, T-1)
 
         # initial_state is h0
@@ -92,12 +101,12 @@ def quasi_deer_torch(
         new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states
 
-    deer_traces = []
+    #deer_traces = []
     for _ in range(num_iters):
         states_guess = step(states_guess)
-        deer_traces.append(states_guess)
+        #deer_traces.append(states_guess)
 
-    return deer_traces[-1]  # (B, D, T)
+    return states_guess #deer_traces[-1]  # (B, D, T)
 
 
 class MinRNNCell(nn.Module):
@@ -144,7 +153,7 @@ class MinRNNCell(nn.Module):
 def checkpoint(f):
     def f_(self, *args):
         if self.checkpoint:
-            return checkpoint_torch(f, self, *args, use_reentrant=True)  # need reentrant because we use torch.func.vmap
+            return checkpoint_torch(f, self, *args, use_reentrant=False)
         else:
             return f(self, *args)
     return f_
@@ -240,7 +249,7 @@ class pRNN(nn.Module):
         )
  
         if bidirectional:
-            self.backward_cells = nn.ModuleList(
+            self.reverse_cells = nn.ModuleList(
                 [
                     method_fn[method](
                         input_size if i == 0 else hidden_size * num_directions,
@@ -270,34 +279,32 @@ class pRNN(nn.Module):
             )
 
         output = input
-        h_n = []
-
+        h_n = torch.empty_like(hx)
+        
         for layer in range(self.num_layers):
             forward_layer_output = self._process_layer(
                 output, hx[layer * num_directions], self.forward_cells[layer]
             )
             if self.bidirectional:
-                backward_layer_output = self._process_layer(
+                reverse_layer_output = self._process_layer(
                     output.flip(1),
                     hx[layer * num_directions + 1],
-                    self.backward_cells[layer],
+                    self.reverse_cells[layer],
                 )
-                backward_layer_output = backward_layer_output.flip(1)
+                reverse_layer_output = reverse_layer_output.flip(1)
                 layer_output = torch.cat(
-                    [forward_layer_output, backward_layer_output], dim=2
+                    [forward_layer_output, reverse_layer_output], dim=2
                 )
             else:
                 layer_output = forward_layer_output
-
-            h_n.append(layer_output[:, -1, : self.hidden_size])
+            
+            h_n[layer*num_directions] = layer_output[:, -1, : self.hidden_size]
             if self.bidirectional:
-                h_n.append(layer_output[:, 0, self.hidden_size :])
+                h_n[layer*num_directions + 1] = layer_output[:, 0, self.hidden_size:]
 
             output = layer_output
             if self.dropout_layer and layer < self.num_layers - 1:
                 output = self.dropout_layer(output)
-
-        h_n = torch.stack(h_n)
 
         if not self.batch_first:
             output = output.transpose(0, 1)
@@ -308,11 +315,11 @@ class pRNN(nn.Module):
     def _process_layer(self, input, h0, cell):
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
-        input = input.transpose(1, 2)  # (batch_size, hidden_size, seq_len)
 
         device = input.device
         states_guess = torch.zeros(batch_size, self.hidden_size, seq_len, device=device)
         if self.parallel:
+            input = input.transpose(1, 2)  # (batch_size, hidden_size, seq_len)
             output = quasi_deer_torch(
                 f=cell,
                 diagonal_derivative=cell.diagonal_derivative,
@@ -323,10 +330,9 @@ class pRNN(nn.Module):
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
-            output = []
+            output = torch.empty_like(h0)
             h = h0[:, 0]  # Initial hidden state
             for t in range(seq_len):
-                h = cell(input[:, :, t], h)
-                output.append(h)
-            output = torch.stack(output, dim=1)  # (batch_size, seq_len, hidden_size)
+                h = cell(input[:, t, :], h)
+                output[:, t, :] = h
             return output
