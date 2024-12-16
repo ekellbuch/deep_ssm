@@ -5,21 +5,32 @@ from deep_ssm.mixers.prnn import pRNN
 import torch.nn.functional as F
 
 class GRUDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size, model=None):
+    def __init__(self, vocab_size, embed_size, hidden_size):
         super(GRUDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        if model is None:
-            self.model= nn.GRU(embed_size, hidden_size, 1, batch_first=True)
-        else:
-            self.model = model
+        self.model= nn.GRU(embed_size, hidden_size, num_layers=1, batch_first=True)
         self.linear = nn.Linear(hidden_size, vocab_size)
 
     def forward(self, x):
         x = self.embedding(x)
-        if isinstance(self.model, nn.GRU):
-            x, h = self.model(x)
-        else:
-            x = self.model(x)
+        x, _ = self.model(x)
+        x = self.linear(x)
+        return x
+    
+class pRNNDecoder(nn.Module):
+    def __init__(self, vocab_size, embed_size, hidden_size, num_iters=2, bidirectional=False,
+                 method='minrnn', parallel=True):
+        super(pRNNDecoder, self).__init__()
+
+        self.embedding = nn.Embedding(vocab_size, embed_size)
+        self.model= pRNN(embed_size, hidden_size, num_layers=1, 
+                         batch_first=True, bidirectional=bidirectional, num_iters=num_iters, 
+                         method=method, parallel=parallel)
+        self.linear = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x, _ = self.model(x)
         x = self.linear(x)
         return x

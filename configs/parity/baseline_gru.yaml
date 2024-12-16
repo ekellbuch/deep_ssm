@@ -35,8 +35,7 @@ trainer_cfg:
   fast_dev_run: false
   logger: "wandb"
   accelerator: "auto"
-  max_steps: 10000
-  log_every_n_steps: 100
+  max_epochs: 20
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)

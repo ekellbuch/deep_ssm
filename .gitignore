@@ -4,6 +4,8 @@ outputs/
 data/
 speech_bci/
 *.pt
+scripts/parity
+scripts/lightning_logs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
