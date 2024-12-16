@@ -4,6 +4,7 @@ Goal is to build an extremely lightweight script for prototyping models using se
 TODO:
 * Can I apply the prnn object to sequential mnist
 * Can I modify prnn to have a learnable diagonal Jacobian instead of one that comes from nonlinear dynamics?
+* can I turn wandb off when I don't want it
 """
 
 import wandb
@@ -36,9 +37,6 @@ if __name__ == "__main__":
     parser.add_argument("--proto", action="store_true", help="prototype")
     args = parser.parse_args()
 
-    # set up wandb
-    wandb.init(project="nonlinear_ssm", entity=args.entity)
-
     # Set hyperparameters
     input_size = 1
     hidden_size = args.hidden_size  # 256
@@ -49,45 +47,48 @@ if __name__ == "__main__":
     if args.proto:
         hidden_size = 16
         num_epochs = 2
+    else:
+        wandb.init(project="nonlinear_ssm", entity=args.entity)
     print(f"Using {num_iters} quasi-DEER iterations")
 
     # Load datasets
     train_loader = load_sequential_mnist("train", batch_size)
     test_loader = load_sequential_mnist("test", batch_size)
+    print("loaded the data correctly")
 
-    # train model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MinRNNClassifier(input_size=1, hidden_size=hidden_size, num_classes=10)
-    model.to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters())
+    # # train model
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # model = MinRNNClassifier(input_size=1, hidden_size=hidden_size, num_classes=10)
+    # model.to(device)
+    # criterion = nn.CrossEntropyLoss()
+    # optimizer = torch.optim.Adam(model.parameters())
 
-    for epoch in tqdm(range(num_epochs)):
-        for x, y in tqdm(train_loader):
-            x = x.to(device)  # (B, D, T)
-            y = y.to(device)
-            x = x.permute(0, 2, 1)  # (B, T, D)
-            optimizer.zero_grad()
-            logits = model(x, parallel=True)
-            loss = criterion(logits, y)
-            loss.backward()
-            optimizer.step()
+    # for epoch in tqdm(range(num_epochs)):
+    #     for x, y in tqdm(train_loader):
+    #         x = x.to(device)  # (B, D, T)
+    #         y = y.to(device)
+    #         x = x.permute(0, 2, 1)  # (B, T, D)
+    #         optimizer.zero_grad()
+    #         logits = model(x, parallel=True)
+    #         loss = criterion(logits, y)
+    #         loss.backward()
+    #         optimizer.step()
 
-        # eval loop
-        model.eval()
-        with torch.no_grad():
-            correct = 0
-            total = 0
-            for x, y in tqdm(test_loader):
-                x = x.to(device)
-                y = y.to(device)
-                x = x.permute(0, 2, 1)  # (B,D,T)
-                predictions = model.predict(x, parallel=True)
-                correct += torch.sum(predictions == y)
-                total += len(y)
-            print(
-                f"Epoch {epoch}, Val Accuracy: {round(100 * (correct/total).item(),2)}%"
-            )
-            wandb.log({"val_accuracy": round(100 * (correct / total).item(), 2)})
-    print("Training complete")
-    print(f"Using {num_iters} quasi-DEER iterations")
+    #     # eval loop
+    #     model.eval()
+    #     with torch.no_grad():
+    #         correct = 0
+    #         total = 0
+    #         for x, y in tqdm(test_loader):
+    #             x = x.to(device)
+    #             y = y.to(device)
+    #             x = x.permute(0, 2, 1)  # (B,D,T)
+    #             predictions = model.predict(x, parallel=True)
+    #             correct += torch.sum(predictions == y)
+    #             total += len(y)
+    #         print(
+    #             f"Epoch {epoch}, Val Accuracy: {round(100 * (correct/total).item(),2)}%"
+    #         )
+    #         wandb.log({"val_accuracy": round(100 * (correct / total).item(), 2)})
+    # print("Training complete")
+    # print(f"Using {num_iters} quasi-DEER iterations")

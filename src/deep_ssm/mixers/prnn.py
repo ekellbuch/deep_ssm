@@ -217,6 +217,7 @@ class pRNN(nn.Module):
         dropout=0,
         bidirectional=True,
         num_iters=2,  # number of iterations for quasi-DEER
+        k = 0.0, # damping factor
         method="minrnn",  # minrrn or gru
         parallel=True,  # parallel implementation
         checkpoint=True,
@@ -234,6 +235,7 @@ class pRNN(nn.Module):
         num_directions = 2 if bidirectional else 1
         self.num_directions = num_directions
         self.parallel = parallel
+        self.k = k
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -327,6 +329,7 @@ class pRNN(nn.Module):
                 states_guess=states_guess,
                 inputs=input,
                 num_iters=self.num_iters,
+                k=self.k,
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
