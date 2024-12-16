@@ -6,6 +6,7 @@ speech_bci/
 *.pt
 scripts/parity
 scripts/lightning_logs
+*.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
