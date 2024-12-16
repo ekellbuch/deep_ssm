@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 from deep_ssm.mixers.prnn import pRNN
-from deep_ssm.utils.logging_utils import WandbLogger
 
 
 class pRNNClassifier(nn.Module):
