@@ -15,8 +15,8 @@ VOCAB_SIZE = 8_192
 
 configs = []
 for input_seq_len, num_kv_pairs in [
-    #(64, 4),
-    (128, 8),
+    (64, 4),
+    #(128, 8),
     #(256, 16),
     # (512, 64),
 ]:
@@ -52,9 +52,9 @@ for input_seq_len, num_kv_pairs in [
     ]:
         for d_conv in [4]:
             for expand in [2]:
-                #for n_layers in [2, 4]:
-                for n_layers in [2]:
-                    for lr in np.logspace(-4, -2, 4)[-2:-1]:
+                for n_layers in [2, 4]:
+                #for n_layers in [2]:
+                    for lr in np.logspace(-4, -2, 4):#[-2:-1]:
                         MIXERS = {
                             "attention": dict(
                                 name="zoology.mixers.attention.MHA",
@@ -67,6 +67,7 @@ for input_seq_len, num_kv_pairs in [
                                 name="zoology.mixers.prnn.pRNN",
                                 kwargs=dict(
                                     num_layers=n_layers,
+                                    d_conv=d_conv,
                                     bias=True,
                                     batch_first=True,
                                     dropout=0.,
@@ -97,10 +98,10 @@ for input_seq_len, num_kv_pairs in [
                                 model=model,
                                 data=data,
                                 learning_rate=lr,
-                                max_epochs=64,  # NOTE: make longer to ensure convergence
+                                max_epochs=64,
                                 run_id=f"{sequence_mixer}-seqlen{input_seq_len}-dmodel{d_model}-lr{lr}-kv{num_kv_pairs}",
                                 logger=LoggerConfig(
-                                    project_name="zoology",
+                                    project_name="deep_ssm_zoology",
                                     entity=WANDB_USERNAME,
                                 )
 

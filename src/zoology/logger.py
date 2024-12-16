@@ -8,7 +8,7 @@ from zoology.config import LoggerConfig, TrainConfig
 
 class WandbLogger:
     def __init__(self, config: TrainConfig):
-        if config.logger.project_name is None or config.logger.entity is None:
+        if config.logger.project_name is None:# or config.logger.entity is None:
             print("No logger specified, skipping...")
             self.no_logger = True
             return
