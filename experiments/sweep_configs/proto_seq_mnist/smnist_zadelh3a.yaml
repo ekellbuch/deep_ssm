@@ -1,0 +1,17 @@
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  model_cfg.learn_diags:
+    values:
+      - True
+      - False
+  model_cfg.num_iters:
+    values:
+      - 2
+      - 3
+      - 4
+program: seq_mnist_hydra.py
