@@ -1,0 +1,23 @@
+Comment : >
+  # yaml file for using hydra for sequential mnist (experiments/proto_seq_mnist)
+
+seed: 0
+
+data_cfg:
+  batch_size: 256
+
+model_cfg:
+  hidden_size: 256
+  num_iters: 2
+  parallel: True
+  learn_diags: True
+
+optimizer_cfg:
+  lr: 0.001
+
+trainer_cfg:
+  num_epochs: 2
+
+logger_cfg:
+  use_wandb: False
+
