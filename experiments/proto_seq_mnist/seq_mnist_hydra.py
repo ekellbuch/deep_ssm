@@ -22,6 +22,7 @@ def main(cfg: DictConfig):
     # Set hyperparameters
     hidden_size = cfg.model_cfg.hidden_size
     num_epochs = cfg.trainer_cfg.num_epochs
+    print(f"running for {num_epochs} epochs")
     num_iters = cfg.model_cfg.num_iters
     batch_size = cfg.data_cfg.batch_size
     learning_rate = cfg.optimizer_cfg.lr
@@ -62,8 +63,6 @@ def main(cfg: DictConfig):
             loss = criterion(logits, y)
             loss.backward()
             optimizer.step()
-            if offline:
-                break
 
         # Evaluation Loop
         model.eval()

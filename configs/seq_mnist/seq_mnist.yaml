@@ -16,8 +16,8 @@ optimizer_cfg:
   lr: 0.001
 
 trainer_cfg:
-  num_epochs: 2
+  num_epochs: 100
 
 logger_cfg:
-  use_wandb: False
+  use_wandb: True
 

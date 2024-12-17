@@ -1,6 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=smnist_sweep          
-#SBATCH --output=smnist_sweep.%j.out     
+#SBATCH --job-name=smnist_sweep 
+#SBATCH --error=smnist_sweep_%j_%a.err         
+#SBATCH --output=smnist_sweep_%j_%a.out     
 #SBATCH --time=23:59:59                 
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4

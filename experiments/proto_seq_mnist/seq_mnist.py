@@ -2,7 +2,10 @@
 Goal is to build an extremely lightweight script for prototyping models using sequential mnist.
 
 TODO:
-* Can I modify prnn to have a learnable diagonal Jacobian instead of one that comes from nonlinear dynamics?
+
+NOTES:
+* right now your learnable Jacobian is the same for all iterations of DEER
+* should we be clipping instead of scaling for ELK?
 """
 
 import wandb
