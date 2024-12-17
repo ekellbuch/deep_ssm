@@ -1,0 +1,21 @@
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  model_cfg.clip:
+    values:
+      - True
+  model_cfg.learn_diags:
+    values:
+      - False
+  model_cfg.num_iters:
+    values:
+      - 2
+      - 3
+      - 4
+program: seq_mnist_hydra.py
+project: nonlinear_ssm
+name: clip_elk_smnist
