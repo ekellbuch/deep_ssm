@@ -2,7 +2,6 @@
 Goal is to build an extremely lightweight script for prototyping models using sequential mnist.
 
 TODO:
-* Can I apply the prnn object to sequential mnist
 * Can I modify prnn to have a learnable diagonal Jacobian instead of one that comes from nonlinear dynamics?
 """
 
@@ -34,6 +33,7 @@ if __name__ == "__main__":
         default=10,
         help="Number of quasi-DEER iterations to use",
     )
+    parser.add_argument("--learn_diags", action="store_true", help="learn diagonal Jacobian")
     parser.add_argument("--seq", action="store_true", help="evaluate sequentially")
     parser.add_argument("--proto", action="store_true", help="prototype")
     args = parser.parse_args()
@@ -66,6 +66,7 @@ if __name__ == "__main__":
                            hidden_size=hidden_size,
                            num_iters=args.num_iters,
                            parallel=use_parallel,
+                           learn_diags=args.learn_diags,
                            num_classes=10)
     model.to(device)
     criterion = nn.CrossEntropyLoss()

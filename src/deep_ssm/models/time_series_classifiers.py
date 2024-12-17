@@ -27,6 +27,7 @@ class pRNNClassifier(nn.Module):
                  method="minrnn",
                  parallel=True,
                  checkpoint=True,
+                 learn_diags=False,
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
         self.rnn = pRNN(input_size,
@@ -38,7 +39,8 @@ class pRNNClassifier(nn.Module):
                         k=k,
                         method=method,
                         parallel=parallel,
-                        checkpoint=checkpoint)
+                        checkpoint=checkpoint,
+                        learn_diags=learn_diags)
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):

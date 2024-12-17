@@ -202,6 +202,36 @@ class AugmentedGRUCell(nn.GRUCell):
         return diag_jacobian
 
 
+class LearnableDiagonal(torch.nn.Module):
+    """
+    Note that you could go even simpler and have the diagonal not be input and hidden dependent but just a learnable parameter
+    I think this would be more like LTI (S5), instead of LTV (S6).
+    """
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+
+        # Linear layers for input and state transformations
+        self.input_linear = nn.Linear(input_size, hidden_size)
+        self.state_linear = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self, input, state):
+        """
+        Compute the diagonal parameters as a function of input and state.
+        Args:
+            input: (batch_size, input_size)
+            state: (batch_size, size) - hidden state
+        Returns:
+            Diagonal parameters (batch_size, size), values bounded between -1 and 1
+        """
+        # Linear readout from input and state
+        linear_out = self.input_linear(input) + self.state_linear(state)
+
+        # Apply tanh to bound values between -1 and 1
+        return torch.tanh(linear_out)
+
+
 class pRNN(nn.Module):
     """
     An RNN that can be evaluated in parallel using quasi-DEER
@@ -221,6 +251,7 @@ class pRNN(nn.Module):
         method="minrnn",  # minrrn or gru
         parallel=True,  # parallel implementation
         checkpoint=True,
+        learn_diags=False, # learn the diagonal instead of using the nonlinear dynamics
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -236,6 +267,7 @@ class pRNN(nn.Module):
         self.num_directions = num_directions
         self.parallel = parallel
         self.k = k
+        self.learn_diags = learn_diags
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -249,7 +281,14 @@ class pRNN(nn.Module):
                 for i in range(num_layers)
             ]
         )
- 
+        if self.learn_diags:
+            # print("learning the diagonals")
+            self.fwd_diagonals = nn.ModuleList(
+                [LearnableDiagonal(self.input_size, self.hidden_size) for _ in range(num_layers)]
+            )
+        else:
+            self.fwd_diagonals = [None] * num_layers
+
         if bidirectional:
             self.reverse_cells = nn.ModuleList(
                 [
@@ -261,6 +300,12 @@ class pRNN(nn.Module):
                     for i in range(num_layers)
                 ]
             )
+            if self.learn_diags:
+                self.rev_diagonals = nn.ModuleList(
+                    [LearnableDiagonal(self.input_size, self.hidden_size) for _ in range(num_layers)])
+            else:
+                self.rev_diagonals = [None] * num_layers
+
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
         self.num_iters = num_iters  # number of iterations for quasi-DEER
@@ -282,16 +327,17 @@ class pRNN(nn.Module):
 
         output = input
         h_n = torch.empty_like(hx)
-        
+
         for layer in range(self.num_layers):
             forward_layer_output = self._process_layer(
-                output, hx[layer * num_directions], self.forward_cells[layer]
+                output, hx[layer * num_directions], self.forward_cells[layer], self.fwd_diagonals[layer],
             )
             if self.bidirectional:
                 reverse_layer_output = self._process_layer(
                     output.flip(1),
                     hx[layer * num_directions + 1],
                     self.reverse_cells[layer],
+                    self.rev_diagonals[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
                 layer_output = torch.cat(
@@ -299,7 +345,7 @@ class pRNN(nn.Module):
                 )
             else:
                 layer_output = forward_layer_output
-            
+
             h_n[layer*num_directions] = layer_output[:, -1, : self.hidden_size]
             if self.bidirectional:
                 h_n[layer*num_directions + 1] = layer_output[:, 0, self.hidden_size:]
@@ -314,17 +360,24 @@ class pRNN(nn.Module):
         return output, h_n
 
     @checkpoint
-    def _process_layer(self, input, h0, cell):
+    def _process_layer(self, input, h0, cell, diagonal_fn=None):
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
 
         device = input.device
         states_guess = torch.zeros(batch_size, self.hidden_size, seq_len, device=device)
+        
         if self.parallel:
+            def diagonal_derivative(input_t, state_t):
+                if diagonal_fn:
+                    return diagonal_fn(input_t, state_t)
+                else:
+                    return cell.diagonal_derivative(input_t, state_t)
+                
             input = input.transpose(1, 2)  # (batch_size, hidden_size, seq_len)
             output = quasi_deer_torch(
                 f=cell,
-                diagonal_derivative=cell.diagonal_derivative,
+                diagonal_derivative=diagonal_derivative,
                 initial_state=h0[:, 0],
                 states_guess=states_guess,
                 inputs=input,
