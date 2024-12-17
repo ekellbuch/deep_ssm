@@ -46,6 +46,8 @@ def main(cfg: DictConfig):
         num_iters=num_iters,
         parallel=use_parallel,
         learn_diags=cfg.model_cfg.learn_diags,
+        k=cfg.model_cfg.k,
+        clip=cfg.model_cfg.clip,
         num_classes=10,
     )
     model.to(device)

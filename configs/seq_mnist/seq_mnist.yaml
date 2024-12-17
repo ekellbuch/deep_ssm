@@ -11,6 +11,8 @@ model_cfg:
   num_iters: 2
   parallel: True
   learn_diags: True
+  k : 0
+  clip: False
 
 optimizer_cfg:
   lr: 0.001

@@ -1,6 +1,6 @@
 """
-MinRNN mixer
-Using quasi-DEER!
+parallel RNN mixer
+Using quasi-ELK!
 """
 
 import torch
@@ -34,9 +34,10 @@ def quasi_deer_torch(
     inputs,  # (B, d_input, T)
     num_iters=10,  # controls number of newton iterations
     k=0.0,  # controls the amount of damping
+    clip=False, # instead of scaling the diagonal Jacobian, clip the entries if there are less than / bigger than 1
 ):
     """
-    Currently is quasi-DEER/ELK
+    quasi-ELK in torch!
     Args:
       f: a forward fxn that takes in an input and a state, and outputs the next state. (following torch.nn.GRUCell convention)
           In the context of a GRU, f is a GRU cell
@@ -80,8 +81,12 @@ def quasi_deer_torch(
 
         # Compute the As and bs from fs and Jfs
         # inputs and states are (B,D,T-1)
-        As = (1.0 - k) * diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        As = diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
         As = _unbatch_to_time(As, B)  # (B, D, T-1)
+        if clip:
+            As.clamp_(min=-1, max=1)
+        elif k > 0:
+            As.mul_(1.0 - k)
         bs = fs - As * states[..., :-1]  # (B, D, T-1)
 
         # initial_state is h0
@@ -248,6 +253,7 @@ class pRNN(nn.Module):
         bidirectional=True,
         num_iters=2,  # number of iterations for quasi-DEER
         k = 0.0, # damping factor
+        clip = False, # clip the diagonal Jacobian
         method="minrnn",  # minrrn or gru
         parallel=True,  # parallel implementation
         checkpoint=True,
@@ -267,6 +273,7 @@ class pRNN(nn.Module):
         self.num_directions = num_directions
         self.parallel = parallel
         self.k = k
+        self.clip = clip
         self.learn_diags = learn_diags
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
@@ -383,6 +390,7 @@ class pRNN(nn.Module):
                 inputs=input,
                 num_iters=self.num_iters,
                 k=self.k,
+                clip=self.clip,
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
