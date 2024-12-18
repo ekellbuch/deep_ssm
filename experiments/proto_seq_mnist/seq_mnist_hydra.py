@@ -49,6 +49,7 @@ def main(cfg: DictConfig):
         k=cfg.model_cfg.k,
         clip=cfg.model_cfg.clip,
         last_only=cfg.model_cfg.last_only,
+        learn_initial_states=cfg.model_cfg.learn_initial_states,
         num_classes=10,
     )
     model.to(device)

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.checkpoint import checkpoint as checkpoint_torch
+import torch.nn.functional as F
 try:
     from accelerated_scan.warp import (
         scan,
@@ -108,6 +109,7 @@ def quasi_deer_torch(
         return new_states
 
     #deer_traces = []
+    # last_only does not seem to be a good idea :(
     if last_only:
         for _ in range(num_iters - 1):
             with torch.no_grad():
@@ -244,7 +246,24 @@ class LearnableDiagonal(torch.nn.Module):
         return torch.tanh(linear_out)
 
 
+class FeedForward(nn.Module):
+    """
+    2 layer MLP inspired by transformer FFN
+    We use to learn the initial states
+    """
+    def __init__(self, input_dim, output_dim):
+        super(FeedForward, self).__init__()
+        self.intermediate_dim = 4 * output_dim
+        self.w1 = nn.Linear(input_dim, self.intermediate_dim, bias=False)
+        self.w2 = nn.Linear(self.intermediate_dim, output_dim, bias=False)
+        self.w3 = nn.Linear(input_dim, self.intermediate_dim, bias=False)
+
+    def forward(self, x):
+        h = F.silu(self.w1(x))
+        return self.w2(h * self.w3(x))
+
 class pRNN(nn.Module):
+
     """
     An RNN that can be evaluated in parallel using quasi-ELK
     """
@@ -261,11 +280,12 @@ class pRNN(nn.Module):
         num_iters=2,  # number of iterations for quasi-ELK
         k = 0.0, # damping factor
         clip = False, # clip the diagonal Jacobian
-        method="minrnn",  # minrrn or gru
+        method="minrnn",  # minrnn or gru
         parallel=True,  # parallel implementation
         checkpoint=True,
         learn_diags=False, # learn the diagonal instead of using the nonlinear dynamics
         last_only=False, # only differentiate through the last state
+        learn_initial_states=False,
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -284,13 +304,14 @@ class pRNN(nn.Module):
         self.clip = clip
         self.learn_diags = learn_diags
         self.last_only = last_only
+        self.learn_initial_states = learn_initial_states
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
         self.forward_cells = nn.ModuleList(
             [
                 method_fn[method](
-                    input_size if i == 0 else hidden_size * num_directions,
+                    input_size if i == 0 else hidden_size * num_directions, # input size changing to allow stacking
                     hidden_size,
                     bias=bias,
                 )
@@ -300,10 +321,28 @@ class pRNN(nn.Module):
         if self.learn_diags:
             # print("learning the diagonals")
             self.fwd_diagonals = nn.ModuleList(
-                [LearnableDiagonal(self.input_size, self.hidden_size) for _ in range(num_layers)]
+                [
+                    LearnableDiagonal(
+                        input_size if i == 0 else hidden_size * num_directions,
+                        self.hidden_size,
+                    )
+                    for i in range(num_layers)
+                ]
             )
         else:
             self.fwd_diagonals = [None] * num_layers
+        if self.learn_initial_states:
+            self.fwd_state_fns = nn.ModuleList(
+                [
+                    FeedForward(
+                        input_size if i == 0 else hidden_size * num_directions,
+                        self.hidden_size,
+                    )
+                    for i in range(num_layers)
+                ]
+            )
+        else:
+            self.fwd_state_fns = [None] * num_layers
 
         if bidirectional:
             self.reverse_cells = nn.ModuleList(
@@ -318,10 +357,28 @@ class pRNN(nn.Module):
             )
             if self.learn_diags:
                 self.rev_diagonals = nn.ModuleList(
-                    [LearnableDiagonal(self.input_size, self.hidden_size) for _ in range(num_layers)])
+                    [
+                        LearnableDiagonal(
+                            input_size if i == 0 else hidden_size * num_directions,
+                            self.hidden_size,
+                        )
+                        for i in range(num_layers)
+                    ]
+                )
             else:
                 self.rev_diagonals = [None] * num_layers
-
+            if self.learn_initial_states:
+                self.rev_state_fns = nn.ModuleList(
+                    [
+                        FeedForward(
+                            input_size if i == 0 else hidden_size * num_directions,
+                            self.hidden_size,
+                        )
+                        for i in range(num_layers)
+                    ]
+                )
+            else:
+                self.rev_state_fns = [None] * num_layers
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
         self.num_iters = num_iters  # number of iterations for quasi-DEER
@@ -346,7 +403,7 @@ class pRNN(nn.Module):
 
         for layer in range(self.num_layers):
             forward_layer_output = self._process_layer(
-                output, hx[layer * num_directions], self.forward_cells[layer], self.fwd_diagonals[layer],
+                output, hx[layer * num_directions], self.forward_cells[layer], self.fwd_diagonals[layer], self.fwd_state_fns[layer]
             )
             if self.bidirectional:
                 reverse_layer_output = self._process_layer(
@@ -354,6 +411,7 @@ class pRNN(nn.Module):
                     hx[layer * num_directions + 1],
                     self.reverse_cells[layer],
                     self.rev_diagonals[layer],
+                    self.rev_state_fns[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
                 layer_output = torch.cat(
@@ -376,21 +434,34 @@ class pRNN(nn.Module):
         return output, h_n
 
     @checkpoint
-    def _process_layer(self, input, h0, cell, diagonal_fn=None):
+    def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None):
+        """
+        Function for working through each layer
+        Args:
+            input: input to the layer
+            h0: initial hidden state
+            cell: the RNN cell
+            diagonal_fn: function to compute the diagonal of the Jacobian
+            state_fn: function to compute the initial state
+        """
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
 
-        device = input.device
-        states_guess = torch.zeros(batch_size, self.hidden_size, seq_len, device=device)
-        
         if self.parallel:
+            device = input.device
+            if self.learn_initial_states:
+                input_time_batch = input.flatten(0,1)
+                states_guess = state_fn(input_time_batch) # (B*T, D)
+                states_guess = states_guess.view(batch_size, seq_len, -1).permute(0,2,1)
+            else:
+                states_guess = torch.zeros(batch_size, self.hidden_size, seq_len, device=device)
             def diagonal_derivative(input_t, state_t):
                 if diagonal_fn:
                     return diagonal_fn(input_t, state_t)
                 else:
                     return cell.diagonal_derivative(input_t, state_t)
-                
-            input = input.transpose(1, 2)  # (batch_size, hidden_size, seq_len)
+
+            input = input.transpose(1, 2)  # (batch_size, input_size, seq_len)
             output = quasi_deer_torch(
                 f=cell,
                 diagonal_derivative=diagonal_derivative,
