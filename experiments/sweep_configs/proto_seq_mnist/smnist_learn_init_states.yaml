@@ -30,3 +30,4 @@ parameters:
       - False
 program: seq_mnist_hydra.py
 project: nonlinear_ssm
+name: learn_init_states
