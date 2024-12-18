@@ -184,9 +184,11 @@ class AugmentedGRUCell(nn.GRUCell):
         batch_size, hidden_size = hidden.shape
         input_size = input.shape[1]
 
-        # Extract weights and biases
-        w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)
-        w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)
+        # Chunk the weight matrices for the reset (r), update (z), and candidate (n) gates
+        w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)  # input-to-hidden weights
+        w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)  # hidden-to-hidden weights
+
+        # Chunk the biases if present; otherwise set them to zero
         b_ir, b_iz, b_in = (
             self.bias_ih.chunk(3, 0) if self.bias_ih is not None else (0, 0, 0)
         )
@@ -194,23 +196,42 @@ class AugmentedGRUCell(nn.GRUCell):
             self.bias_hh.chunk(3, 0) if self.bias_hh is not None else (0, 0, 0)
         )
 
-        # Compute intermediate terms
+        # Compute the intermediate terms for the candidate gate
+        # rcomp = (h_{t-1} W_{hn} + b_{hn})
         rcomp = hidden @ w_hn.t() + b_hn
+
+        # Compute the reset gate activation: r = sigmoid(x W_{ir} + h_{t-1} W_{hr} + b_ir + b_hr)
         ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr
         r = torch.sigmoid(ract)
 
+        # Compute the update gate activation: z = sigmoid(x W_{iz} + h_{t-1} W_{hz} + b_iz + b_hz)
         zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz
         z = torch.sigmoid(zact)
 
+        # Compute the candidate hidden: n = tanh(x W_{in} + b_in + r * (h_{t-1} W_{hn} + b_hn))
         n_act = input @ w_in.t() + b_in + r * rcomp
         n = torch.tanh(n_act)
 
-        # Compute derivative terms (only diagonal elements)
+        # Now we compute the diagonal derivatives.
+        # dzdh: derivative of z w.r.t. h_{t-1} along the diagonal
+        # z'(zact) = z*(1-z), and we multiply by the diagonal of W_hz
         dzdh = z * (1 - z) * w_hz.diag()
+
+        # drdh: derivative of r w.r.t. h_{t-1} along the diagonal
+        # r'(ract) = r*(1-r), multiplied by diagonal of W_hr
         drdh = r * (1 - r) * w_hr.diag()
+
+        # dndh: derivative of n w.r.t. h_{t-1} along the diagonal
+        # n'(n_act) = (1 - n^2)
+        # n_act depends on h_{t-1} through r * (h_{t-1} W_{hn} + b_hn) and also drdh * rcomp
+        # Thus dndh = (1-n^2) * [r * W_hn(diag) + drdh * rcomp]
         dndh = (1 - n**2) * (r * w_hn.diag() + drdh * rcomp)
 
-        # Compute the diagonal of the Jacobian
+       # Finally, the GRU update equation:
+        # h_t = z * h_{t-1} + (1 - z) * n
+        # d(h_t)/d(h_{t-1}) = z + (1-z)*dndh + (-dzdh * n + dzdh * h_{t-1})
+        # The code simplifies to:
+        # diag_jacobian = -dzdh*n + (1-z)*dndh + dzdh*hidden + z
         diag_jacobian = -dzdh * n + (1 - z) * dndh + dzdh * hidden + z
 
         return diag_jacobian
