@@ -1,5 +1,5 @@
 Comment : >
-  # trying to see the effects of only differentiating wrt the last layer, and also using gradient clipping
+  # trying to see the effects of only differentiating wrt the last layer, and also using gradient clipping. it seems that differentating wrt the last layer only is a bad idea (at least when only using 4 iterations)
 
 command:
   - ${env}
