@@ -10,7 +10,7 @@ from deep_ssm.mixers.prnn import pRNN
 
 class pRNNClassifier(nn.Module):
     """
-    Classifier built on MinRNN for time series classification
+    Classifier built on pRNN for time series classification
 
     Note: follows batch first convention
     Note: follows input_size, hidden_size pytorch convention (https://pytorch.org/docs/stable/generated/torch.nn.GRU.html)
@@ -29,6 +29,7 @@ class pRNNClassifier(nn.Module):
                  parallel=True,
                  checkpoint=True,
                  learn_diags=False,
+                 last_only=False,
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
         self.rnn = pRNN(input_size,
@@ -42,7 +43,8 @@ class pRNNClassifier(nn.Module):
                         method=method,
                         parallel=parallel,
                         checkpoint=checkpoint,
-                        learn_diags=learn_diags)
+                        learn_diags=learn_diags,
+                        last_only=last_only)
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):

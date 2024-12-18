@@ -48,6 +48,7 @@ def main(cfg: DictConfig):
         learn_diags=cfg.model_cfg.learn_diags,
         k=cfg.model_cfg.k,
         clip=cfg.model_cfg.clip,
+        last_only=cfg.model_cfg.last_only,
         num_classes=10,
     )
     model.to(device)
@@ -64,6 +65,9 @@ def main(cfg: DictConfig):
             logits = model(x)
             loss = criterion(logits, y)
             loss.backward()
+
+            if cfg.optimizer_cfg.clip_grads:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
         # Evaluation Loop

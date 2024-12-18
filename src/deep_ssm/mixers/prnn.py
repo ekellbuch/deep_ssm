@@ -35,6 +35,7 @@ def quasi_deer_torch(
     num_iters=10,  # controls number of newton iterations
     k=0.0,  # controls the amount of damping
     clip=False, # instead of scaling the diagonal Jacobian, clip the entries if there are less than / bigger than 1
+    last_only=False,  # only differentiate through the last state
 ):
     """
     quasi-ELK in torch!
@@ -107,9 +108,15 @@ def quasi_deer_torch(
         return new_states
 
     #deer_traces = []
-    for _ in range(num_iters):
+    if last_only:
+        for _ in range(num_iters - 1):
+            with torch.no_grad():
+                states_guess = step(states_guess)
         states_guess = step(states_guess)
-        #deer_traces.append(states_guess)
+    else:
+        for _ in range(num_iters):
+            states_guess = step(states_guess)
+            #deer_traces.append(states_guess)
 
     return states_guess #deer_traces[-1]  # (B, D, T)
 
@@ -239,7 +246,7 @@ class LearnableDiagonal(torch.nn.Module):
 
 class pRNN(nn.Module):
     """
-    An RNN that can be evaluated in parallel using quasi-DEER
+    An RNN that can be evaluated in parallel using quasi-ELK
     """
 
     def __init__(
@@ -251,13 +258,14 @@ class pRNN(nn.Module):
         batch_first=True,
         dropout=0,
         bidirectional=True,
-        num_iters=2,  # number of iterations for quasi-DEER
+        num_iters=2,  # number of iterations for quasi-ELK
         k = 0.0, # damping factor
         clip = False, # clip the diagonal Jacobian
         method="minrnn",  # minrrn or gru
         parallel=True,  # parallel implementation
         checkpoint=True,
         learn_diags=False, # learn the diagonal instead of using the nonlinear dynamics
+        last_only=False, # only differentiate through the last state
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -275,6 +283,7 @@ class pRNN(nn.Module):
         self.k = k
         self.clip = clip
         self.learn_diags = learn_diags
+        self.last_only = last_only
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -391,6 +400,7 @@ class pRNN(nn.Module):
                 num_iters=self.num_iters,
                 k=self.k,
                 clip=self.clip,
+                last_only=self.last_only,
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:

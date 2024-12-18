@@ -10,12 +10,14 @@ model_cfg:
   hidden_size: 256
   num_iters: 2
   parallel: True
-  learn_diags: True
+  learn_diags: False
   k: 0
   clip: False
+  last_only: False
 
 optimizer_cfg:
   lr: 0.001
+  clip_grads: False
 
 trainer_cfg:
   num_epochs: 100
