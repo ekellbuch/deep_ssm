@@ -41,7 +41,7 @@ class Mamba(nn.Module):
         dt_init_floor=1e-4,
         conv_bias=True,
         bias=False,
-        use_fast_path=True,  # Fused kernel options
+        use_fast_path=False,  # Fused kernel options
         layer_idx=None,
         device=None,
         dtype=None,

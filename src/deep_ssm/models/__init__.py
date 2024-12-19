@@ -8,5 +8,6 @@ all_models = {
   "bci_sashimi": bci_models.SashimiDecoder,
   'bci_prnn': bci_models.pRNNDecoder,
   "parity_gru": parity_models.GRUDecoder,
-  "parity_minrnn": parity_models.pRNNDecoder
+  "parity_minrnn": parity_models.pRNNDecoder,
+  "parity_mamba": parity_models.MambaDecoder
 }

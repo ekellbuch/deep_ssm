@@ -1,0 +1,48 @@
+Comment: >
+  # This trains the baseline model (fast_dev_run is a debugging flag)
+  python run.py --config-name="mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+
+project_name: "parity"
+experiment_name: "mamba"
+
+seed: 0
+
+data_cfg:
+  batchSize: 32
+  num_workers: 0
+  datasetPath: "/scratch/users/hdlee/state_tracking/data/Parity"
+
+model_cfg:
+  type: "parity_mamba"
+  configs:
+    vocab_size: 2
+    embed_size: 64
+    d_state: 16
+    d_conv: 4
+    expand_factor: 2
+    n_layer: 1
+
+module_cfg:
+  type: "parity"
+
+optimizer_cfg:
+  type: "adam"
+  configs:
+    lr: 0.001  # lrStart
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_epochs: 100
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}

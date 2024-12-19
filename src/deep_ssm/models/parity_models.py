@@ -34,3 +34,24 @@ class pRNNDecoder(nn.Module):
         x, _ = self.model(x)
         x = self.linear(x)
         return x
+    
+class MambaDecoder(nn.Module):
+    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, n_layer=1):
+        super(MambaDecoder, self).__init__()
+
+        self.embedding = nn.Embedding(vocab_size, embed_size)
+        self.model = MixerModel(
+            d_model=embed_size,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand_factor=expand_factor,
+            n_layer=n_layer,
+            mamba_bi_new=True
+        )
+        self.linear = nn.Linear(embed_size, vocab_size)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x = self.model(x)
+        x = self.linear(x)
+        return x

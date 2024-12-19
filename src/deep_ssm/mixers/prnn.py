@@ -109,18 +109,24 @@ class MinRNNCell(nn.Module):
         self.input_weights = nn.Parameter(
             torch.randn(hidden_size, input_size) / (input_size**0.5)
         )
+        bound = 1 / torch.sqrt(torch.tensor(input_size))
+        torch.nn.init.uniform_(self.input_weights, -bound, bound)
         self.input_bias = nn.Parameter(torch.zeros(hidden_size))
 
-        # self.recurrent_weights = nn.Parameter(
-        #     torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
-        # )
         self.recurrent_weights = nn.Parameter(
-            torch.eye(hidden_size)
+            torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
         )
+        bound = 1 / torch.sqrt(torch.tensor(hidden_size))
+        torch.nn.init.uniform_(self.recurrent_weights, -bound, bound)
+        # self.recurrent_weights = nn.Parameter(
+        #     torch.eye(hidden_size)
+        # )
 
         self.U_z = nn.Parameter(
             torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
         )
+        bound = 1 / torch.sqrt(torch.tensor(hidden_size))
+        torch.nn.init.uniform_(self.U_z, -bound, bound)
 
         self.b_u = nn.Parameter(torch.zeros(hidden_size))
 

@@ -1,7 +1,6 @@
 #
 **/wandb/
 outputs/
-data/
 speech_bci/
 *.pt
 scripts/parity
