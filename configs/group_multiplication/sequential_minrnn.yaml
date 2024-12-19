@@ -1,0 +1,49 @@
+Comment: >
+  # This trains the baseline model (fast_dev_run is a debugging flag)
+  python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+
+project_name: "group_multiplication"
+experiment_name: "sequential_minrnn"
+
+seed: 0
+
+data_cfg:
+  group: "A5"
+  k: 15
+  max_samples: 1000000
+  batchSize: 512
+  num_workers: 0
+  datasetPath: "/scratch/users/hdlee/state_tracking/group_multiplication/data"
+
+model_cfg:
+  type: "state_tracking_prnn"
+  configs:
+    embed_size: 512
+    hidden_size: 2048
+    parallel: false
+    method: "minrnn"
+
+module_cfg:
+  type: "state_tracking"
+
+optimizer_cfg:
+  type: "adam"
+  configs:
+    lr: 0.001  # lrStart
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_epochs: 20
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}

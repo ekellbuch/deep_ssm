@@ -1,8 +1,7 @@
 import lightning as L
 import torch
-from deep_ssm.metrics.bci_metrics import calculate_cer
 
-class ParityDecoder(L.LightningModule):
+class StateTrackingDecoder(L.LightningModule):
   def __init__(self, args, model):
     super().__init__()
     self.args = args

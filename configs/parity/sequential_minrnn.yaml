@@ -13,15 +13,16 @@ data_cfg:
   datasetPath: "/scratch/users/hdlee/state_tracking/data/Parity"
 
 model_cfg:
-  type: "parity_minrnn"
+  type: "state_tracking_prnn"
   configs:
     vocab_size: 2
     embed_size: 64
     hidden_size: 64
     parallel: false
+    method: "minrnn"
 
 module_cfg:
-  type: "parity"
+  type: "state_tracking"
 
 optimizer_cfg:
   type: "adam"

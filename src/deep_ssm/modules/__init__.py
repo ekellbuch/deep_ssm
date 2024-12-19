@@ -1,6 +1,6 @@
 from .module_bci import BCIDecoder
-from .module_parity import ParityDecoder
+from .module_state_tracking import StateTrackingDecoder
 all_modules = {
     "bci": BCIDecoder,
-    "parity": ParityDecoder
+    "state_tracking": StateTrackingDecoder
 }

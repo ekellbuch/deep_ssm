@@ -5,7 +5,7 @@ import wandb
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
-from deep_ssm.data.data_loader_parity import ParityDataModule
+from deep_ssm.data.data_loader_state_tracking import ParityDataModule
 from deep_ssm.modules import all_modules
 from deep_ssm.models import all_models
 from omegaconf import OmegaConf

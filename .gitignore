@@ -4,6 +4,7 @@ outputs/
 speech_bci/
 *.pt
 scripts/parity
+scripts/group_multiplication/
 scripts/lightning_logs
 *.ipynb
 
