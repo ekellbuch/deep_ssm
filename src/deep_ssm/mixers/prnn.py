@@ -1,6 +1,7 @@
 """
 parallel RNN mixer
-Using quasi-ELK!
+
+Includes the code for quasi deer (see quasi_deer_torch). 
 """
 
 import torch
