@@ -85,4 +85,7 @@ python run.py --config-name="baseline_gru"
 python run.py --config-name="baseline_mamba"
 ```
 
+### Misc. notes
+
+To get pytest to work, I had to `pip install pytest` and then run `python -m pytest <what I wanted to test>`. If I just tried `pytest`, then somehow `deep_ssm` would not be recognized (XG).
 

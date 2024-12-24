@@ -38,8 +38,16 @@ def main(cfg: DictConfig):
     train_loader = load_sequential_mnist("train", batch_size)
     test_loader = load_sequential_mnist("test", batch_size)
 
+    # set device
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")  # macOS Metal backend
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
+
     # Initialize model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = pRNNClassifier(
         input_size=1,
         hidden_size=hidden_size,
