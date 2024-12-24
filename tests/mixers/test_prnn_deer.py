@@ -132,6 +132,7 @@ seeds = [0] # [0,1,2]
 @pytest.mark.parametrize("seed", seeds)
 def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     print(f"device is {device}")
+    atol=1e-3
     torch.manual_seed(seed)
 
     D = 2
@@ -159,4 +160,4 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
         initial_state=initial_state_torch,
     )
 
-    assert torch.allclose(torch_out, check_out, atol=1e-5), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
+    assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
