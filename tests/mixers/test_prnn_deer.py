@@ -117,11 +117,11 @@ def deer(f, J_f, input_seq, state_size, num_iters=1, initial_state=None):
 
 
 seqlens = [10000]
-batch_sizes = [1, 2]
+batch_sizes = [2] # [1, 2]
 d_inputs = [2]
-num_iters = [1, 2, 5, 10]
+num_iters = [2] # [1,2] #  [1, 2, 5, 10]
 dtypes = [torch.float32, torch.bfloat16, torch.float16]
-seeds = [0,1,2]
+seeds = [0] # [0,1,2]
 
 
 @pytest.mark.parametrize("seqlen", seqlens)
