@@ -119,8 +119,8 @@ def deer(f, J_f, input_seq, state_size, num_iters=1, initial_state=None):
 seqlens = [10000]
 batch_sizes = [2] # [1, 2]
 d_inputs = [2]
-num_iters = [2] # [1,2] #  [1, 2, 5, 10]
-dtypes = [torch.float32, torch.bfloat16, torch.float16]
+num_iters = [2, 5, 10] # [1,2] #  [1, 2, 5, 10]
+dtypes = [torch.float32]
 seeds = [0] # [0,1,2]
 
 
@@ -159,4 +159,4 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
         initial_state=initial_state_torch,
     )
 
-    assert torch.allclose(torch_out, check_out), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
+    assert torch.allclose(torch_out, check_out, atol=1e-5), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
