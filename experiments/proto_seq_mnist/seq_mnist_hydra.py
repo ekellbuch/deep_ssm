@@ -25,13 +25,18 @@ def main(cfg: DictConfig):
     # Set hyperparameters
     hidden_size = cfg.model_cfg.hidden_size
     num_epochs = cfg.trainer_cfg.num_epochs
-    print(f"running for {num_epochs} epochs")
     num_iters = cfg.model_cfg.num_iters
     batch_size = cfg.data_cfg.batch_size
     learning_rate = cfg.optimizer_cfg.lr
 
     use_parallel = cfg.model_cfg.parallel
     offline = not cfg.logger_cfg.use_wandb
+
+    # override if fast_dev_run
+    if cfg.trainer_cfg.fast_dev_run:
+        hidden_size = 2
+        num_epochs = 1
+        offline = True
 
     # Initialize wandb logger
     logger = WandbLogger(project="nonlinear_ssm", offline=offline)
@@ -59,6 +64,7 @@ def main(cfg: DictConfig):
         learn_diags=cfg.model_cfg.learn_diags,
         k=cfg.model_cfg.k,
         clip=cfg.model_cfg.clip,
+        method=cfg.model_cfg.method,
         last_only=cfg.model_cfg.last_only,
         learn_initial_states=cfg.model_cfg.learn_initial_states,
         num_classes=10,
@@ -85,7 +91,7 @@ def main(cfg: DictConfig):
             loss.backward()
 
             if cfg.optimizer_cfg.clip_grads:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer_cfg.gradient_clip_val)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer_cfg.grad_clip_val)
             optimizer.step()
         t1 = time.time()
         logger.log_metrics({"train_time": t1 - t0}, step=epoch)
