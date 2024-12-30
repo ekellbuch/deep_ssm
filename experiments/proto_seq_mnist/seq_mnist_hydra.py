@@ -8,6 +8,7 @@ from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import time
 
 from lightning.pytorch.loggers import WandbLogger
 import lightning as L
@@ -74,6 +75,7 @@ def main(cfg: DictConfig):
     best_model_path = os.path.join(experiment_dir, "best_model.pth")
     for epoch in tqdm(range(num_epochs)):
         model.train()
+        t0 = time.time()
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             x = x.permute(0, 2, 1)  # (B, T, D)
@@ -85,6 +87,8 @@ def main(cfg: DictConfig):
             if cfg.optimizer_cfg.clip_grads:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer_cfg.gradient_clip_val)
             optimizer.step()
+        t1 = time.time()
+        logger.log_metrics({"train_time": t1 - t0}, step=epoch)
 
         # Evaluation Loop
         model.eval()
