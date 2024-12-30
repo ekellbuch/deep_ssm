@@ -237,6 +237,7 @@ class LearnableDiagonal(torch.nn.Module):
         # Linear layers for input and state transformations
         self.input_linear = nn.Linear(input_size, hidden_size)
         self.state_linear = nn.Linear(hidden_size, hidden_size)
+        self.ffn = FeedForward(hidden_size, hidden_size)
 
     def forward(self, input, state):
         """
@@ -249,9 +250,10 @@ class LearnableDiagonal(torch.nn.Module):
         """
         # Linear readout from input and state
         linear_out = self.input_linear(input) + self.state_linear(state)
+        nonlinear_out = self.ffn(linear_out) # add more nonlinearity
 
         # Apply tanh to bound values between -1 and 1
-        return torch.tanh(linear_out)
+        return torch.tanh(nonlinear_out)
 
 
 class FeedForward(nn.Module):
