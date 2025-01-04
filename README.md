@@ -85,4 +85,9 @@ python run.py --config-name="baseline_gru"
 python run.py --config-name="baseline_mamba"
 ```
 
+### Misc. notes
+
+To get pytest to work, I had to `pip install pytest` and then run `python -m pytest <what I wanted to test>`. If I just tried `pytest`, then somehow `deep_ssm` would not be recognized (XG).
+
+Also good to instal `opt_einsum`, `rich` (if mamba and conv1d weren't possible...somehow it's still hard for me to run `python train_safari.py`)
 

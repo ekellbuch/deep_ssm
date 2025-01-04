@@ -1,6 +1,7 @@
 """
 parallel RNN mixer
-Using quasi-ELK!
+
+Includes the code for quasi deer (see quasi_deer_torch). 
 """
 
 import torch
@@ -124,22 +125,29 @@ def quasi_deer_torch(
 
 
 class MinRNNCell(nn.Module):
+    """
+    Uses Xavier initialization
+    """
     def __init__(self, input_size, hidden_size, bias=False):
         super(MinRNNCell, self).__init__()
         self.hidden_size = hidden_size
         self.input_size = input_size
 
-        self.input_weights = nn.Parameter(
-            torch.randn(hidden_size, input_size) / (input_size**0.5)
-        )
+        # Input weights and bias
+        self.input_weights = nn.Parameter(torch.empty(hidden_size, input_size))
         self.input_bias = nn.Parameter(torch.zeros(hidden_size))
-        self.recurrent_weights = nn.Parameter(
-            torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
-        )
-        self.U_z = nn.Parameter(
-            torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
-        )
+
+        # Recurrent weights
+        self.recurrent_weights = nn.Parameter(torch.empty(hidden_size, hidden_size))
+
+        # Additional parameters for the update gate
+        self.U_z = nn.Parameter(torch.empty(hidden_size, hidden_size))
         self.b_u = nn.Parameter(torch.zeros(hidden_size))
+
+        # Xavier initialization
+        nn.init.xavier_uniform_(self.input_weights)
+        nn.init.xavier_uniform_(self.recurrent_weights)
+        nn.init.xavier_uniform_(self.U_z)
 
     def forward(self, input, prev_state):
         z = torch.tanh(torch.matmul(input, self.input_weights.T) + self.input_bias)
@@ -250,6 +258,7 @@ class LearnableDiagonal(torch.nn.Module):
         # Linear layers for input and state transformations
         self.input_linear = nn.Linear(input_size, hidden_size)
         self.state_linear = nn.Linear(hidden_size, hidden_size)
+        self.ffn = FeedForward(hidden_size, hidden_size)
 
     def forward(self, input, state):
         """
@@ -262,9 +271,10 @@ class LearnableDiagonal(torch.nn.Module):
         """
         # Linear readout from input and state
         linear_out = self.input_linear(input) + self.state_linear(state)
+        nonlinear_out = self.ffn(linear_out) # add more nonlinearity
 
         # Apply tanh to bound values between -1 and 1
-        return torch.tanh(linear_out)
+        return torch.tanh(nonlinear_out)
 
 
 class FeedForward(nn.Module):

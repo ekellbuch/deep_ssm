@@ -3,7 +3,7 @@ basic.py
 
 Extremely lightweight dataloaders for prototyping
 """
-
+import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
@@ -27,3 +27,39 @@ def load_sequential_mnist(split, batch_size):
     )
 
     return dataloader
+
+
+def split_train_val(train, val_split, seed):
+    train_len = int(len(train) * (1.0 - val_split))
+    train, val = torch.utils.data.random_split(
+        train,
+        (train_len, len(train) - train_len),
+        generator=torch.Generator().manual_seed(seed),
+    )
+    return train, val
+
+
+def load_sequential_mnist_all(batch_size, val_split=0.1, seed=0):
+    """
+    It is frusturating that the MNIST dataset comes in train and test split only, so that the val_split has to be done manually out of the train
+    So, we write a function that returns train, val, and test, altogethe!
+    """
+    # Define the transform
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Lambda(lambda x: x.view(1, -1))]
+    )
+
+    bigtrainset = datasets.MNIST(
+        root="./data", train=True, download=True, transform=transform
+    )
+    testset = datasets.MNIST(
+        root="./data", train=False, download=True, transform=transform
+    )
+
+    trainset, valset = split_train_val(bigtrainset, val_split, seed)
+
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
+    valloader = DataLoader(valset, batch_size=batch_size, shuffle=False)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False)
+
+    return trainloader, valloader, testloader
