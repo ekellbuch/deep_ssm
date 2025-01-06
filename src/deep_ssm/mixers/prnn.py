@@ -182,7 +182,7 @@ def checkpoint(f):
 
 class AugmentedGRUCell(nn.GRUCell):
     """
-    torch.nn.GRUCell with diagonal derivative
+    torch.nn.GRUCell with diagonal derivative:
     """
 
     def __init__(self, input_size, hidden_size, bias=True):
@@ -293,6 +293,143 @@ class FeedForward(nn.Module):
         h = F.silu(self.w1(x))
         return self.w2(h * self.w3(x))
 
+
+class ReparameterizedCell(nn.Module):
+    """
+    A cell that operates in the Z-space where the Jacobian is diagonalized.
+    Takes an original cell as input and performs reparameterization.
+
+    """
+    def __init__(self, original_cell, P0, P0_inv, eigenvalues):
+        """
+        Args:
+            original_cell (nn.GRUCell): The original GRU cell to reparameterize.
+            P0 (torch.Tensor): Matrix of eigenvectors of the Jacobian, shape (hidden_size, hidden_size).
+            P0_inv (torch.Tensor): Inverse of P0, shape (hidden_size, hidden_size).
+        """
+        super().__init__()
+        self.original_cell = original_cell
+        self.hidden_size = original_cell.hidden_size
+        self.input_size = original_cell.input_size
+
+        # Store P0 and P0_inv as buffers (non-trainable parameters)
+        self.register_buffer("P0", P0)
+        self.register_buffer("P0_inv", P0_inv)
+        self.register_buffer("eigenvalues", eigenvalues)
+
+    def forward(self, input, hx):
+        """
+        Forward pass in the Z-space with reparameterized parameters.
+
+        Args:
+            input (torch.Tensor): Input at the current time step, shape (batch_size, input_size).
+            hx (torch.Tensor): Hidden state from the previous time step, shape (batch_size, hidden_size).
+
+        Returns:
+            new_hx (torch.Tensor): Updated hidden state, shape (batch_size, hidden_size).
+        """
+        # Transform the hidden state to Z-space:
+        z_hx = hx @ self.P0_inv
+
+        # use the original cell's weights the output would be
+        o_old, z_old = self.original_cell(input, hx)
+        # for the reparameterized cell:
+        o_new, z_new = self.original_cell(input, hx @ self.P0)
+        # Transform back to X-space
+        z_new = z_new @ self.P0_inv
+        breakpoint()
+        """
+        # Use the original GRU cell's weights to compute gates in Z-space
+        gi = F.linear(input, self.original_cell.weight_ih, self.original_cell.bias_ih)
+        gh = F.linear(z_hx, self.original_cell.weight_hh, self.original_cell.bias_hh)
+        gates = gi + gh
+
+        # Compute gates
+        r, z, n = gates.chunk(3, 1)
+        r = torch.sigmoid(r)
+        z = torch.sigmoid(z)
+        n = torch.tanh(n)
+
+        # Update hidden state in Z-space
+        z_new = z * z_hx + (1 - z) * n
+        """
+        return o_new, z_new
+
+    def diagonal_derivative(self, input, hx):
+        """
+        Compute the diagonal of the Jacobian in Z-space.
+
+        Args:
+            input (torch.Tensor): Input tensor, shape (batch_size, input_size).
+            hx (torch.Tensor): Hidden state tensor, shape (batch_size, hidden_size).
+
+        Returns:
+            diag_jacobian_z (torch.Tensor): Diagonal of the Jacobian in Z-space, shape (batch_size, hidden_size).
+        """
+        # Transform hidden state to Z-space
+        z_hx = torch.matmul(hx, self.P0_inv)
+
+        # Compute gates in Z-space
+        gi = F.linear(input, self.original_cell.weight_ih, self.original_cell.bias_ih)
+        gh = F.linear(z_hx, self.original_cell.weight_hh, self.original_cell.bias_hh)
+        gates = gi + gh
+
+        r, z, n = gates.chunk(3, 1)
+        r = torch.sigmoid(r)
+        z = torch.sigmoid(z)
+        n = torch.tanh(n)
+
+        # Compute diagonal derivatives in Z-space
+        dz_dhx = z * (1 - z) * self.original_cell.weight_hh.chunk(3, 0)[1].diag()  # Update gate
+        dr_dhx = r * (1 - r) * self.original_cell.weight_hh.chunk(3, 0)[0].diag()  # Reset gate
+        dn_dhx = (1 - n ** 2) * (r * self.original_cell.weight_hh.chunk(3, 0)[2].diag())  # Candidate gate
+
+        # Combine for Jacobian diagonal in Z-space
+        diag_jacobian_z = dz_dhx * z_hx + (1 - z) * dn_dhx
+
+        return diag_jacobian_z
+
+
+def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None, h0=None, as_real=False):
+    """
+    Compute the Jacobian at (x0, h0), diagonalize it, and return a reparameterized cell.
+
+    Args:
+        model_cell (nn.Module): The original cell to reparameterize.
+        input_size (int): Input dimension.
+        hidden_size (int): Hidden state dimension.
+        x0 (torch.Tensor): Fixed input state for linearization, shape (1, input_size).
+        h0 (torch.Tensor): Fixed hidden state for linearization, shape (1, hidden_size).
+
+    Returns:
+        reparam_cell (ReparameterizedCell): The reparameterized cell.
+    """
+    # Compute the Jacobian numerically around x0, h0
+    if x0 is None:
+        x0 = torch.zeros(1, input_size, requires_grad=True)  # Correct input size 
+    if h0 is None:
+        h0 = torch.zeros(1, hidden_size, requires_grad=True)  # Correct hidden size
+
+    #h1 = model_cell(x0, h0)
+    jacobian = torch.autograd.functional.jacobian(lambda h: model_cell(x0, h)[1], h0)
+
+    # Reshape Jacobian to (hidden_size, hidden_size)
+    J_f = jacobian.squeeze()
+
+    assert J_f.shape == (hidden_size, hidden_size)
+    # Perform eigendecomposition: J_f = P0 @ V0 @ P0_inv
+    # Given Jacobian not symmetric, the eigenvectors are imaginary 
+    eigenvalues, eigvecs = torch.linalg.eig(J_f)
+
+    if as_real:
+        eigvecs = eigvecs.real
+        P0_inv = torch.linalg.inv(eigvecs)
+    else:
+        P0_inv = torch.linalg.pinv(eigvecs)
+    # Return the reparameterized cell
+    return ReparameterizedCell(model_cell, eigvecs, P0_inv, eigenvalues)
+
+
 class pRNN(nn.Module):
 
     """
@@ -317,6 +454,7 @@ class pRNN(nn.Module):
         learn_diags=False, # learn the diagonal instead of using the nonlinear dynamics
         last_only=False, # only differentiate through the last state
         learn_initial_states=False,
+        reparameterize=False, # reparameterize a cell
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -327,6 +465,7 @@ class pRNN(nn.Module):
         self.dropout = dropout
         self.bidirectional = bidirectional
         self.checkpoint = checkpoint
+        self.reparameterize = reparameterize
 
         num_directions = 2 if bidirectional else 1
         self.num_directions = num_directions
@@ -336,19 +475,21 @@ class pRNN(nn.Module):
         self.learn_diags = learn_diags
         self.last_only = last_only
         self.learn_initial_states = learn_initial_states
+        self.num_iters = num_iters  # number of iterations for quasi-DEER
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
-        self.forward_cells = nn.ModuleList(
-            [
-                method_fn[method](
-                    input_size if i == 0 else hidden_size * num_directions, # input size changing to allow stacking
-                    hidden_size,
-                    bias=bias,
-                )
-                for i in range(num_layers)
-            ]
-        )
+        self.forward_cells = nn.ModuleList()
+
+        for i in range(num_layers):
+            input_size_ = input_size if i == 0 else hidden_size * num_directions
+            cell = method_fn[method](
+                input_size_, hidden_size, bias=bias
+            )
+            if reparameterize:
+                cell = diagonalize_and_reparameterize(cell, input_size_, hidden_size)
+            self.forward_cells.append(cell)
+
         if self.learn_diags:
             # print("learning the diagonals")
             self.fwd_diagonals = nn.ModuleList(
@@ -376,16 +517,17 @@ class pRNN(nn.Module):
             self.fwd_state_fns = [None] * num_layers
 
         if bidirectional:
-            self.reverse_cells = nn.ModuleList(
-                [
-                    method_fn[method](
-                        input_size if i == 0 else hidden_size * num_directions,
-                        hidden_size,
-                        bias=bias,
-                    )
-                    for i in range(num_layers)
-                ]
-            )
+            self.reverse_cells = nn.ModuleList()
+            for i in range(num_layers):
+                input_size_ = input_size if i == 0 else hidden_size * num_directions
+                cell = method_fn[method](
+                    input_size_, hidden_size, bias=bias
+                )
+                if reparameterize:
+                    cell = diagonalize_and_reparameterize(cell, input_size_, hidden_size)
+                self.reverse_cells.append(cell)
+
+
             if self.learn_diags:
                 self.rev_diagonals = nn.ModuleList(
                     [
@@ -412,13 +554,12 @@ class pRNN(nn.Module):
                 self.rev_state_fns = [None] * num_layers
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
-        self.num_iters = num_iters  # number of iterations for quasi-DEER
 
     def forward(self, input, hx=None):
         if not self.batch_first:
             input = input.transpose(0, 1)
-
-        batch_size, seq_len, _ = input.size()
+    
+        batch_size = input.size(0)
         num_directions = 2 if self.bidirectional else 1
 
         if hx is None:
@@ -428,13 +569,17 @@ class pRNN(nn.Module):
                 self.hidden_size,
                 device=input.device,
             )
-
+            # Here is where we should see the layers 
         output = input
         h_n = torch.empty_like(hx)
 
         for layer in range(self.num_layers):
             forward_layer_output = self._process_layer(
-                output, hx[layer * num_directions], self.forward_cells[layer], self.fwd_diagonals[layer], self.fwd_state_fns[layer]
+                output, 
+                hx[layer * num_directions],
+                self.forward_cells[layer],
+                self.fwd_diagonals[layer], 
+                self.fwd_state_fns[layer]
             )
             if self.bidirectional:
                 reverse_layer_output = self._process_layer(
@@ -445,6 +590,8 @@ class pRNN(nn.Module):
                     self.rev_state_fns[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
+                
+                # concatenate outputs
                 layer_output = torch.cat(
                     [forward_layer_output, reverse_layer_output], dim=2
                 )
