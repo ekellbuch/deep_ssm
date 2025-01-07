@@ -93,7 +93,7 @@ def train(args):
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
       trainer.fit(model=model, datamodule=datamodule)
-      ckpt_path = None
+      ckpt_path = "best"
     else:
       ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
