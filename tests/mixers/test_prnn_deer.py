@@ -17,6 +17,15 @@ else:
     device = torch.device("cpu")  # Fallback to CPU
 
 
+def buildW():
+    theta = torch.tensor(0.01)
+    # Define a 2D rotation matrix based on theta
+    A = torch.tensor(
+        [[torch.cos(theta), torch.sin(theta)], [-torch.sin(theta), torch.cos(theta)]],
+    )
+    return A
+
+
 def sample_fxn_torch(input, state):
     """
      Applies a simple transformation on the `state` tensor using a rotation matrix `A`
@@ -34,10 +43,8 @@ def sample_fxn_torch(input, state):
     # Small rotation angle
     theta = torch.tensor(0.01, device=device)
     # Define a 2D rotation matrix based on theta
-    A = torch.tensor(
-        [[torch.cos(theta), torch.sin(theta)], [-torch.sin(theta), torch.cos(theta)]],
-        device=device,
-    )
+    A = buildW()
+    A = A.to(device=device)
     # Apply the rotation matrix and tanh activation
     # Note: Transpose `A` to align with PyTorch's row-major convention
     return torch.tanh(
@@ -158,5 +165,89 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
         num_iters=num_iters,
         initial_state=initial_state_torch,
     )
+
+    assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
+
+
+seqlens = [8]
+batch_sizes = [1] 
+d_inputs = [2]
+num_iters = [2] 
+dtypes = [torch.float32]
+seeds = [0] 
+
+@pytest.mark.parametrize("seqlen", seqlens)
+@pytest.mark.parametrize("batch_size", batch_sizes)
+@pytest.mark.parametrize("d_input", d_inputs)
+@pytest.mark.parametrize("num_iters", num_iters)
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("seed", seeds)
+def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
+    print(f"device is {device}")
+    atol=1e-3
+    torch.manual_seed(seed)
+
+    D = 2
+    initial_state_torch = torch.randn((batch_size, D), device=device, dtype=dtype)
+    states_guess_torch = torch.zeros(
+        (batch_size, D, seqlen), device=device, dtype=dtype
+    )
+    inputs_torch = torch.zeros(batch_size, d_input, seqlen, device=device, dtype=dtype)
+
+    torch_out = quasi_deer_torch(
+        sample_fxn_torch,
+        sample_diag_deriv_torch,
+        initial_state_torch,
+        states_guess_torch,
+        inputs_torch,
+        num_iters=num_iters,
+    )
+
+    # Get the Jacobian for f(x) = y = tanh(W @ x)
+    # Jacobian wrt to x:  J_f = diag(1-tanh^2 (W x))⋅W
+    # Let' say we start with x_0=0 ->  J_f (x_0) = W
+
+    # Now Let's consider a complex reparameterization:
+    # J_f(x_0) = P_0 V_0 P_0 ^-1 = W
+    # transform x_t into the eigenbasis, we have:
+    # z_t = P0^-1 x_t
+    # z_{t+1} = P_0 ^-1 f(P_0 z_t) = g(z_t)
+    # J_g(z_t) = P_0 ^ -1 J_f P_0
+    # J_g(z_t) = P_0 ^-1 diag (tanh' (P_0 z_t)) P_0 V_0 
+
+    jacobian = buildW().to(device)
+
+    #jacobian = torch.autograd.functional.jacobian(lambda h: sample_fxn_torch(inputs_torch[...,0], h)[1], initial_state_torch[0])
+    eigenvalues, eigenvectors = torch.linalg.eig(jacobian)
+    P = eigenvectors
+    # because torch doesn't support inv of complex number:
+    P_inv = torch.linalg.inv(eigenvectors.cpu())
+    P_inv = P_inv.to(P.device)
+
+    def g_fxn_torch(u, z):
+        return sample_fxn_torch(u, z @ P) @ P_inv
+    
+    def g_diag_deriv_torch(input, state):
+        # Transform the hidden state to Z-space:
+        # Let's just do naive computation:
+        # z_hx = torch.matmul(state, P_inv)
+        # diag_jacobian = sample_diag_deriv_torch(input, z_hx)
+        J_f = sample_diag_deriv_torch(input, state)
+
+        transform_single = lambda J_f_row: P_inv @ (J_f_row @ P)
+
+        diag_jacobian= torch.vmap(transform_single)(J_f)
+        return diag_jacobian
+
+    z_initial_state_torch = initial_state_torch @ P_inv 
+    check_out = quasi_deer_torch(
+        g_fxn_torch,
+        g_diag_deriv_torch,
+        z_initial_state_torch,
+        states_guess_torch,
+        inputs_torch,
+        num_iters=num_iters,
+    )
+
 
     assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"

@@ -329,6 +329,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
     
     # ----------------
     # Compare with reparametrized model
+    exit()
     cfg2 = cfg
     cfg2.parallel = False
     cfg2.num_iters = num_iters
@@ -347,7 +348,6 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
 
     output3, hidden3 = prnn3(x, h0)
 
-    #breakpoint()
     assert output3.shape == (batch, seqlen, hidden_size),  f"prnn_reparam outputs dimension mismatch"
     assert hidden3.shape == (D *num_layers, batch, cfg.hidden_size),  f"prnn_reparam hidden vars dimension mismatch"
 
@@ -368,17 +368,17 @@ dims = [2]
 bidirectionality = [False]
 num_layerss = [1]
 num_iterss = [10]
-"""
+
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch", batch_sizes)
 @pytest.mark.parametrize("dim", dims)
 @pytest.mark.parametrize("bidirectional", bidirectionality)
 @pytest.mark.parametrize("num_layers", num_layerss)
 @pytest.mark.parametrize("num_iters", num_iterss)
-"""
 def compare_gru_cells(batch, seqlen, dim, bidirectional, num_layers, num_iters):
     """
     Compare Reparametrized and Standard GRU
+    TODO: fix
     """
 
     # Create an instance of Arguments

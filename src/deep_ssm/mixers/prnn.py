@@ -106,7 +106,8 @@ def quasi_deer_torch(
 
         # parallel asscociative scan
         new_states = scan(A, b)[..., :T]  # (B, D, T)
-        new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
+        if not torch.is_complex(new_states):
+            new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states
 
     #deer_traces = []
@@ -300,7 +301,7 @@ class ReparameterizedCell(nn.Module):
     Takes an original cell as input and performs reparameterization.
 
     """
-    def __init__(self, original_cell, P0, P0_inv, eigenvalues):
+    def __init__(self, original_cell, P0, P0_inv, eigenvalues, complex=False):
         """
         Args:
             original_cell (nn.GRUCell): The original GRU cell to reparameterize.
@@ -316,7 +317,7 @@ class ReparameterizedCell(nn.Module):
         self.register_buffer("P0", P0)
         self.register_buffer("P0_inv", P0_inv)
         self.register_buffer("eigenvalues", eigenvalues)
-
+   
     def forward(self, input, hx):
         """
         Forward pass in the Z-space with reparameterized parameters.
@@ -329,30 +330,19 @@ class ReparameterizedCell(nn.Module):
             new_hx (torch.Tensor): Updated hidden state, shape (batch_size, hidden_size).
         """
         # Transform the hidden state to Z-space:
-        z_hx = hx @ self.P0_inv
+        z_hx = torch.matmul(hx, self.P0_inv)
 
         # use the original cell's weights the output would be
-        o_old, z_old = self.original_cell(input, hx)
-        # for the reparameterized cell:
-        o_new, z_new = self.original_cell(input, hx @ self.P0)
+        #if self.complex:
+        #    input = input.to(dtype=torch.complex64)
+        #    z_hx = z_hx.to(dtype=torch.complex64)
+
+        o_new, z_new = self.original_cell(input, z_hx)        
+        #o_old, z_old = self.original_cell(input, hx)
+
         # Transform back to X-space
-        z_new = z_new @ self.P0_inv
-        breakpoint()
-        """
-        # Use the original GRU cell's weights to compute gates in Z-space
-        gi = F.linear(input, self.original_cell.weight_ih, self.original_cell.bias_ih)
-        gh = F.linear(z_hx, self.original_cell.weight_hh, self.original_cell.bias_hh)
-        gates = gi + gh
+        z_new = z_new @ self.P0
 
-        # Compute gates
-        r, z, n = gates.chunk(3, 1)
-        r = torch.sigmoid(r)
-        z = torch.sigmoid(z)
-        n = torch.tanh(n)
-
-        # Update hidden state in Z-space
-        z_new = z * z_hx + (1 - z) * n
-        """
         return o_new, z_new
 
     def diagonal_derivative(self, input, hx):
@@ -366,26 +356,13 @@ class ReparameterizedCell(nn.Module):
         Returns:
             diag_jacobian_z (torch.Tensor): Diagonal of the Jacobian in Z-space, shape (batch_size, hidden_size).
         """
-        # Transform hidden state to Z-space
         z_hx = torch.matmul(hx, self.P0_inv)
 
-        # Compute gates in Z-space
-        gi = F.linear(input, self.original_cell.weight_ih, self.original_cell.bias_ih)
-        gh = F.linear(z_hx, self.original_cell.weight_hh, self.original_cell.bias_hh)
-        gates = gi + gh
+        # Compute the Jacobian diagonal in the Z-space
+        diag_jacobian_z = self.original_cell.diagonal_derivative(input, z_hx)
 
-        r, z, n = gates.chunk(3, 1)
-        r = torch.sigmoid(r)
-        z = torch.sigmoid(z)
-        n = torch.tanh(n)
-
-        # Compute diagonal derivatives in Z-space
-        dz_dhx = z * (1 - z) * self.original_cell.weight_hh.chunk(3, 0)[1].diag()  # Update gate
-        dr_dhx = r * (1 - r) * self.original_cell.weight_hh.chunk(3, 0)[0].diag()  # Reset gate
-        dn_dhx = (1 - n ** 2) * (r * self.original_cell.weight_hh.chunk(3, 0)[2].diag())  # Candidate gate
-
-        # Combine for Jacobian diagonal in Z-space
-        diag_jacobian_z = dz_dhx * z_hx + (1 - z) * dn_dhx
+        #if self.complex:
+        #    diag_jacobian_z = diag_jacobian_z.to(dtype=torch.complex64)
 
         return diag_jacobian_z
 
@@ -410,7 +387,7 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
     if h0 is None:
         h0 = torch.zeros(1, hidden_size, requires_grad=True)  # Correct hidden size
 
-    #h1 = model_cell(x0, h0)
+    # Get the Jacobian
     jacobian = torch.autograd.functional.jacobian(lambda h: model_cell(x0, h)[1], h0)
 
     # Reshape Jacobian to (hidden_size, hidden_size)
@@ -421,11 +398,7 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
     # Given Jacobian not symmetric, the eigenvectors are imaginary 
     eigenvalues, eigvecs = torch.linalg.eig(J_f)
 
-    if as_real:
-        eigvecs = eigvecs.real
-        P0_inv = torch.linalg.inv(eigvecs)
-    else:
-        P0_inv = torch.linalg.pinv(eigvecs)
+    P0_inv = torch.linalg.inv(eigvecs.cpu()).to(device=J_f.device)
     # Return the reparameterized cell
     return ReparameterizedCell(model_cell, eigvecs, P0_inv, eigenvalues)
 
