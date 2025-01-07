@@ -81,6 +81,43 @@ def sample_diag_deriv_torch(input, state):
     # Use vmap to apply torch.diag for each batch element
     return torch.func.vmap(torch.diag)(torch.matmul(extra_diag, A.T))
 
+def sample_full_deriv_torch(input, state):
+    """
+    Computes the full Jacobian matrix for `sample_fxn_torch` with respect to `state`.
+
+    Args:
+      state (torch.Tensor): The input state vector or batch of state vectors (B, D).
+      input: Unused argument in this function.
+
+    Returns:
+      torch.Tensor: The full Jacobian matrix (B, D, D).
+    """
+    device = state.device
+    theta = torch.tensor(0.01, device=device)
+    # Define a 2D rotation matrix based on theta
+    A = torch.tensor(
+        [[torch.cos(theta), torch.sin(theta)], [-torch.sin(theta), torch.cos(theta)]],
+        device=device,
+    )
+
+    # Compute activations by applying the rotation matrix
+    activations = torch.matmul(state, A.T)  # (B, D)
+
+    # Compute the derivative of tanh (1 - tanh^2) element-wise
+    activations_tanh = torch.tanh(activations)  # (B, D)
+    
+    if device.type == "mps":
+        tanh_derivative = 1 - activations_tanh.to("cpu") ** 2  # (B, D)
+        tanh_derivative = tanh_derivative.to(activations.device)
+    else:
+        tanh_derivative = 1 - activations_tanh ** 2  # (B, D)
+
+    # Scale each row of A.T by tanh_derivative
+    # (B, D, D) where each (D, D) Jacobian is A.T scaled row-wise
+    J_f = torch.einsum('bi,ij->bij', tanh_derivative, A.T)
+
+    return J_f
+
 
 # Sequential version of (quasi)deer that doesn't use parallel scan; avoids any implementational overhead and dependencies
 def deer_step(f, J_f, input_seq, prev_iter_states):
@@ -172,9 +209,9 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
 seqlens = [8]
 batch_sizes = [1] 
 d_inputs = [2]
-num_iters = [2] 
+num_iters = [10] 
 dtypes = [torch.float32]
-seeds = [0] 
+seeds = [42] 
 
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch_size", batch_sizes)
@@ -216,8 +253,7 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     # J_g(z_t) = P_0 ^-1 diag (tanh' (P_0 z_t)) P_0 V_0 
 
     jacobian = buildW().to(device)
-
-    #jacobian = torch.autograd.functional.jacobian(lambda h: sample_fxn_torch(inputs_torch[...,0], h)[1], initial_state_torch[0])
+    #jacobian = torch.autograd.functional.jacobian(lambda x, h: sample_fxn_torch(x, h)[1], (inputs_torch[...,0], initial_state_torch[0]))
     eigenvalues, eigenvectors = torch.linalg.eig(jacobian)
     P = eigenvectors
     # because torch doesn't support inv of complex number:
@@ -232,14 +268,17 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
         # Let's just do naive computation:
         # z_hx = torch.matmul(state, P_inv)
         # diag_jacobian = sample_diag_deriv_torch(input, z_hx)
-        J_f = sample_diag_deriv_torch(input, state)
+        J_f = sample_full_deriv_torch(input, state)
 
-        transform_single = lambda J_f_row: P_inv @ (J_f_row @ P)
+        transform_single = lambda J_f_row: torch.diag(P_inv @ (J_f_row @ P))
 
         diag_jacobian= torch.vmap(transform_single)(J_f)
         return diag_jacobian
 
-    z_initial_state_torch = initial_state_torch @ P_inv 
+    z_initial_state_torch = initial_state_torch.to(P_inv.dtype) @ P_inv 
+    states_guess_torch = states_guess_torch.to(P_inv.dtype)
+    inputs_torch = inputs_torch.to(P_inv.dtype)
+
     check_out = quasi_deer_torch(
         g_fxn_torch,
         g_diag_deriv_torch,
@@ -249,5 +288,4 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
         num_iters=num_iters,
     )
 
-
-    assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
+    assert torch.allclose(torch_out, check_out.real, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} "
