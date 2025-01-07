@@ -846,7 +846,6 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
 
     assert len(jax_grads) == len(torch_grads)
     # Compare gradients
-    breakpoint()
     for param_id, (torch_grad, jax_grad) in enumerate(zip(torch_grads, jax_grads)):
         # Convert PyTorch gradients to numpy
         torch_grad_np = to_jax(torch_grad)
