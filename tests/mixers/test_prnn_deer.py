@@ -206,10 +206,55 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
 
 
+def stabilized_diagonalization(jacobian, epsilon=1e-10):
+    """
+    Perform numerically stable diagonalization with conditioning checks.
+    
+    Args:
+        jacobian: Input matrix to diagonalize
+        epsilon: Small value for numerical stability
+    
+    Returns:
+        P: Eigenvector matrix
+        P_inv: Inverse of eigenvector matrix
+        eigenvalues: Diagonal matrix of eigenvalues
+    """
+    # Compute eigendecomposition
+    eigenvalues, eigenvectors = torch.linalg.eig(jacobian)
+    
+    # Check condition number
+    condition_number = torch.linalg.cond(eigenvectors)
+    if condition_number > 1e6:  # Threshold for poor conditioning
+        # Add small regularization to improve conditioning
+        reg_matrix = torch.eye(jacobian.shape[0], device=jacobian.device) * epsilon
+        eigenvalues, eigenvectors = torch.linalg.eig(jacobian + reg_matrix)
+    
+    # Compute inverse more carefully
+    if eigenvectors.device.type == "mps":
+        P_inv = torch.linalg.inv(eigenvectors.cpu()).to(eigenvectors.device)
+    else:
+        P_inv = torch.linalg.inv(eigenvectors)
+
+    # Verify decomposition quality
+    reconstruction = eigenvectors @ torch.diag(eigenvalues) @ P_inv
+
+    if eigenvectors.device.type == "mps":
+        jac_cpu = jacobian.cpu()
+        reconstruction_error = torch.norm(reconstruction.cpu() - jac_cpu) / torch.norm(jac_cpu)
+        reconstruction_error = reconstruction_error.to(device=jacobian.device)
+    else:
+        reconstruction_error = torch.norm(reconstruction - jacobian) / torch.norm(jacobian)
+
+    if reconstruction_error > 1e-6:
+        print(f"Warning: Large reconstruction error: {reconstruction_error}")
+        
+    return eigenvectors, P_inv, eigenvalues
+
+
 seqlens = [8]
 batch_sizes = [1] 
 d_inputs = [2]
-num_iters = [10] 
+num_iters = [3000] 
 dtypes = [torch.float32]
 seeds = [42] 
 
@@ -254,11 +299,12 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
 
     jacobian = buildW().to(device)
     #jacobian = torch.autograd.functional.jacobian(lambda x, h: sample_fxn_torch(x, h)[1], (inputs_torch[...,0], initial_state_torch[0]))
-    eigenvalues, eigenvectors = torch.linalg.eig(jacobian)
-    P = eigenvectors
+    #eigenvalues, eigenvectors = torch.linalg.eig(jacobian)
+    #P = eigenvectors
     # because torch doesn't support inv of complex number:
-    P_inv = torch.linalg.inv(eigenvectors.cpu())
-    P_inv = P_inv.to(P.device)
+    #P_inv = torch.linalg.inv(eigenvectors.cpu())
+    #P_inv = P_inv.to(P.device)
+    P, P_inv, eigenvalues = stabilized_diagonalization(jacobian)
 
     def g_fxn_torch(u, z):
         return sample_fxn_torch(u, z @ P) @ P_inv
@@ -279,7 +325,7 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     states_guess_torch = states_guess_torch.to(P_inv.dtype)
     inputs_torch = inputs_torch.to(P_inv.dtype)
 
-    check_out = quasi_deer_torch(
+    z_out = quasi_deer_torch(
         g_fxn_torch,
         g_diag_deriv_torch,
         z_initial_state_torch,
@@ -287,5 +333,6 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
         inputs_torch,
         num_iters=num_iters,
     )
-
+    # TODO: DEER is not actually DEER here
+    check_out = P @ z_out 
     assert torch.allclose(torch_out, check_out.real, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} "
