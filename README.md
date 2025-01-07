@@ -85,4 +85,20 @@ python run.py --config-name="baseline_gru"
 python run.py --config-name="baseline_mamba"
 ```
 
+For perlmutter: needed torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0
+```
+module load cudatoolkit/11.7
+module load cudnn/8.7.0
+module load gcc/11.2.0
+module load python
+conda activate /pscratch/sd/j/jwl50/deep_ssm/.pyenv
 
+export PYTHONPATH=$PYTHONPATH:/pscratch/sd/j/jwl50/deep_ssm/src
+From deep_ssm:
+python scripts/run_parity.py --config-path="../configs/parity" --config-name="mamba"
+```
+
+To run in wandb:
+```
+wandb sweep path-to-yaml
+```

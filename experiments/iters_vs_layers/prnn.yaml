@@ -1,0 +1,22 @@
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--config-name"
+  - "quasideer_minrnn"
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  model_cfg.configs.num_iters:
+    values:
+      - 1
+      - 2
+  model_cfg.configs.num_layers:
+    values:
+      - 1
+      - 2
+  trainer_cfg.max_epochs:
+    values:
+      - 1
+program: scripts/run_parity.py
+project: nonlinear_ssm

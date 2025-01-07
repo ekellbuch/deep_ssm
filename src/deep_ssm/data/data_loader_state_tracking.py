@@ -17,7 +17,8 @@ from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
-from enum import StrEnum
+
+# from enum import StrEnum
 from pathlib import Path
 import polars as pl
 
@@ -31,7 +32,9 @@ class StateTrackingDataset(Dataset):
             input_sequences (list): List of strings containing '0's and '1's
             output_sequences (list): List of strings containing '0's and '1's
         """
-        assert len(input_sequences) == len(output_sequences), "Input and output sequences must have same length"
+        assert len(input_sequences) == len(
+            output_sequences
+        ), "Input and output sequences must have same length"
 
         # Convert strings to lists of integers, then to tensors
         self.input_sequences = [
@@ -48,6 +51,7 @@ class StateTrackingDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.input_sequences[idx], self.output_sequences[idx]
+
 
 def collate_sequences(batch):
     """
@@ -67,16 +71,17 @@ def collate_sequences(batch):
     padded_outputs = pad_sequence(output_sequences, batch_first=True, padding_value=0)
 
     # Create masks (1 for actual sequence, 0 for padding)
-    #input_masks = torch.zeros_like(padded_inputs, dtype=torch.bool)
-    #output_masks = torch.zeros_like(padded_outputs, dtype=torch.bool)
+    # input_masks = torch.zeros_like(padded_inputs, dtype=torch.bool)
+    # output_masks = torch.zeros_like(padded_outputs, dtype=torch.bool)
     masks = torch.zeros_like(padded_inputs, dtype=torch.bool)
 
     for i, (inp_seq, out_seq) in enumerate(zip(input_sequences, output_sequences)):
-        #input_masks[i, :len(inp_seq)] = 1
-        #output_masks[i, :len(out_seq)] = 1
-        masks[i, :len(inp_seq)] = 1
+        # input_masks[i, :len(inp_seq)] = 1
+        # output_masks[i, :len(out_seq)] = 1
+        masks[i, : len(inp_seq)] = 1
 
     return padded_inputs, padded_outputs, masks
+
 
 class ParityDataModule(L.LightningDataModule):
     def __init__(self, args):
@@ -88,20 +93,19 @@ class ParityDataModule(L.LightningDataModule):
 
     def setup(self, stage=None):
         # Load the dataset from the txt files
-        with open(os.path.join(self.args.datasetPath, 'train_src.txt'), 'r') as f:
+        with open(os.path.join(self.args.datasetPath, "train_src.txt"), "r") as f:
             train_src = [line.strip() for line in f.readlines()]
-        with open(os.path.join(self.args.datasetPath, 'train_tgt.txt'), 'r') as f:
+        with open(os.path.join(self.args.datasetPath, "train_tgt.txt"), "r") as f:
             train_tgt = [line.strip() for line in f.readlines()]
-        with open(os.path.join(self.args.datasetPath, 'val_src_bin0.txt'), 'r') as f:
+        with open(os.path.join(self.args.datasetPath, "val_src_bin0.txt"), "r") as f:
             val_src = [line.strip() for line in f.readlines()]
-        with open(os.path.join(self.args.datasetPath, 'val_tgt_bin0.txt'), 'r') as f:
+        with open(os.path.join(self.args.datasetPath, "val_tgt_bin0.txt"), "r") as f:
             val_tgt = [line.strip() for line in f.readlines()]
 
         # Create train, validation, and test datasets
         self.train_ds = StateTrackingDataset(train_src, train_tgt)
         self.val_ds = StateTrackingDataset(val_src, val_tgt)
         self.test_ds = StateTrackingDataset(val_src, val_tgt)
-
 
     def train_dataloader(self):
         return DataLoader(
@@ -110,7 +114,7 @@ class ParityDataModule(L.LightningDataModule):
             shuffle=True,
             num_workers=self.args.num_workers,
             pin_memory=True,
-            collate_fn=collate_sequences
+            collate_fn=collate_sequences,
         )
 
     def val_dataloader(self):
@@ -120,7 +124,7 @@ class ParityDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.args.num_workers,
             pin_memory=True,
-            collate_fn=collate_sequences
+            collate_fn=collate_sequences,
         )
 
     def test_dataloader(self):
@@ -130,10 +134,11 @@ class ParityDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.args.num_workers,
             pin_memory=True,
-            collate_fn=collate_sequences
+            collate_fn=collate_sequences,
         )
 
-class SpecialTokens(StrEnum):
+
+class SpecialTokens:
     """Special tokens for tokenizer."""
 
     PAD = "[PAD]"
@@ -236,7 +241,9 @@ def get_dataset(
         if not os.path.exists(data_paths[0]):
             raise FileNotFoundError(f"You must have data for {group}={2}.")
     else:
-        data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in range(2, k + 1)]
+        data_paths = [
+            os.path.join(data_dir, f"{group}={i}.csv") for i in range(2, k + 1)
+        ]
         if not os.path.exists(data_paths[0]):
             raise FileNotFoundError(f"You must have data for {group}=2.")
         data_paths = [p for p in data_paths if os.path.exists(p)]
@@ -323,6 +330,7 @@ def get_dataset(
         "n_vocab": tokenizer_base.get_vocab_size(with_added_tokens=True),
     }
 
+
 class GroupMultiplicationDataModule(L.LightningDataModule):
     def __init__(self, args):
         super().__init__()
@@ -353,7 +361,7 @@ class GroupMultiplicationDataModule(L.LightningDataModule):
             shuffle=True,
             num_workers=self.args.num_workers,
             pin_memory=True,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
         )
 
     def val_dataloader(self):
@@ -363,7 +371,7 @@ class GroupMultiplicationDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.args.num_workers,
             pin_memory=True,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
         )
 
     def test_dataloader(self):
@@ -373,5 +381,5 @@ class GroupMultiplicationDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.args.num_workers,
             pin_memory=True,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
         )
