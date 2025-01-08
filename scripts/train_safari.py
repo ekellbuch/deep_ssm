@@ -1,7 +1,5 @@
 """
 python train_safari.py trainer.accelerator=cpu # 14 iter/sec, mps = 37 iters/sec
-python train_safari.py train.debug=true +trainer.fast_dev_run=1
-python train_safari.py trainer.max_epochs=2 train.test=1 ++trainer.limit_train_batches=1 ++trainer.limit_val_batches=1 ++trainer.limit_test_batches=1 
 """
 import copy
 import os
