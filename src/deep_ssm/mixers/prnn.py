@@ -38,6 +38,7 @@ def quasi_deer_torch(
     k=0.0,  # controls the amount of damping
     clip=False, # instead of scaling the diagonal Jacobian, clip the entries if there are less than / bigger than 1
     last_only=False,  # only differentiate through the last state
+    while_loop=False, # run to convergence, using a while loop
 ):
     """
     quasi-ELK in torch!
@@ -117,11 +118,20 @@ def quasi_deer_torch(
             with torch.no_grad():
                 states_guess = step(states_guess)
         states_guess = step(states_guess)
+    elif while_loop:
+        err = 100
+        count = 0
+        while err > 1e-4:
+            states_guess_new = step(states_guess)
+            err = torch.max(torch.abs(states_guess_new - states_guess))
+            states_guess = states_guess_new
+            count += 1
     else:
         for _ in range(num_iters):
             states_guess = step(states_guess)
             #deer_traces.append(states_guess)
 
+    print("Number of iterations: ", count)
     return states_guess #deer_traces[-1]  # (B, D, T)
 
 
@@ -623,6 +633,7 @@ class pRNN(nn.Module):
                 k=self.k,
                 clip=self.clip,
                 last_only=self.last_only,
+                while_loop=True,
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
