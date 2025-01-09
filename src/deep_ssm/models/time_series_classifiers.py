@@ -25,12 +25,13 @@ class pRNNClassifier(nn.Module):
                  num_iters=10,
                  k=0.0,
                  clip=False,
-                 method="minrnn",
+                 method="gru",
                  parallel=True,
                  checkpoint=True,
                  learn_diags=False,
                  last_only=False,
                  learn_initial_states=False,
+                 while_loop=False,
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
         self.rnn = pRNN(input_size,
@@ -46,7 +47,8 @@ class pRNNClassifier(nn.Module):
                         checkpoint=checkpoint,
                         learn_diags=learn_diags,
                         last_only=last_only,
-                        learn_initial_states=learn_initial_states)
+                        learn_initial_states=learn_initial_states,
+                        while_loop=while_loop)
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):

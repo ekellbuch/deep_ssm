@@ -67,6 +67,7 @@ def main(cfg: DictConfig):
         method=cfg.model_cfg.method,
         last_only=cfg.model_cfg.last_only,
         learn_initial_states=cfg.model_cfg.learn_initial_states,
+        while_loop=cfg.model_cfg.while_loop,
         num_classes=10,
     )
     model.to(device)

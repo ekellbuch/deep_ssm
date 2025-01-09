@@ -126,12 +126,14 @@ def quasi_deer_torch(
             err = torch.max(torch.abs(states_guess_new - states_guess))
             states_guess = states_guess_new
             count += 1
+            if count > 1000:
+                break
     else:
         for _ in range(num_iters):
             states_guess = step(states_guess)
             #deer_traces.append(states_guess)
-
-    print("Number of iterations: ", count)
+    if while_loop:
+        print("Number of iterations: ", count)
     return states_guess #deer_traces[-1]  # (B, D, T)
 
 
@@ -438,6 +440,7 @@ class pRNN(nn.Module):
         last_only=False, # only differentiate through the last state
         learn_initial_states=False,
         reparameterize=False, # reparameterize a cell
+        while_loop=False, # run to convergence
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -459,6 +462,7 @@ class pRNN(nn.Module):
         self.last_only = last_only
         self.learn_initial_states = learn_initial_states
         self.num_iters = num_iters  # number of iterations for quasi-DEER
+        self.while_loop = while_loop
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -633,7 +637,7 @@ class pRNN(nn.Module):
                 k=self.k,
                 clip=self.clip,
                 last_only=self.last_only,
-                while_loop=True,
+                while_loop=self.while_loop,
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
