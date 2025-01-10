@@ -121,13 +121,16 @@ def quasi_deer_torch(
     elif while_loop:
         err = 100
         count = 0
-        while err > 1e-4:
-            states_guess_new = step(states_guess)
-            err = torch.max(torch.abs(states_guess_new - states_guess))
-            states_guess = states_guess_new
-            count += 1
-            if count > 1000:
-                break
+        with torch.no_grad():
+            while err > 1e-4:
+                states_guess_new = step(states_guess)
+                err = torch.max(torch.abs(states_guess_new - states_guess))
+                states_guess = states_guess_new
+                count += 1
+                if count > 1000:
+                    break
+        states_guess = step(states_guess)
+        count += 1
     else:
         for _ in range(num_iters):
             states_guess = step(states_guess)
