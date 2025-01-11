@@ -58,6 +58,11 @@ def train(args):
 
     # get module and model:
     modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=datamodule.nDays)
+    if torch.cuda.is_available():
+      try:
+        modelito = torch.compile(modelito)
+      except:
+        print("did not compile model") 
 
     if args.model_cfg.get("resume_ckpt_path", None):
       # Do not resume training simply load checkpoints
