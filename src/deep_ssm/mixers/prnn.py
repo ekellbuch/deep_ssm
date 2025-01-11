@@ -18,6 +18,7 @@ except:
         from accelerated_scan.ref import scan
     except ImportError:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
+import wandb
 
 def _batch_along_time(x):
     assert x.ndim == 3, "Expects x to be (B, D, T)"
@@ -136,7 +137,8 @@ def quasi_deer_torch(
             states_guess = step(states_guess)
             #deer_traces.append(states_guess)
     if while_loop:
-        print("Number of iterations: ", count)
+        # print("Number of iterations: ", count)
+        wandb.log({"num_iters": count}) # is this going to break everything?
     return states_guess #deer_traces[-1]  # (B, D, T)
 
 

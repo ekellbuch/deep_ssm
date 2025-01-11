@@ -36,7 +36,7 @@ def main(cfg: DictConfig):
     if cfg.trainer_cfg.fast_dev_run:
         hidden_size = 2
         num_epochs = 1
-        offline = True
+        # offline = True
 
     # Initialize wandb logger
     logger = WandbLogger(project="nonlinear_ssm", offline=offline)
