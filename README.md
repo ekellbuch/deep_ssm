@@ -102,3 +102,7 @@ To run in wandb:
 ```
 wandb sweep path-to-yaml
 ```
+
+### some notes about state tracking
+
+For state_tracking, need to `pip install ordered-set tokenizers transformers polars`
