@@ -8,7 +8,7 @@ metric:
   goal: minimize
 parameters:
   model_cfg.configs.num_iters:
-    values: [2, 3]
+    values: [1, 2, 3]
   model_cfg.configs.method:
     values: ["gru"]
   model_cfg.configs.parallel:
