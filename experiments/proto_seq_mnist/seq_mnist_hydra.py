@@ -122,6 +122,7 @@ def main(cfg: DictConfig):
             best_val_loss = val_loss
             epochs_without_improvement = 0  # Reset counter
             torch.save(model.state_dict(), best_model_path)
+            wandb.save(best_model_path)
         else:
             epochs_without_improvement += 1
 
