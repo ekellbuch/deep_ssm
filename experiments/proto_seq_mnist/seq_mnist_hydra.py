@@ -81,21 +81,43 @@ def main(cfg: DictConfig):
     os.makedirs(experiment_dir, exist_ok=True)
     best_model_path = os.path.join(experiment_dir, "best_model.pth")
     for epoch in tqdm(range(num_epochs)):
+        # train loop
         model.train()
+        correct, total = 0, 0
+        train_loss = 0.0
+        grad_norms = []
         t0 = time.time()
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             x = x.permute(0, 2, 1)  # (B, T, D)
             optimizer.zero_grad()
             logits = model(x)
+            predictions = torch.argmax(logits, dim=1)
             loss = criterion(logits, y)
+            correct += torch.sum(predictions == y)
+            total += len(y)
+            train_loss += loss.item() * x.size(0)
             loss.backward()
+
+            # Gradient norm monitoring
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+            grad_norms.append(total_grad_norm)
 
             if cfg.optimizer_cfg.clip_grads:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer_cfg.grad_clip_val)
             optimizer.step()
         t1 = time.time()
-        logger.log_metrics({"train_time": t1 - t0}, step=epoch)
+        train_loss /= total
+        train_acc = correct / total
+        logger.log_metrics(
+            {
+                "train_accuracy": train_acc.item(),
+                "train_loss": train_loss,
+                "train_time": t1 - t0,
+                "avg_grad_norm": sum(grad_norms) / len(grad_norms),
+            },
+            step=epoch,
+        )
 
         # Evaluation Loop
         model.eval()

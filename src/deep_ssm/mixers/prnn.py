@@ -73,6 +73,7 @@ def quasi_deer_torch(
     T = states_guess.shape[-1]
     padded_T = int(2 ** np.ceil(np.log2(T)))  # must be a power of 2
     device = states_guess.device
+    total_nans = 0 
 
     def step(states):
         """
@@ -108,6 +109,8 @@ def quasi_deer_torch(
 
         # parallel asscociative scan
         new_states = scan(A, b)[..., :T]  # (B, D, T)
+        if torch.isnan(new_states).any():
+            total_nans += 1
         if not torch.is_complex(new_states):
             new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states
@@ -139,6 +142,7 @@ def quasi_deer_torch(
     if while_loop:
         # print("Number of iterations: ", count)
         wandb.log({"num_iters": count}) # is this going to break everything?
+    wandb.log({"total_nans": total_nans})
     return states_guess #deer_traces[-1]  # (B, D, T)
 
 
