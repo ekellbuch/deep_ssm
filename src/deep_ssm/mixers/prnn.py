@@ -18,6 +18,7 @@ except:
         from accelerated_scan.ref import scan
     except ImportError:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
+import wandb
 
 def _batch_along_time(x):
     assert x.ndim == 3, "Expects x to be (B, D, T)"
@@ -38,6 +39,7 @@ def quasi_deer_torch(
     k=0.0,  # controls the amount of damping
     clip=False, # instead of scaling the diagonal Jacobian, clip the entries if there are less than / bigger than 1
     last_only=False,  # only differentiate through the last state
+    while_loop=False, # run to convergence, using a while loop
 ):
     """
     quasi-ELK in torch!
@@ -71,6 +73,7 @@ def quasi_deer_torch(
     T = states_guess.shape[-1]
     padded_T = int(2 ** np.ceil(np.log2(T)))  # must be a power of 2
     device = states_guess.device
+    total_nans = 0 
 
     def step(states):
         """
@@ -106,6 +109,8 @@ def quasi_deer_torch(
 
         # parallel asscociative scan
         new_states = scan(A, b)[..., :T]  # (B, D, T)
+        if torch.isnan(new_states).any():
+            total_nans += 1
         if not torch.is_complex(new_states):
             new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states
@@ -117,11 +122,27 @@ def quasi_deer_torch(
             with torch.no_grad():
                 states_guess = step(states_guess)
         states_guess = step(states_guess)
+    elif while_loop:
+        err = 100
+        count = 0
+        with torch.no_grad():
+            while err > 1e-4:
+                states_guess_new = step(states_guess)
+                err = torch.max(torch.abs(states_guess_new - states_guess))
+                states_guess = states_guess_new
+                count += 1
+                if count > 1000:
+                    break
+        states_guess = step(states_guess)
+        count += 1
     else:
         for _ in range(num_iters):
             states_guess = step(states_guess)
             #deer_traces.append(states_guess)
-
+    if while_loop:
+        # print("Number of iterations: ", count)
+        wandb.log({"num_iters": count}) # is this going to break everything?
+    wandb.log({"total_nans": total_nans})
     return states_guess #deer_traces[-1]  # (B, D, T)
 
 
@@ -428,6 +449,7 @@ class pRNN(nn.Module):
         last_only=False, # only differentiate through the last state
         learn_initial_states=False,
         reparameterize=False, # reparameterize a cell
+        while_loop=False, # run to convergence
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -449,6 +471,7 @@ class pRNN(nn.Module):
         self.last_only = last_only
         self.learn_initial_states = learn_initial_states
         self.num_iters = num_iters  # number of iterations for quasi-DEER
+        self.while_loop = while_loop
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -623,6 +646,7 @@ class pRNN(nn.Module):
                 k=self.k,
                 clip=self.clip,
                 last_only=self.last_only,
+                while_loop=self.while_loop,
             )  # (B,D,T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:

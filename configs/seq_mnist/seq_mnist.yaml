@@ -15,7 +15,8 @@ model_cfg:
   clip: False
   last_only: False
   learn_initial_states: False
-  method: "minrnn"
+  method: "gru"
+  while_loop: False
 
 optimizer_cfg:
   lr: 0.001
