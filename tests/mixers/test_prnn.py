@@ -10,7 +10,7 @@ Comments:
 """
 import torch
 import torch.nn as nn
-from deep_ssm.mixers.prnn import pRNN, diagonalize_and_reparameterize
+from deep_ssm.mixers.prnn import pRNN, diagonalize_and_reparameterize, AugmentedGRUCell
 import pytest
 import numpy as np
 
@@ -62,7 +62,6 @@ class Arguments:
         self.reparameterize = reparameterize
 
 
-
 def update_name(param_name, suffix=""):
     "change from {weight_ih_l0} to ''forward_cells.0.weight_ih'"
     if "reverse" in param_name:
@@ -88,7 +87,6 @@ def assign_parameters(model1, model2, update_name_fn=update_name):
 
     model2.load_state_dict(m2_sd)
     return model2
-
 
 
 def compare_parameters(model1, model2,update_name_fn=update_name, grad=False, atol=1e-6):
@@ -360,7 +358,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
 
     # Compare gradients
     #assert compare_parameters(gru_model, prnn3, grad=True, atol=atol, update_name_fn=update_name_fn)
-    
+
 
 seqlens = [32]
 batch_sizes = [1]
@@ -406,7 +404,6 @@ def compare_gru_cells(batch, seqlen, dim, bidirectional, num_layers, num_iters):
                        bidirectional=cfg.bidirectional,
                        ).to(DEVICE)
 
-
     # Linearize the standard GRU at a specific state x0, h0
     reparam_gru = diagonalize_and_reparameterize(standard_gru, dim, hidden_size, x0, h0)
 
@@ -430,12 +427,12 @@ def compare_gru_cells(batch, seqlen, dim, bidirectional, num_layers, num_iters):
         print(h_standard)
         print(h_reparam)
         breakpoint()
-        #hidden_states_standard.append(h_standard.clone().detach())
-        #hidden_states_reparam.append(h_reparam.clone().detach())
+        # hidden_states_standard.append(h_standard.clone().detach())
+        # hidden_states_reparam.append(h_reparam.clone().detach())
 
     # Convert lists to tensors for easier analysis
-    #hidden_states_standard = torch.stack(hidden_states_standard, dim=0)  # (T, B, H)
-    #hidden_states_reparam = torch.stack(hidden_states_reparam, dim=0)    # (T, B, H)
+    # hidden_states_standard = torch.stack(hidden_states_standard, dim=0)  # (T, B, H)
+    # hidden_states_reparam = torch.stack(hidden_states_reparam, dim=0)    # (T, B, H)
 
     # Plot hidden states for comparison
     """
@@ -463,6 +460,19 @@ def compare_gru_cells(batch, seqlen, dim, bidirectional, num_layers, num_iters):
     print("Reparametrized GRU Jacobian:")
     print(J_reparam.squeeze())
 
+
+@pytest.mark.parametrize("input_dim", [3])
+@pytest.mark.parametrize("hidden_dim", [7])
+@pytest.mark.parametrize("batch_size", [10])
+def test_gru_diag_derivative(input_dim, hidden_dim, batch_size):
+    inputs = torch.randn(batch_size, input_dim, device=DEVICE)
+    hiddens = torch.randn(batch_size, hidden_dim, device=DEVICE)
+    my_gru_cell = AugmentedGRUCell(input_dim, hidden_dim).to(DEVICE)
+    func_outputs_v2 = torch.func.vmap(torch.diag)(
+        torch.func.vmap(torch.func.jacrev(my_gru_cell, argnums=1))(inputs, hiddens)
+    )
+    our_outputs_v2 = my_gru_cell.diagonal_derivative(inputs, hiddens)
+    assert torch.allclose(func_outputs_v2, our_outputs_v2)
 
 if __name__ == "__main__":
     test_prnn()
