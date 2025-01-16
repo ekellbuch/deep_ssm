@@ -9,7 +9,7 @@ seed: 0
 
 data_cfg:
   group: "A5"
-  k: 15
+  k: 4
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
@@ -18,8 +18,8 @@ data_cfg:
 model_cfg:
   type: "state_tracking_prnn"
   configs:
-    embed_size: 512
-    hidden_size: 2048
+    embed_size: 698
+    hidden_size: 1096
     parallel: false
     method: "minrnn"
 

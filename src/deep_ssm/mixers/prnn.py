@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.checkpoint import checkpoint as checkpoint_torch
+import torch.nn.functional as F
 try:
     from accelerated_scan.warp import (
         scan,
@@ -17,6 +18,14 @@ except:
     except ImportError:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 
+def _batch_along_time(x):
+    assert x.ndim == 3, "Expects x to be (B, D, T)"
+    return x.permute(0, 2, 1).flatten(0, 1)
+
+def _unbatch_to_time(x, B):
+    assert x.ndim == 2, "Expects x to be (B*T, D)"
+    T = x.shape[0] // B
+    return x.view(B, T, -1).permute(0, 2, 1)
 
 def quasi_deer_torch(
     f,
@@ -65,14 +74,16 @@ def quasi_deer_torch(
         states: B,D,T
         """
         # Evaluate f and its Jacobian in parallel across timesteps 1,..,T-1
-        fs = torch.func.vmap(f, in_dims=-1, out_dims=-1)(
-            inputs[..., 1:], states[..., :-1]
-        )  # (B,D,T-1), in your diagram above, the first interacton is f(e1, h1)
+        B, D, T = states.shape
+        # inputs and states are (B,D,T-1), the first interacton is f(e1, h1)
+        fs = f(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        fs = _unbatch_to_time(fs, B)  # (B,D,T-1)
 
         # Compute the As and bs from fs and Jfs
-        As = (1.0 - k) * torch.func.vmap(diagonal_derivative, in_dims=-1, out_dims=-1)(
-            inputs[..., 1:], states[..., :-1]
-        )  # (B, D, T-1)
+        # inputs and states are (B,D,T-1)
+        As = diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        As = _unbatch_to_time(As, B)  # (B, D, T-1)
+        As.clamp_(min=-1, max=1)
         bs = fs - As * states[..., :-1]  # (B, D, T-1)
 
         # initial_state is h0
@@ -92,12 +103,13 @@ def quasi_deer_torch(
         new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states
 
-    deer_traces = []
+    # deer_traces = []
     for _ in range(num_iters):
         states_guess = step(states_guess)
-        deer_traces.append(states_guess)
+        # deer_traces.append(states_guess)
 
-    return deer_traces[-1]  # (B, D, T)
+    # return deer_traces[-1]  # (B, D, T)
+    return states_guess
 
 
 class MinRNNCell(nn.Module):
@@ -106,29 +118,21 @@ class MinRNNCell(nn.Module):
         self.hidden_size = hidden_size
         self.input_size = input_size
 
-        self.input_weights = nn.Parameter(
-            torch.randn(hidden_size, input_size) / (input_size**0.5)
-        )
-        bound = 1 / torch.sqrt(torch.tensor(input_size))
-        torch.nn.init.uniform_(self.input_weights, -bound, bound)
+        # Input weights and bias
+        self.input_weights = nn.Parameter(torch.empty(hidden_size, input_size))
         self.input_bias = nn.Parameter(torch.zeros(hidden_size))
 
-        # self.recurrent_weights = nn.Parameter(
-        #     torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
-        # )
-        # bound = 1 / torch.sqrt(torch.tensor(hidden_size))
-        # torch.nn.init.uniform_(self.recurrent_weights, -bound, bound)
-        self.recurrent_weights = nn.Parameter(
-            torch.eye(hidden_size)
-        )
+        # Recurrent weights
+        self.recurrent_weights = nn.Parameter(torch.empty(hidden_size, hidden_size))
 
-        self.U_z = nn.Parameter(
-            torch.randn(hidden_size, hidden_size) / (hidden_size**0.5)
-        )
-        bound = 1 / torch.sqrt(torch.tensor(hidden_size))
-        torch.nn.init.uniform_(self.U_z, -bound, bound)
-
+        # Additional parameters for the update gate
+        self.U_z = nn.Parameter(torch.empty(hidden_size, hidden_size))
         self.b_u = nn.Parameter(torch.zeros(hidden_size))
+
+        # Xavier initialization
+        nn.init.xavier_uniform_(self.input_weights)
+        nn.init.xavier_uniform_(self.recurrent_weights)
+        nn.init.xavier_uniform_(self.U_z)
 
     def forward(self, input, prev_state):
         z = torch.tanh(torch.matmul(input, self.input_weights.T) + self.input_bias)

@@ -19,7 +19,7 @@ model_cfg:
     embed_size: 64
     hidden_size: 64
     bidirectional: false
-    num_iters: 2
+    num_iters: 1
     method: "minrnn"
     parallel: true
 

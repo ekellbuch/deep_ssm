@@ -262,6 +262,9 @@ def selective_scan_ref(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta
     # Precompute delta * A for efficiency, performed over the time dimension (L)
     deltaA = torch.exp(torch.einsum('bdl,dn->bdln', delta, A))
 
+    # neg/pos eigenvalues
+    deltaA = deltaA * 2 - 1
+
     # Compute delta * B * u depending on the shape of B
     if not is_variable_B:
         # If B is not variable, use a standard einsum for delta * B * u

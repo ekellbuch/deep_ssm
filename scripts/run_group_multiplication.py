@@ -1,3 +1,5 @@
+import os
+
 import hydra
 import lightning as L
 import wandb
@@ -15,14 +17,14 @@ import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
 
 
-@hydra.main(config_path="../configs/group_multiplication", config_name="baseline_gru", version_base=None)
+@hydra.main(config_path="../configs/group_multiplication", config_name="quasideer_gru", version_base=None)
 def main(args: DictConfig) -> None:
     train(args)
     return
 
 
 def train(args):
-    L.seed_everything(args.seed)
+    L.seed_everything(args.seed, workers=True)
 
     # Get hydra output directory
     try:
@@ -30,6 +32,9 @@ def train(args):
     except:
       output_dir = None
 
+    experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_{args.seed}seed'
+    # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_negpos_{args.seed}seed'
+    # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
       logger = None
@@ -40,14 +45,14 @@ def train(args):
         else:
           kwargs = dict()
 
-        logger = WandbLogger(name=args.experiment_name,
+        logger = WandbLogger(name=experiment_name,
                              project=args.project_name, **kwargs)
 
         args_as_dict = OmegaConf.to_container(args)
         logger.log_hyperparams(args_as_dict)
       elif args.trainer_cfg.logger == "tensorboard":
         logger = TensorBoardLogger(args.project_name,
-                                   name=args.experiment_name,
+                                   name=experiment_name,
                                    )
       else:
         logger = None
@@ -89,7 +94,8 @@ def train(args):
       if args.callbacks.get("eigen_track", None):
         local_callbacks.append(all_callbacks["eigen_track"])
 
-    trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
+    trainer = L.Trainer(**trainer_config, callbacks=local_callbacks, deterministic=True, gradient_clip_val=1.0)
+    # trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
@@ -99,7 +105,16 @@ def train(args):
       ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
     # Test model
-    trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
+    test_acc = trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
+
+    # Save model
+    # experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{wandb.run.id}"
+    experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{experiment_name}"
+    os.makedirs(experiment_dir, exist_ok=True)
+    model_path = os.path.join(experiment_dir, "model.ckpt")
+    # torch.save(model.state_dict(), model_path)
+    trainer.save_checkpoint(model_path)
+    wandb.save(model_path)
 
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):

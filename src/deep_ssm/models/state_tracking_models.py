@@ -5,11 +5,11 @@ from deep_ssm.mixers.prnn import pRNN
 import torch.nn.functional as F
 
 class GRUDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size):
+    def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1):
         super(GRUDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.model= nn.GRU(embed_size, hidden_size, num_layers=1, batch_first=True)
+        self.model= nn.GRU(embed_size, hidden_size, num_layers=num_layers, batch_first=True)
         self.linear = nn.Linear(hidden_size, vocab_size)
 
     def forward(self, x):
@@ -19,12 +19,12 @@ class GRUDecoder(nn.Module):
         return x
     
 class pRNNDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size, num_iters=2, bidirectional=False,
+    def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1, num_iters=2, bidirectional=False,
                  method='minrnn', parallel=True):
         super(pRNNDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.model= pRNN(embed_size, hidden_size, num_layers=1, 
+        self.model= pRNN(embed_size, hidden_size, num_layers=num_layers, 
                          batch_first=True, bidirectional=bidirectional, num_iters=num_iters, 
                          method=method, parallel=parallel)
         self.linear = nn.Linear(hidden_size, vocab_size)
@@ -36,7 +36,7 @@ class pRNNDecoder(nn.Module):
         return x
     
 class MambaDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, n_layer=1):
+    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1):
         super(MambaDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
@@ -45,7 +45,7 @@ class MambaDecoder(nn.Module):
             d_state=d_state,
             d_conv=d_conv,
             expand_factor=expand_factor,
-            n_layer=n_layer,
+            n_layer=num_layers,
             mamba_bi_new=True
         )
         self.linear = nn.Linear(embed_size, vocab_size)

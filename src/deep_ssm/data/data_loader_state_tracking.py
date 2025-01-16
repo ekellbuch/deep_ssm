@@ -231,7 +231,8 @@ def get_dataset(
 
     if strict_len:
         assert k > 1, "`k` must be at least 2"
-        data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in [2, k]]
+        # data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in [2, k]]
+        data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in [k]]
         data_paths = list(OrderedSet(data_paths))
         if not os.path.exists(data_paths[0]):
             raise FileNotFoundError(f"You must have data for {group}={2}.")

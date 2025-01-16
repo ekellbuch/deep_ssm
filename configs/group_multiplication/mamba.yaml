@@ -2,25 +2,27 @@ Comment: >
   # This trains the baseline model (fast_dev_run is a debugging flag)
   python run.py --config-name="mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
 
-project_name: "parity"
+project_name: "group_multiplication"
 experiment_name: "mamba"
 
 seed: 0
 
 data_cfg:
-  batchSize: 32
+  group: "S5"
+  k: 40
+  max_samples: 1000000
+  batchSize: 512
   num_workers: 0
-  datasetPath: "/scratch/users/hdlee/state_tracking/data/Parity"
+  datasetPath: "/scratch/groups/swl1/group_multiplication/data"
 
 model_cfg:
   type: "state_tracking_mamba"
   configs:
-    vocab_size: 2
-    embed_size: 64
+    embed_size: 128
     d_state: 16
     d_conv: 4
     expand_factor: 2
-    n_layer: 1
+    num_layers: 6
 
 module_cfg:
   type: "state_tracking"
@@ -38,7 +40,7 @@ trainer_cfg:
   fast_dev_run: false
   logger: "wandb"
   accelerator: "auto"
-  max_epochs: 100
+  max_epochs: 50
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
