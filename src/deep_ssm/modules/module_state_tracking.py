@@ -45,6 +45,31 @@ class StateTrackingDecoder(L.LightningModule):
     acc = correct_predictions / total_tokens
     self.log(f"avg_{flag_name}_loss", avg_loss, on_epoch=True, prog_bar=True)
     self.log(f"avg_{flag_name}_acc", acc, on_epoch=True, prog_bar=True)
+    return acc
+
+  def _custom_step_v2(self, batch, batch_idx, flag_name='test'):
+    src, tgt, mask = batch
+
+    # Forward pass
+    logits = self.model(src)  # Shape: [batch_size, seq_len, vocab_size]
+
+    # Reshape for cross entropy
+    flat_logits = logits[:, -1, :].view(-1, logits.size(-1))  # [batch_size*seq_len, vocab_size]
+    flat_targets = tgt[:, -1].view(-1)  # [batch_size*seq_len]
+    flat_mask = mask[:, -1].view(-1)  # [batch_size*seq_len]
+
+    # Calculate loss only on non-padded positions
+    loss = self.loss_fn(flat_logits[flat_mask], flat_targets[flat_mask])
+    # self.log(f"loss_{flag_name}", loss)
+
+    # Calculate accuracy on non-padded positions
+    predictions = flat_logits.argmax(dim=-1)
+    correct_predictions = ((predictions == flat_targets) & flat_mask).sum().item()
+    total_tokens = flat_mask.sum().item()
+    total_loss = loss.item() * flat_mask.sum().item()
+
+    return {"loss": loss, "correct_predictions": correct_predictions, 
+            "total_tokens": total_tokens, "total_loss": total_loss}
 
   def training_step(self, batch, batch_idx):
     output = self._custom_step(batch, batch_idx, flag_name='train')
@@ -57,7 +82,7 @@ class StateTrackingDecoder(L.LightningModule):
     self.train_step_outputs.clear()
 
   def validation_step(self, batch, batch_idx):
-    output = self._custom_step(batch, batch_idx, flag_name='validation')
+    output = self._custom_step_v2(batch, batch_idx, flag_name='validation')
     self.validation_step_outputs.append(output)
     return output
 
@@ -67,14 +92,15 @@ class StateTrackingDecoder(L.LightningModule):
     self.validation_step_outputs.clear()
 
   def test_step(self, batch, batch_idx):
-    output = self._custom_step(batch, batch_idx, flag_name='test')
+    output = self._custom_step_v2(batch, batch_idx, flag_name='test')
     self.test_step_outputs.append(output)
     return output
 
   def on_test_epoch_end(self):
     outputs = self.test_step_outputs
-    self._custom_epoch_end(outputs, flag_name='test')
+    test_acc = self._custom_epoch_end(outputs, flag_name='test')
     self.test_step_outputs.clear()
+    return test_acc
 
   def configure_optimizers(self):
     if self.args.optimizer_cfg.type == "adam":
