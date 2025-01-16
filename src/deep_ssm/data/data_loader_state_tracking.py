@@ -17,6 +17,7 @@ from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
+from typing import Optional, Union
 
 # from enum import StrEnum
 from pathlib import Path
@@ -137,30 +138,37 @@ class ParityDataModule(L.LightningDataModule):
             collate_fn=collate_sequences,
         )
 
+class SpecialToken(str):
+    """Represents a special token with a value."""
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __init__(self, value: str):
+        self.value = value
+
 
 class SpecialTokens:
     """Special tokens for tokenizer."""
-
-    PAD = "[PAD]"
-    BOS = "[BOS]"
-    UNK = "[UNK]"
-    EOS = "[EOS]"
-    SEP = "[SEP]"
-    CLS = "[CLS]"
-    MASK = "[MASK]"
+    PAD = SpecialToken("[PAD]")
+    BOS = SpecialToken("[BOS]")
+    UNK = SpecialToken("[UNK]")
+    EOS = SpecialToken("[EOS]")
+    SEP = SpecialToken("[SEP]")
+    CLS = SpecialToken("[CLS]")
+    MASK = SpecialToken("[MASK]")
 
     @classmethod
     def values(cls):
         """Return a list of the string values of each special token."""
-        return list(map(lambda c: c.value, cls))
+        return [str(attr) for attr in cls.__dict__.values() if isinstance(attr, SpecialToken)]
 
-    @property
-    def index(self):
-        """Return the index of the token in the vocabulary.
-
-        Used to get the index of the PAD token when directly modifying tensors.
-        """
-        return SpecialTokens.values().index(self.value)
+    @classmethod
+    def index(cls, token: str):
+        """Return the index of the token in the list of special tokens."""
+        values = cls.values()
+        if token not in values:
+            raise ValueError(f"Token '{token}' not found in special tokens.")
+        return values.index(token)
 
 
 def pad_collate(
@@ -227,9 +235,9 @@ def get_dataset(
     k: int,
     strict_len: bool,
     train_size: float,
-    data_dir: str | Path,
+    data_dir: str,
     supervised: bool = True,
-    max_samples: int | None = None,
+    max_samples: Optional[int] = None,
 ) -> dict:
     """Construct dataset."""
     assert train_size > 0 and train_size <= 1, "`train_size` must be in (0,1]"
