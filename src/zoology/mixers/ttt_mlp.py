@@ -60,11 +60,13 @@ class TTTMLP(nn.Module):
         layer_idx=None,  # unused
         num_iters=2,  # number of iterations for quasi-DEER
         checkpoint=True,
+        parallel=True,
     ):
         super().__init__()
         self.d_model = d_model
         self.num_iters = num_iters
         self.checkpoint = checkpoint
+        self.parallel = parallel
 
         self.q_conv1d = FastDepthwiseCausalConv1d(d_model, kernel_size=d_conv, bias=True, channel_last=True)
         self.k_conv1d = FastDepthwiseCausalConv1d(d_model, kernel_size=d_conv, bias=True, channel_last=True)
@@ -140,25 +142,34 @@ class TTTMLP(nn.Module):
 
         # mamba style decay 
         log_lr = -self.A_log.exp() * torch.nn.functional.softplus(log_lr_ + self.dt_bias)
-        lr = 1 - log_lr.exp()  # Initialize at 0 learning rate to prevent blowing up
+        lr = 0.1 * log_lr.exp()  # Initialize at 0 learning rate to prevent blowing up
+        #lr = 0.1 * torch.ones_like(log_lr)
 
         vectorized_params_0 = self.vectorized_params_0.expand(B, -1)
-        vectorized_params = quasi_deer_torch(
-            f=self.transition_fn,
-            diagonal_derivative=self.diagonal_derivative,
-            initial_state=vectorized_params_0,
-            states_guess=repeat(vectorized_params_0, "B D -> B D T", T=T),
-            inputs=rearrange(torch.cat([k, v, lr], dim=-1), "B T D -> B D T"),
-            num_iters=self.num_iters,
-            k=0.1,
-        )
-        vectorized_params = rearrange(vectorized_params, "B D T -> (B T) D")
+        if self.parallel:
+            vectorized_params = quasi_deer_torch(
+                f=self.transition_fn,
+                diagonal_derivative=self.diagonal_derivative,
+                initial_state=vectorized_params_0,
+                states_guess=repeat(vectorized_params_0, "B D -> B D T", T=T),
+                inputs=rearrange(torch.cat([k, v, lr], dim=-1), "B T D -> B D T"),
+                num_iters=self.num_iters,
+                k=0.1,
+            )
+            vectorized_params = rearrange(vectorized_params, "B D T -> (B T) D")
+        else:
+            curr_vectorized_params = vectorized_params_0
+            vectorized_params = []
+            for t in range(T):
+                curr_vectorized_params = self.transition_fn(torch.cat([k[:, t], v[:, t], lr[:, t]], dim=-1), curr_vectorized_params)
+                vectorized_params.append(curr_vectorized_params)
+            vectorized_params = torch.stack(vectorized_params, dim=-2).reshape(B * T, -1)
 
         params = self.extract_params(vectorized_params)
 
         y = rearrange(mlp(params, rearrange(q, "B T D -> (B T) D")), "(B T) D -> B T D", B=B)
         #y = self.out_proj(y)  # causes nans
-        y = self.norm(y)
+        #y = self.norm(y)
         return y  # TODO: use mamba block?
 
 
