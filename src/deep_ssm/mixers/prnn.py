@@ -538,7 +538,11 @@ class pRNN(nn.Module):
         self.batch_first = batch_first
         self.dropout = dropout
         self.bidirectional = bidirectional
+        self.quasi = quasi
         self.checkpoint = checkpoint
+        # turn off checkpointing if using deer
+        if not self.quasi:
+            self.checkpoint=False
         self.reparameterize = reparameterize
 
         num_directions = 2 if bidirectional else 1
@@ -551,7 +555,6 @@ class pRNN(nn.Module):
         self.learn_initial_states = learn_initial_states
         self.num_iters = num_iters  # number of iterations for quasi-DEER
         self.while_loop = while_loop
-        self.quasi = quasi
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 

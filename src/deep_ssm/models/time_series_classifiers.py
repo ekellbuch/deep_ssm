@@ -35,6 +35,8 @@ class pRNNClassifier(nn.Module):
                  quasi=True,
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
+        if quasi=False:
+            checkpoint = False
         self.rnn = pRNN(input_size,
                         hidden_size,
                         num_layers=num_layers,
