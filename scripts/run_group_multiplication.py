@@ -32,9 +32,11 @@ def train(args):
     except:
       output_dir = None
 
-    experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_{args.seed}seed'
-    # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_negpos_{args.seed}seed'
-    # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
+    try:
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_{args.seed}seed'
+    except:
+        experiment_name = args.experiment_name
+
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
       logger = None
@@ -46,7 +48,8 @@ def train(args):
           kwargs = dict()
 
         logger = WandbLogger(name=experiment_name,
-                             project=args.project_name, **kwargs)
+                             project=args.project_name, **kwargs,
+                             save_dir=output_dir)
 
         args_as_dict = OmegaConf.to_container(args)
         logger.log_hyperparams(args_as_dict)
@@ -100,7 +103,7 @@ def train(args):
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
       trainer.fit(model=model, datamodule=datamodule)
-      ckpt_path = None
+      ckpt_path = "best" if not args.trainer_cfg.get("fast_dev_run", False) else None
     else:
       ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
@@ -109,13 +112,15 @@ def train(args):
 
     # Save model
     # experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{wandb.run.id}"
-    experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{experiment_name}"
-    os.makedirs(experiment_dir, exist_ok=True)
-    model_path = os.path.join(experiment_dir, "model.ckpt")
-    # torch.save(model.state_dict(), model_path)
-    trainer.save_checkpoint(model_path)
-    wandb.save(model_path)
-
+    try:
+        experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{experiment_name}"
+        os.makedirs(experiment_dir, exist_ok=True)
+        model_path = os.path.join(experiment_dir, "model.ckpt")
+        # torch.save(model.state_dict(), model_path)
+        trainer.save_checkpoint(model_path)
+        wandb.save(model_path)
+    except:
+        pass
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):
       wandb.run.summary["output_dir"] = output_dir
