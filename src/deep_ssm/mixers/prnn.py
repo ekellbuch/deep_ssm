@@ -124,10 +124,8 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
             prev_state_prev_iter = states[..., t] # (B,D)
             prev_state_diff = prev_state - prev_state_prev_iter # (B,D)
             curr_input = inputs[..., t+1]
-            J_f_matrix = vmap(jacrev(f, argnums=1))(curr_input, prev_state_prev_iter) # (B,D,D)
-            next_state = torch.einsum("bij,bj->bi", (1 - k) * J_f_matrix, prev_state_diff) + f(
-                curr_input, prev_state_prev_iter
-            )
+            f_curr, J_f_times_prev_state_diff = torch.func.jvp(lambda s: f(curr_input, s), (prev_state_prev_iter,), (prev_state_diff,))
+            next_state = (1 - k) * J_f_times_prev_state_diff + f_curr
             new_states.append(next_state)
             prev_state = next_state
         new_states = torch.stack(new_states, dim=-1)
