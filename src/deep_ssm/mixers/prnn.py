@@ -9,6 +9,8 @@ import torch.nn as nn
 import numpy as np
 from torch.utils.checkpoint import checkpoint as checkpoint_torch
 import torch.nn.functional as F
+from torch.func import vmap, jacrev
+
 try:
     from accelerated_scan.warp import (
         scan,
@@ -28,6 +30,113 @@ def _unbatch_to_time(x, B):
     assert x.ndim == 2, "Expects x to be (B*T, D)"
     T = x.shape[0] // B
     return x.view(B, T, -1).permute(0, 2, 1)
+
+def deer_torch(
+        f,
+        initial_state,
+        states_guess,
+        inputs,
+        diagonal_derivative=None, # if None, deer; if a function, quasi-DEER
+        num_iters=10,
+        k=0.0,
+        clip=False,
+        while_loop=False
+):
+    """
+    Wrapper function holding both deer and quasi-DEER
+
+    Notes:
+    - Currently needs wandb.init(), but you can use wandb.init(mode='disabled') to disable logging
+    """
+    if diagonal_derivative:
+        return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop)
+    else:
+        return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop)
+
+def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_only=False):
+    """
+    Helper function for the outer loop of (quasi)-DEER
+    Args:
+        step: each iteration of (quasi)-DEER
+        states_guess: (B,D,T)
+
+    Notes:
+        VERY important!! Note that step needs to close over initial_state and inputs
+    """
+    total_nans = 0
+    if last_only:
+        for _ in range(num_iters - 1):
+            with torch.no_grad():
+                states_guess, isnan = step(states_guess)
+                total_nans += isnan
+        states_guess = step(states_guess)
+    elif while_loop:
+        err = 100
+        count = 0
+        with torch.no_grad():
+            while err > 1e-4:
+                states_guess_new, isnan = step(states_guess)
+                total_nans += isnan
+                err = torch.max(torch.abs(states_guess_new - states_guess))
+                states_guess = states_guess_new
+                count += 1
+                if count > 1000:
+                    break
+        states_guess, isnan = step(states_guess)
+        count += 1
+    else:
+        for _ in range(num_iters):
+            states_guess, isnan = step(states_guess)
+            total_nans += isnan
+            # deer_traces.append(states_guess)
+    if while_loop:
+        # print("Number of iterations: ", count)
+        wandb.log({"num_iters": count})  # is this going to break everything?
+    wandb.log({"total_nans": total_nans})
+    return states_guess  # deer_traces[-1]  # (B, D, T)
+
+def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False):
+    """
+    Actual implementation of DEER
+    Currently sequential for simplicity (i.e. this alg is not parallelized and shouldn't be used for run time)
+    Args:
+        f: nonlinear fxn
+        initial_state: (B,D)
+        states_guess: (B,D,T)
+        inputs: (B, d_input, T)
+    """
+    T = states_guess.shape[-1]
+    padded_T = int(2 ** np.ceil(np.log2(T)))  # must be a power of 2
+    device = states_guess.device
+    def deer_step(states):
+        """
+        Args:
+            states: (B,D,T)
+
+        Note:
+            we have closed over initial_state and inputs
+            This implementation of deer is sequential! 
+        """
+        B, D, T = states.shape
+        prev_state = f(inputs[..., 0], initial_state) # (B,D), in ELK paper notation this is s_1
+        new_states = [prev_state]
+        for t in range(T-1):
+            prev_state_prev_iter = states[..., t] # (B,D)
+            prev_state_diff = prev_state - prev_state_prev_iter # (B,D)
+            curr_input = inputs[..., t+1]
+            J_f_matrix = vmap(jacrev(f, argnums=1))(curr_input, prev_state_prev_iter) # (B,D,D)
+            next_state = torch.einsum("bij,bj->bi", (1 - k) * J_f_matrix, prev_state_diff) + f(
+                curr_input, prev_state_prev_iter
+            )
+            new_states.append(next_state)
+            prev_state = next_state
+        new_states = torch.stack(new_states, dim=-1)
+        isnan = torch.isnan(new_states).any()
+        new_states.nan_to_num()
+        return new_states, isnan
+
+    return deer_outer_loop(deer_step, states_guess, num_iters=num_iters, while_loop=while_loop)
+
 
 def quasi_deer_torch(
     f,
@@ -67,13 +176,14 @@ def quasi_deer_torch(
     This scan expects inputs in the form (B,D,T)
     Note that the RNN standard (for inputs) in pytorch is (T,B,d_input)
     This scan also requires powers of 2, so padding for now...
+
+    Currently requires wandb.init, but you can use wandb.init(mode='disabled') to disable logging
     """
     B = states_guess.shape[0]
     D = states_guess.shape[1]
     T = states_guess.shape[-1]
     padded_T = int(2 ** np.ceil(np.log2(T)))  # must be a power of 2
     device = states_guess.device
-    total_nans = 0 
 
     def step(states):
         """
@@ -109,41 +219,12 @@ def quasi_deer_torch(
 
         # parallel asscociative scan
         new_states = scan(A, b)[..., :T]  # (B, D, T)
-        if torch.isnan(new_states).any():
-            total_nans += 1
+        isnan = torch.isnan(new_states).any()
         if not torch.is_complex(new_states):
             new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
-        return new_states
+        return new_states, isnan
 
-    #deer_traces = []
-    # last_only does not seem to be a good idea :(
-    if last_only:
-        for _ in range(num_iters - 1):
-            with torch.no_grad():
-                states_guess = step(states_guess)
-        states_guess = step(states_guess)
-    elif while_loop:
-        err = 100
-        count = 0
-        with torch.no_grad():
-            while err > 1e-4:
-                states_guess_new = step(states_guess)
-                err = torch.max(torch.abs(states_guess_new - states_guess))
-                states_guess = states_guess_new
-                count += 1
-                if count > 1000:
-                    break
-        states_guess = step(states_guess)
-        count += 1
-    else:
-        for _ in range(num_iters):
-            states_guess = step(states_guess)
-            #deer_traces.append(states_guess)
-    if while_loop:
-        # print("Number of iterations: ", count)
-        wandb.log({"num_iters": count}) # is this going to break everything?
-    wandb.log({"total_nans": total_nans})
-    return states_guess #deer_traces[-1]  # (B, D, T)
+    return deer_outer_loop(step, states_guess, num_iters=num_iters, while_loop=while_loop, last_only=last_only)
 
 
 class MinRNNCell(nn.Module):

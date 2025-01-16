@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader
 # the dataloader for the sequential mnist dataset
 def load_sequential_mnist(split, batch_size):
     # Define the transform
+    # note that transforms.ToTensor() scales the input to be between 0 and 1 (and to be a float)
+    # https://pytorch.org/vision/main/generated/torchvision.transforms.ToTensor.html
     transform = transforms.Compose(
         [transforms.ToTensor(), transforms.Lambda(lambda x: x.view(1, -1))]
     )

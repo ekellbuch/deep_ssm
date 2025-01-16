@@ -1,12 +1,13 @@
 """
-Testing file for quasi_deer_torch
+Testing file for quasi_deer_torch and deer_torch
 """
 
 
 import torch
-from deep_ssm.mixers.prnn import quasi_deer_torch
+from deep_ssm.mixers.prnn import quasi_deer_torch, deer_torch
 import numpy as np
 import pytest
+import wandb
 
 # Device selection logic
 if torch.backends.mps.is_available():
@@ -52,6 +53,25 @@ def sample_fxn_torch(input, state):
     )  # need to be very careful to handle batch dimension, (B,D)
 
 
+def sample_fxn_torch_inputs(input, state):
+    """
+    This simple function takes in inputs
+    note that input needs to have the same shape as state
+
+    Args:
+       state (torch.Tensor): The input state vector or batch of state vectors (B, D).
+       input: (B,D)
+
+     Returns:
+       torch.Tensor: The transformed state after applying the matrix and tanh activation.
+    """
+    device = state.device
+    theta = torch.tensor(0.01, device=device)
+    A = buildW()
+    A = A.to(device=device)
+    return torch.tanh(torch.matmul(state, A.T)) + input
+
+
 def sample_diag_deriv_torch(input, state):
     """
     Computes the diagonal of the Jacobian matrix for `test_fxn_torch` with respect to `state`.
@@ -83,7 +103,7 @@ def sample_diag_deriv_torch(input, state):
 
 
 # Sequential version of (quasi)deer that doesn't use parallel scan; avoids any implementational overhead and dependencies
-def deer_step(f, J_f, input_seq, prev_iter_states):
+def quasi_deer_step(f, J_f, input_seq, prev_iter_states):
     B, D, T = input_seq.shape
     prev_state = prev_iter_states[..., 0]  # (B,D)
     states = [prev_state]
@@ -100,7 +120,7 @@ def deer_step(f, J_f, input_seq, prev_iter_states):
     return states
 
 
-def deer(f, J_f, input_seq, state_size, num_iters=1, initial_state=None):
+def quasi_deer_seq(f, J_f, input_seq, state_size, num_iters=1, initial_state=None):
     """
     Args
       f: forward function
@@ -119,7 +139,7 @@ def deer(f, J_f, input_seq, state_size, num_iters=1, initial_state=None):
         states[..., 0] = initial_state
 
     for _ in range(num_iters):
-        states = deer_step(f, J_f, input_seq, states)
+        states = quasi_deer_step(f, J_f, input_seq, states)
     return states[..., 1:]
 
 
@@ -136,7 +156,7 @@ seeds = [0]
 @pytest.mark.parametrize("num_iters", num_iters)
 @pytest.mark.parametrize("dtype", dtypes)
 @pytest.mark.parametrize("seed", seeds)
-def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
+def test_match_outputs_qdeer(seqlen, batch_size, d_input, num_iters, dtype, seed):
     print(f"device is {device}")
     atol=1e-3
     torch.manual_seed(seed)
@@ -148,16 +168,24 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     )
     inputs_torch = torch.zeros(batch_size, d_input, seqlen, device=device, dtype=dtype)
 
-    torch_out = quasi_deer_torch(
-        sample_fxn_torch,
-        sample_diag_deriv_torch,
-        initial_state_torch,
-        states_guess_torch,
-        inputs_torch,
-        num_iters=num_iters,
-    )
+    wandb.init(mode='disabled')
+    # torch_out = quasi_deer_torch(
+    #     sample_fxn_torch,
+    #     sample_diag_deriv_torch,
+    #     initial_state_torch,
+    #     states_guess_torch,
+    #     inputs_torch,
+    #     num_iters=num_iters,
+    # )
+    torch_out = deer_torch(sample_fxn_torch,
+                           initial_state_torch,
+                           states_guess_torch,
+                           inputs_torch,
+                           diagonal_derivative=sample_diag_deriv_torch,
+                           num_iters=num_iters,
+                           )
 
-    check_out = deer(
+    check_out = quasi_deer_seq(
         sample_fxn_torch,
         sample_diag_deriv_torch,
         inputs_torch,
@@ -169,13 +197,119 @@ def test_match_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
 
 
+seqlens = [10000]
+batch_sizes = [2]
+d_inputs = [2]
+dtypes = [torch.float32]
+seeds = [0]
+@pytest.mark.parametrize("seqlen", seqlens)
+@pytest.mark.parametrize("batch_size", batch_sizes)
+@pytest.mark.parametrize("d_input", d_inputs)
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("seed", seeds)
+def test_deer_converge(seqlen, batch_size, d_input, dtype, seed):
+    """
+    Test that DEER converges to sequential
+    """
+    print(f"device is {device}")
+    atol = 1e-5
+    torch.manual_seed(seed)
+
+    D = 2
+    initial_state_torch = torch.randn((batch_size, D), device=device, dtype=dtype)
+    states_guess_torch = torch.zeros(
+        (batch_size, D, seqlen), device=device, dtype=dtype
+    )
+    inputs_torch = torch.zeros(batch_size, d_input, seqlen, device=device, dtype=dtype)
+
+    wandb.init(mode="disabled")
+
+    # run deer
+    deer_out = deer_torch(
+        sample_fxn_torch,
+        initial_state_torch,
+        states_guess_torch,
+        inputs_torch,
+        while_loop=True
+    )
+
+    # checking against sequential evaluation
+    states = []
+    state = initial_state_torch
+    for _ in range(seqlen):
+        state = sample_fxn_torch(None, state)
+        states.append(state)
+    out_seq_torch = torch.stack(states, dim=-1) # (B,D,T)
+
+    assert torch.allclose(
+       deer_out, out_seq_torch, atol=atol
+    ), f"the difference is {torch.max(torch.abs(deer_out - out_seq_torch))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
+
+
+# test input dependence
+seqlens = [1000]
+batch_sizes = [3]
+dtypes = [torch.float32]
+seeds = [0]
+@pytest.mark.parametrize("seqlen", seqlens)
+@pytest.mark.parametrize("batch_size", batch_sizes)
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("seed", seeds)
+def test_input_dependence(seqlen, batch_size, dtype, seed):
+
+    print(f"device is {device}")
+    atol = 1e-5
+    torch.manual_seed(seed)
+
+    D = 2
+    initial_state_torch = torch.randn((batch_size, D), device=device, dtype=dtype)
+    states_guess_torch = torch.zeros(
+        (batch_size, D, seqlen), device=device, dtype=dtype
+    )
+    inputs_torch = 0.01 * torch.randn(batch_size, D, seqlen, device=device, dtype=dtype)
+
+    wandb.init(mode="disabled")
+
+    # generate sequential output
+    states = []
+    state = initial_state_torch
+    for t in range(seqlen):
+        state = sample_fxn_torch_inputs(inputs_torch[..., t], state)
+        states.append(state)
+    # out_seq_torch = torch.stack(states).squeeze()
+    out_seq_torch = torch.stack(states, dim=-1)  # (B,D,T)
+
+    # run deer
+    deer_out_torch_input = deer_torch(
+        sample_fxn_torch_inputs,
+        initial_state_torch,
+        states_guess_torch[..., :],
+        inputs_torch[..., :],
+        while_loop=True,
+    )
+
+    assert torch.allclose(out_seq_torch, deer_out_torch_input, atol=atol), f"the difference between deer and seq is {torch.max(torch.abs(out_seq_torch - deer_out_torch_input))} \n with batch_size {batch_size} \n dtype {dtype}"
+
+    # test quasi deer
+    quasi_out_torch_input = deer_torch(
+        sample_fxn_torch_inputs,
+        initial_state_torch,
+        states_guess_torch[..., :],
+        inputs_torch[..., :],
+        while_loop=True,
+        diagonal_derivative=sample_diag_deriv_torch,
+    )
+
+    assert torch.allclose(
+        out_seq_torch, quasi_out_torch_input, atol=atol
+    ), f"the difference betwen quasi and seq is {torch.max(torch.abs(out_seq_torch - deer_out_torch_input))} \n with batch_size {batch_size} \n dtype {dtype}"
+
 seqlens = [8]
 batch_sizes = [1] 
 d_inputs = [2]
 num_iters = [2] 
 dtypes = [torch.float32]
 seeds = [0] 
-
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch_size", batch_sizes)
 @pytest.mark.parametrize("d_input", d_inputs)
@@ -194,6 +328,7 @@ def test_complex_outputs(seqlen, batch_size, d_input, num_iters, dtype, seed):
     )
     inputs_torch = torch.zeros(batch_size, d_input, seqlen, device=device, dtype=dtype)
 
+    wandb.init(mode='disabled')
     torch_out = quasi_deer_torch(
         sample_fxn_torch,
         sample_diag_deriv_torch,
