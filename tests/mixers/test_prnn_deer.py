@@ -304,7 +304,7 @@ def test_input_dependence(seqlen, batch_size, dtype, seed):
         out_seq_torch, quasi_out_torch_input, atol=atol
     ), f"the difference betwen quasi and seq is {torch.max(torch.abs(out_seq_torch - deer_out_torch_input))} \n with batch_size {batch_size} \n dtype {dtype}"
 
-seqlens = [8]
+seqlens = [64]
 batch_sizes = [1] 
 d_inputs = [2]
 num_iters = [2] 
