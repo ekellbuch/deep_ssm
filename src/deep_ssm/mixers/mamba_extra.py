@@ -108,16 +108,18 @@ class MambaWrapper(nn.Module):
         else:
             self.mamba_rev = None
 
-    def forward(self, hidden_states, inference_params=None):
+    def forward(self, hidden_states, neg_pos_eigenvalues=False, inference_params=None):
         """Bidirectional-enabled forward pass
 
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        out = self.mamba_fwd(hidden_states, inference_params=inference_params)
+        out = self.mamba_fwd(hidden_states, neg_pos_eigenvalues=neg_pos_eigenvalues, 
+                             inference_params=inference_params)
         if self.bidirectional:
             out_rev = self.mamba_rev(
                 hidden_states.flip(dims=(1,)),  # Flip along the sequence length dimension
+                neg_pos_eigenvalues=neg_pos_eigenvalues,
                 inference_params=inference_params
             ).flip(dims=(1,))  # Flip back for combining with forward hidden states
             if self.bidirectional_strategy == "add":
@@ -176,6 +178,7 @@ class MixerModel(nn.Module):
         residual_in_fp32=False,
         bidirectional=False,
         mamba_bi_new=False,
+        neg_pos_eigenvalues=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
     ):
@@ -189,6 +192,7 @@ class MixerModel(nn.Module):
         self.fused_add_norm = fused_add_norm
         self.bidirectional = bidirectional
         self.bidirectional_strategy = bidirectional_strategy
+        self.neg_pos_eigenvalues = neg_pos_eigenvalues
 
         # Block of model layers
         if self.bidirectional and self.bidirectional_strategy == "concatenate":
@@ -234,7 +238,7 @@ class MixerModel(nn.Module):
 
         residual = None
         for layer_idx, layer in enumerate(self.layers):
-            hidden_states, residual = layer(hidden_states, residual)#, inference_params=inference_params, **mixer_kwargs)
+            hidden_states, residual = layer(hidden_states, residual=residual, neg_pos_eigenvalues=self.neg_pos_eigenvalues)#, inference_params=inference_params, **mixer_kwargs)
             if self.bidirectional and self.bidirectional_strategy == "concatenate" and layer_idx==0:
                 residual_flip = residual.flip(dims=(1,))
                 residual = torch.cat((residual, residual_flip), dim=-1)

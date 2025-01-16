@@ -33,8 +33,11 @@ def train(args):
       output_dir = None
 
     try:
-        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_{args.seed}seed'
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
     except:
+        # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{model_cfg.configs.neg_pos_eigenvalues}negpos_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         experiment_name = args.experiment_name
 
     # setup logger:

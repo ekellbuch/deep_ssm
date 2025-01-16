@@ -39,7 +39,7 @@ class pRNNDecoder(nn.Module):
 
 
 class MambaDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1):
+    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1, neg_pos_eigenvalues=False):
         super(MambaDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
@@ -49,7 +49,8 @@ class MambaDecoder(nn.Module):
             d_conv=d_conv,
             expand_factor=expand_factor,
             n_layer=num_layers,
-            mamba_bi_new=True
+            mamba_bi_new=True,
+            neg_pos_eigenvalues=neg_pos_eigenvalues
         )
         self.linear = nn.Linear(embed_size, vocab_size)
 

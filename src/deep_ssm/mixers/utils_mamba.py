@@ -184,7 +184,7 @@ def causal_conv1d_update_ref(x, conv_state, weight, bias=None, activation=None, 
 
 
 def selective_scan_ref(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
-                      return_last_state=False):
+                      return_last_state=False, neg_pos_eigenvalues=False):
     """
     Performs a recursive state-update operation over a sequence of inputs, where the internal state
     evolves at each time step based on the input sequence `u`, scaling factors `delta`, and transformation
@@ -263,7 +263,8 @@ def selective_scan_ref(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta
     deltaA = torch.exp(torch.einsum('bdl,dn->bdln', delta, A))
 
     # neg/pos eigenvalues
-    deltaA = deltaA * 2 - 1
+    if neg_pos_eigenvalues:
+        deltaA = deltaA * 2 - 1
 
     # Compute delta * B * u depending on the shape of B
     if not is_variable_B:
@@ -688,7 +689,9 @@ class Block_ref(torch.nn.Module):
             ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
 
     def forward(
-            self, hidden_states: torch.Tensor, residual: Optional[torch.Tensor] = None, inference_params=None, **mixer_kwargs
+            self, hidden_states: torch.Tensor, residual: Optional[torch.Tensor] = None, 
+            neg_pos_eigenvalues=False,
+            inference_params=None, **mixer_kwargs
     ):
         r"""Pass the input through the encoder layer.
 
@@ -712,7 +715,8 @@ class Block_ref(torch.nn.Module):
                 eps=self.norm.eps,
                 is_rms_norm=isinstance(self.norm, RMSNorm_ref)
             )
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params, **mixer_kwargs)
+        hidden_states = self.mixer(hidden_states, neg_pos_eigenvalues=neg_pos_eigenvalues,
+                                   inference_params=inference_params, **mixer_kwargs)
 
         if self.mlp is not None:
             if not self.fused_add_norm:

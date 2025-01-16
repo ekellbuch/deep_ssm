@@ -9,11 +9,15 @@ from typing import Optional
 
 from einops import rearrange, repeat
 
-try:
-    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
-except:
-    from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
-    from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
+# try:
+#     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
+# except:
+#     from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+#     from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
+
+from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
+
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except:
@@ -192,7 +196,7 @@ class Mamba(nn.Module):
             d_out = self.d_model
         self.out_proj = nn.Linear(self.d_inner, d_out, bias=bias, **factory_kwargs)
 
-    def forward(self, hidden_states, inference_params=None):
+    def forward(self, hidden_states, neg_pos_eigenvalues=False, inference_params=None):
         """
         Forward pass of the Mamba layer.
 
@@ -317,6 +321,7 @@ class Mamba(nn.Module):
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
+                neg_pos_eigenvalues=neg_pos_eigenvalues,
             )
 
             # Update the state-space model (SSM) state if it's provided
