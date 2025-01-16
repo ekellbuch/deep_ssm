@@ -43,7 +43,7 @@ class FastDepthwiseCausalConv1d(nn.Module):
         return y
 
 
-class pRNN(pRNNBase):
+class pRNN(nn.Module):
     def __init__(
         self,
         d_model,
@@ -57,10 +57,18 @@ class pRNN(pRNNBase):
         num_iters=2,  # number of iterations for quasi-DEER
         method="minrnn",  # minrrn or gru
         parallel=True,  # parallel implementation
+        matrix_recurrence=False,
     ):
-        super().__init__(
+        super().__init__()
+        if matrix_recurrence:
+            hidden_size = d_model * d_model
+        else:
+            hidden_size = d_model
+        self.matrix_recurrence = matrix_recurrence
+        self.d_model = d_model
+        self.rnn = pRNNBase(
             input_size=d_model,
-            hidden_size=d_model,
+            hidden_size=hidden_size,
             num_layers=num_layers,
             bias=bias,
             batch_first=batch_first,
@@ -71,10 +79,22 @@ class pRNN(pRNNBase):
             parallel=parallel,
         )
         self.conv1d = FastDepthwiseCausalConv1d(d_model, kernel_size=d_conv, bias=True, channel_last=True)
+        self.proj = nn.Linear(d_model, d_model)
     
     def forward(self, x):
+        q = self.proj(x)
         x = self.conv1d(x)
-        return super().forward(x)[0]  # get output rather than (output, h_n)
+        hidden_states = self.rnn(x)[0]  # get output rather than (output, h_n)
+        if self.matrix_recurrence:
+            hidden_states = hidden_states.reshape(hidden_states.shape[:-1] + (self.d_model, self.d_model))
+            y = torch.einsum("bti,btij->btj", q, hidden_states)
+        else:
+            y = hidden_states
+        return y
+
+
+
+
 # %%
 #import gc
 #

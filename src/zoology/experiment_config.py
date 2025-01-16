@@ -52,9 +52,9 @@ for input_seq_len, num_kv_pairs in [
     ]:
         for d_conv in [4]:
             for expand in [2]:
-                for n_layers in [2, 4]:
-                #for n_layers in [2]:
-                    for lr in np.logspace(-4, -2, 4):#[-2:-1]:
+                for n_layers in [1]:
+                    #for lr in np.logspace(-4, -2, 4):#[-2:-1]:
+                    for lr in np.logspace(-4, -2, 4)[-2:-1]:
                         MIXERS = {
                             "attention": dict(
                                 name="zoology.mixers.attention.MHA",
@@ -76,12 +76,20 @@ for input_seq_len, num_kv_pairs in [
                                     method="minrnn",  # minrrn or gru
                                     parallel=True,  # parallel implementation
                                 ),
-                            )
+                            ),
+                            "tttmlp": dict(
+                                name="zoology.mixers.ttt_mlp.TTTMLP",
+                                kwargs=dict(
+                                    d_conv=d_conv,
+                                    num_iters=2,
+                                ),
+                            ),
                         }
 
                         for sequence_mixer in [
                             #"attention",
                             "prnn",
+                            #"tttmlp",
                         ]:
                             block_type = "TransformerBlock"
 
