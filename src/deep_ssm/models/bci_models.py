@@ -214,6 +214,7 @@ class pRNNDecoder(BaseDecoder):
         num_iters=2,  # number of iterations for quasi-DEER
         method="minrnn",  # minrnn or gru
         parallel=True,  # parallel implementation
+        quasi=True,
     ):
         super(pRNNDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -245,6 +246,7 @@ class pRNNDecoder(BaseDecoder):
             num_iters=num_iters,
             method=method,
             parallel=parallel,
+            quasi=quasi,
         )
 
         if method == "gru":

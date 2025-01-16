@@ -33,6 +33,7 @@ def train(args):
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
       logger = None
+      wandb.init(mode='disabled')
     else:
       if args.trainer_cfg.logger == "wandb":
         if args.trainer_cfg.accelerator == "ddp":
@@ -98,7 +99,7 @@ def train(args):
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
       trainer.fit(model=model, datamodule=datamodule)
-      ckpt_path = "best"
+      ckpt_path = "best" if not args.trainer_cfg.fast_dev_run else None
     else:
       ckpt_path = args.eval_cfg.get("ckpt_path", None)
 

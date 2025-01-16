@@ -1,5 +1,6 @@
 """
 Testing file for quasi_deer_torch and deer_torch
+pytest test_prnn_deer.py -k test_deer_converge
 """
 
 
@@ -8,6 +9,7 @@ from deep_ssm.mixers.prnn import quasi_deer_torch, deer_torch
 import numpy as np
 import pytest
 import wandb
+import time
 
 # Device selection logic
 if torch.backends.mps.is_available():
@@ -71,6 +73,35 @@ def sample_fxn_torch_inputs(input, state):
     A = A.to(device=device)
     return torch.tanh(torch.matmul(state, A.T)) + input
 
+
+def sample_fxn_torch_jvp(input, state):
+    """
+    Computes the full Jacobian matrix for `sample_fxn_torch` with respect to `state`.
+
+    Args:
+        state (torch.Tensor): The input state vector or batch of state vectors (B, D).
+        input: Unused argument in this function.
+
+    Returns:
+        torch.Tensor: The full Jacobian matrix with shape (B, D, D).
+    """
+    device = state.device
+    A = buildW().to(device=device)  # Rotation matrix
+
+    # Compute the linear transformation
+    z = torch.matmul(state, A.T)  # Shape (B, D)
+
+    # Compute tanh and its derivative
+    tanh_output = torch.tanh(z)  # Shape (B, D)
+    tanh_derivative = 1 - tanh_output ** 2  # Shape (B, D)
+
+    # Construct the diagonal part for each batch
+    diag_tanh_derivative = torch.diag_embed(tanh_derivative)  # Shape (B, D, D)
+
+    # Multiply by the rotation matrix A
+    jacobian = torch.matmul(diag_tanh_derivative, A)  # Shape (B, D, D)
+
+    return jacobian
 
 def sample_diag_deriv_torch(input, state):
     """
@@ -225,21 +256,30 @@ def test_deer_converge(seqlen, batch_size, d_input, dtype, seed):
     wandb.init(mode="disabled")
 
     # run deer
+    start_deer = time.time()
     deer_out = deer_torch(
         sample_fxn_torch,
         initial_state_torch,
         states_guess_torch,
         inputs_torch,
-        while_loop=True
+        while_loop=True,
+        derivative_fn=sample_fxn_torch_jvp,
     )
+    end_deer = time.time()
+    deer_time = end_deer - start_deer
+    print(f"DEER execution time: {deer_time:.6f} seconds")
 
-    # checking against sequential evaluation
+    # checking against sequential evaluation:
+    start_seq = time.time()
     states = []
     state = initial_state_torch
     for _ in range(seqlen):
         state = sample_fxn_torch(None, state)
         states.append(state)
     out_seq_torch = torch.stack(states, dim=-1) # (B,D,T)
+    end_seq = time.time()
+    seq_time = end_seq - start_seq
+    print(f"Sequential execution time: {seq_time:.6f} seconds")
 
     assert torch.allclose(
        deer_out, out_seq_torch, atol=atol

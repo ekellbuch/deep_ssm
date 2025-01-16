@@ -40,7 +40,8 @@ def deer_torch(
         num_iters=10,
         k=0.0,
         clip=False,
-        while_loop=False
+        while_loop=False,
+        derivative_fn=None, # full derivative for DEER speedups
 ):
     """
     Wrapper function holding both deer and quasi-DEER
@@ -51,7 +52,7 @@ def deer_torch(
     if diagonal_derivative:
         return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop)
     else:
-        return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop)
+        return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop, derivative_fn=derivative_fn)
 
 def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_only=False):
     """
@@ -95,7 +96,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
     wandb.log({"total_nans": total_nans})
     return states_guess  # deer_traces[-1]  # (B, D, T)
 
-def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False):
+def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False, derivative_fn=None):
     """
     Actual implementation of DEER
     Currently sequential for simplicity (i.e. this alg is not parallelized and shouldn't be used for run time)
@@ -124,7 +125,16 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
             prev_state_prev_iter = states[..., t] # (B,D)
             prev_state_diff = prev_state - prev_state_prev_iter # (B,D)
             curr_input = inputs[..., t+1]
-            f_curr, J_f_times_prev_state_diff = torch.func.jvp(lambda s: f(curr_input, s), (prev_state_prev_iter,), (prev_state_diff,))
+
+            if derivative_fn:
+                jacobian_f = derivative_fn(curr_input, prev_state_prev_iter)  # (B, D)
+                f_curr = f(curr_input, prev_state_prev_iter)  # (B, D)
+                J_f_times_prev_state_diff = torch.matmul(jacobian_f, prev_state_diff.unsqueeze(-1)).squeeze(-1)  # Element-wise product
+            else:
+                f_curr, J_f_times_prev_state_diff = torch.func.jvp(
+                    lambda s: f(curr_input, s), (prev_state_prev_iter,), (prev_state_diff,)
+                )
+
             next_state = (1 - k) * J_f_times_prev_state_diff + f_curr
             new_states.append(next_state)
             prev_state = next_state
@@ -345,6 +355,89 @@ class AugmentedGRUCell(nn.GRUCell):
 
         return diag_jacobian
 
+    def full_derivative_v2(self, input, hidden):
+        batch_size, hidden_size = hidden.shape
+
+        # Chunk weights and biases
+        w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)
+        w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)
+
+        b_ir, b_iz, b_in = (
+            self.bias_ih.chunk(3, 0) if self.bias_ih is not None else (0, 0, 0)
+        )
+        b_hr, b_hz, b_hn = (
+            self.bias_hh.chunk(3, 0) if self.bias_hh is not None else (0, 0, 0)
+        )
+
+        # Compute gates
+        ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr
+        zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz
+        r = torch.sigmoid(ract)
+        z = torch.sigmoid(zact)
+
+        rcomp = hidden @ w_hn.t() + b_hn
+        n_act = input @ w_in.t() + b_in + r * rcomp
+        n = torch.tanh(n_act)
+
+        # Compute partial derivatives
+        dr_dh = torch.diag_embed(r * (1 - r)) @ w_hr
+        dz_dh = torch.diag_embed(z * (1 - z)) @ w_hz
+
+        dn_dh = (1 - n**2).unsqueeze(-1) * (torch.diag_embed(r) @ w_hn + dr_dh @ rcomp.unsqueeze(-1))
+
+        # Jacobian
+        jacobian = (
+            torch.diag_embed(z) +
+            torch.diag_embed(1 - z) @ dn_dh +
+            dz_dh @ (hidden.unsqueeze(-1) - n.unsqueeze(-1))
+        )
+
+        return jacobian.squeeze(-1)
+
+    def full_derivative(self, input, hidden):
+        batch_size, hidden_size = hidden.shape
+
+        # Chunk weights and biases
+        w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)
+        w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)
+
+        b_ir, b_iz, b_in = (
+            self.bias_ih.chunk(3, 0) if self.bias_ih is not None else (0, 0, 0)
+        )
+        b_hr, b_hz, b_hn = (
+            self.bias_hh.chunk(3, 0) if self.bias_hh is not None else (0, 0, 0)
+        )
+
+        # Compute gates
+        ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr
+        zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz
+        r = torch.sigmoid(ract)
+        z = torch.sigmoid(zact)
+
+        rcomp = hidden @ w_hn.t() + b_hn
+        n_act = input @ w_in.t() + b_in + r * rcomp
+        n = torch.tanh(n_act)
+
+        # Compute partial derivatives efficiently
+        r_grad = r * (1 - r)  # Gradient of r w.r.t. ract
+        z_grad = z * (1 - z)  # Gradient of z w.r.t. zact
+        n_grad = 1 - n**2     # Gradient of n w.r.t. n_act
+
+        # Avoid creating large intermediate tensors; use batched operations directly
+        dr_dh = r_grad.unsqueeze(-1) * w_hr  # Shape: (B, hidden_size, hidden_size)
+        dz_dh = z_grad.unsqueeze(-1) * w_hz  # Shape: (B, hidden_size, hidden_size)
+        dn_dh = n_grad.unsqueeze(-1) * (
+            r.unsqueeze(-1) * w_hn + dr_dh @ rcomp.unsqueeze(-1)
+        )  # Shape: (B, hidden_size, hidden_size)
+
+        # Efficiently compute the Jacobian
+        jacobian = (
+            torch.diag_embed(z) +
+            torch.diag_embed(1 - z) @ dn_dh +
+            dz_dh @ (hidden.unsqueeze(-1) - n.unsqueeze(-1))
+        )
+
+        return jacobian.squeeze(-1)
 
 class LearnableDiagonal(torch.nn.Module):
     """
@@ -731,7 +824,20 @@ class pRNN(nn.Module):
             diag_deriv = None
             if self.quasi:
                 diag_deriv = diagonal_derivative
-            output = deer_torch(cell, h0[:, 0], states_guess, input, diagonal_derivative=diag_deriv, num_iters=self.num_iters, k=self.k, clip=self.clip, while_loop=self.while_loop) # (B, D, T)
+                derivative_fn = None
+            else:
+                # If derivative exists in cell use it instead of jvp
+                derivative_fn = getattr(cell, "full_derivative", None)
+
+            output = deer_torch(cell,
+                                h0[:, 0],
+                                states_guess,
+                                input,
+                                diagonal_derivative=diag_deriv,
+                                num_iters=self.num_iters, k=self.k,
+                                clip=self.clip,
+                                while_loop=self.while_loop,
+                                derivative_fn=derivative_fn) # (B, D, T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
             output = torch.empty_like(h0)
