@@ -32,6 +32,7 @@ class pRNNClassifier(nn.Module):
                  last_only=False,
                  learn_initial_states=False,
                  while_loop=False,
+                 quasi=True,
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
         self.rnn = pRNN(input_size,
@@ -48,7 +49,8 @@ class pRNNClassifier(nn.Module):
                         learn_diags=learn_diags,
                         last_only=last_only,
                         learn_initial_states=learn_initial_states,
-                        while_loop=while_loop)
+                        while_loop=while_loop,
+                        quasi=quasi)
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):

@@ -17,6 +17,7 @@ model_cfg:
   learn_initial_states: False
   method: "gru"
   while_loop: False
+  quasi: True
 
 optimizer_cfg:
   lr: 0.001

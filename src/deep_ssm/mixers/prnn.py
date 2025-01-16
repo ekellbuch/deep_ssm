@@ -506,7 +506,6 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
 
 
 class pRNN(nn.Module):
-
     """
     An RNN that can be evaluated in parallel using quasi-ELK
     """
@@ -531,6 +530,7 @@ class pRNN(nn.Module):
         learn_initial_states=False,
         reparameterize=False, # reparameterize a cell
         while_loop=False, # run to convergence
+        quasi=True, # use quasi deer
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -553,6 +553,7 @@ class pRNN(nn.Module):
         self.learn_initial_states = learn_initial_states
         self.num_iters = num_iters  # number of iterations for quasi-DEER
         self.while_loop = while_loop
+        self.quasi = quasi
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -717,18 +718,22 @@ class pRNN(nn.Module):
                     return cell.diagonal_derivative(input_t, state_t)
 
             input = input.transpose(1, 2)  # (batch_size, input_size, seq_len)
-            output = quasi_deer_torch(
-                f=cell,
-                diagonal_derivative=diagonal_derivative,
-                initial_state=h0[:, 0],
-                states_guess=states_guess,
-                inputs=input,
-                num_iters=self.num_iters,
-                k=self.k,
-                clip=self.clip,
-                last_only=self.last_only,
-                while_loop=self.while_loop,
-            )  # (B,D,T)
+            # output = quasi_deer_torch(
+            #     f=cell,
+            #     diagonal_derivative=diagonal_derivative,
+            #     initial_state=h0[:, 0],
+            #     states_guess=states_guess,
+            #     inputs=input,
+            #     num_iters=self.num_iters,
+            #     k=self.k,
+            #     clip=self.clip,
+            #     last_only=self.last_only,
+            #     while_loop=self.while_loop,
+            # )  # (B,D,T)
+            diag_deriv = None
+            if self.quasi:
+                diag_deriv = diagonal_derivative
+            output = deer_torch(cell, h0[:, 0], states_guess, input, diagonal_derivative=diag_deriv, num_iters=self.num_iters, k=self.k, clip=self.clip, while_loop=self.while_loop) # (B, D, T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
             output = torch.empty_like(h0)
