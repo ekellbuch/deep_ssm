@@ -10,7 +10,7 @@ seed: 0
 data_cfg:
   batchSize: 32
   num_workers: 0
-  datasetPath: "/scratch/users/hdlee/state_tracking/data/Parity"
+  datasetPath: "/pscratch/sd/j/jwl50/deep_ssm/data/Parity"
 
 model_cfg:
   type: "state_tracking_prnn"
@@ -19,7 +19,8 @@ model_cfg:
     embed_size: 64
     hidden_size: 64
     bidirectional: false
-    num_iters: 1
+    num_iters: 2
+    num_layers: 1
     method: "minrnn"
     parallel: true
 

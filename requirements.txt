@@ -13,4 +13,8 @@ triton
 edit-distance
 pyparsing
 causal-conv1d
-mamba-ssm[causal-conv1d]
+polars
+ordered_set
+# mamba-ssm[causal-conv1d]
+
+# cudatoolkit 11.7 and cudnn 8.7.0

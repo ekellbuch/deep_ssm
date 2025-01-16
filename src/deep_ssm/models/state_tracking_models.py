@@ -4,6 +4,7 @@ from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.prnn import pRNN
 import torch.nn.functional as F
 
+
 class GRUDecoder(nn.Module):
     def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1):
         super(GRUDecoder, self).__init__()
@@ -17,7 +18,8 @@ class GRUDecoder(nn.Module):
         x, _ = self.model(x)
         x = self.linear(x)
         return x
-    
+
+
 class pRNNDecoder(nn.Module):
     def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1, num_iters=2, bidirectional=False,
                  method='minrnn', parallel=True):
@@ -34,7 +36,8 @@ class pRNNDecoder(nn.Module):
         x, _ = self.model(x)
         x = self.linear(x)
         return x
-    
+
+
 class MambaDecoder(nn.Module):
     def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1):
         super(MambaDecoder, self).__init__()
