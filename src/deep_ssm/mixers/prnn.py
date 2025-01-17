@@ -178,7 +178,7 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
         b0 = f(inputs[..., 0], initial_state)  # h1 = f(e0, h0), (B,D)
         A0 = torch.zeros_like(As[...,0,:,:])  # (B, D x D)
         A = torch.cat(
-            [A0.unsqueeze(-3), As, torch.ones([B, padded_T - T, D, D], device=device)],
+            [A0.unsqueeze(-3), As, torch.zeros([B, padded_T - T, D, D], device=device)],
             dim=-3,
         )  # (B, T, D, D)
         b_ = torch.cat(
@@ -200,7 +200,6 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
         if not torch.is_complex(new_states):
             new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
         return new_states, isnan
-
 
     return deer_outer_loop(deer_step_parallel, states_guess, num_iters=num_iters, while_loop=while_loop)
 
