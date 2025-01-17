@@ -22,6 +22,9 @@ except:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 import wandb
 
+from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
+
+
 def _batch_along_time(x):
     assert x.ndim == 3, "Expects x to be (B, D, T)"
     return x.permute(0, 2, 1).flatten(0, 1)
@@ -52,7 +55,7 @@ def deer_torch(
     if diagonal_derivative:
         return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop)
     else:
-        return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop, derivative_fn=derivative_fn)
+        return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop, derivative_fn=derivative_fn, clip=clip)
 
 def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_only=False):
     """
@@ -96,7 +99,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
     wandb.log({"total_nans": total_nans})
     return states_guess  # deer_traces[-1]  # (B, D, T)
 
-def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False, derivative_fn=None):
+def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False, derivative_fn=None, clip=False):
     """
     Actual implementation of DEER
     Currently sequential for simplicity (i.e. this alg is not parallelized and shouldn't be used for run time)
@@ -109,6 +112,8 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
     T = states_guess.shape[-1]
     padded_T = int(2 ** np.ceil(np.log2(T)))  # must be a power of 2
     device = states_guess.device
+    if clip:
+        raise NotImplementedError("why a you clipping a full jacobian?")
     def deer_step(states):
         """
         Args:
@@ -143,7 +148,61 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
         new_states.nan_to_num()
         return new_states, isnan
 
-    return deer_outer_loop(deer_step, states_guess, num_iters=num_iters, while_loop=while_loop)
+    def deer_step_parallel(states):
+        """
+        Args:
+            states: (B,D,T)
+
+        Note:
+            we have closed over initial_state and inputs
+            This implementation of deer is sequential!
+        """
+        B, D, T = states.shape
+        # inputs and states are (B,D,T-1), the first interacton is f(e1, h1)
+        fs = f(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        fs = _unbatch_to_time(fs, B)  # (B,D,T-1)
+        fs = fs.permute(0, 2, 1)# (B,T-1,D)
+        # Compute the As and bs from fs and Jfs
+        # inputs and states are (B,D,T-1)
+        As = derivative_fn(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        # unbatch:
+        t_ = As.shape[0] // B
+        As = As.view(B, t_, D, D)   # B x T-1 x  D x D
+        #As = As.permute(0, 2, 3, 1) # B x D x D x T-1
+
+        if k > 0:
+            As.mul_(1.0 - k)
+
+        bs = fs - torch.einsum('btij,bjt->bti', As, states[..., :-1])
+        # initial_state is h0
+        b0 = f(inputs[..., 0], initial_state)  # h1 = f(e0, h0), (B,D)
+        A0 = torch.zeros_like(As[...,0,:,:])  # (B, D x D)
+        A = torch.cat(
+            [A0.unsqueeze(-3), As, torch.ones([B, padded_T - T, D, D], device=device)],
+            dim=-3,
+        )  # (B, T, D, D)
+        b_ = torch.cat(
+            [b0.unsqueeze(-2), bs, torch.zeros([B, padded_T - T, D], device=device)],
+            dim=-2,
+        )  # (B, T, D)
+
+        # parallel associative scan which supports matrices
+        def nested_func(a, b):
+            a_i, b_i = a
+            a_j, b_j = b
+            return torch.matmul(a_j,a_i), torch.matmul(a_j, b_i.unsqueeze(-1)).squeeze(-1) + b_j
+
+        gates_, new_states = associative_scan(nested_func, (A, b_), axis=1)
+        new_states = new_states[:,:T]
+        new_states = new_states.permute(0, 2, 1)
+        assert new_states.shape == states.shape
+        isnan = torch.isnan(new_states).any()
+        if not torch.is_complex(new_states):
+            new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
+        return new_states, isnan
+
+
+    return deer_outer_loop(deer_step_parallel, states_guess, num_iters=num_iters, while_loop=while_loop)
 
 
 def quasi_deer_torch(

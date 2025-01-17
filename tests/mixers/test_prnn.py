@@ -4,7 +4,7 @@ Test the pRNN model implementation, it should be able to replicate the GRU imple
 One full run can be tested with:
   python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
   python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 model_cfg.configs.parallel=false
-  python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 +model_cfg.configs.quasi=true
+  python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 +model_cfg.configs.quasi=false
 
 Comments:
 - tolerance is device dependent
@@ -371,7 +371,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
 
 
 seqlens = [32]
-batch_sizes = [1]
+batch_sizes = [2]
 dims = [2]
 bidirectionality = [False]
 num_layerss = [1]
