@@ -275,7 +275,7 @@ def quasi_deer_torch(
         b0 = f(inputs[..., 0], initial_state)  # h1 = f(e0, h0), (B,D)
         A0 = torch.zeros_like(As[..., 0])  # (B,D)
         A = torch.cat(
-            [A0.unsqueeze(-1), As, torch.ones([B, D, padded_T - T], device=device)],
+            [A0.unsqueeze(-1), As, torch.zeros([B, D, padded_T - T], device=device)],
             dim=-1,
         )  # (B, D, T)
         b = torch.cat(
