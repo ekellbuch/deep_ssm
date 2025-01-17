@@ -228,11 +228,6 @@ def test_match_outputs_qdeer(seqlen, batch_size, d_input, num_iters, dtype, seed
     assert torch.allclose(torch_out, check_out, atol=atol), f"the difference is {torch.max(torch.abs(torch_out - check_out))} \n with batch_size {batch_size} \n num_iters {num_iters} \n dtype {dtype} \n seed {seed}"
 
 
-seqlens = [10000]
-batch_sizes = [2]
-d_inputs = [2]
-dtypes = [torch.float32]
-seeds = [0]
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch_size", batch_sizes)
 @pytest.mark.parametrize("d_input", d_inputs)
@@ -287,10 +282,6 @@ def test_deer_converge(seqlen, batch_size, d_input, dtype, seed):
 
 
 # test input dependence
-seqlens = [1000]
-batch_sizes = [3]
-dtypes = [torch.float32]
-seeds = [0]
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch_size", batch_sizes)
 @pytest.mark.parametrize("dtype", dtypes)
@@ -344,12 +335,7 @@ def test_input_dependence(seqlen, batch_size, dtype, seed):
         out_seq_torch, quasi_out_torch_input, atol=atol
     ), f"the difference betwen quasi and seq is {torch.max(torch.abs(out_seq_torch - deer_out_torch_input))} \n with batch_size {batch_size} \n dtype {dtype}"
 
-seqlens = [64]
-batch_sizes = [1] 
-d_inputs = [2]
-num_iters = [2] 
-dtypes = [torch.float32]
-seeds = [0] 
+
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch_size", batch_sizes)
 @pytest.mark.parametrize("d_input", d_inputs)
