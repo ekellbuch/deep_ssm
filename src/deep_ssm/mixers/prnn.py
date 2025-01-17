@@ -130,7 +130,6 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
             prev_state_prev_iter = states[..., t] # (B,D)
             prev_state_diff = prev_state - prev_state_prev_iter # (B,D)
             curr_input = inputs[..., t+1]
-
             if derivative_fn:
                 jacobian_f = derivative_fn(curr_input, prev_state_prev_iter)  # (B, D)
                 f_curr = f(curr_input, prev_state_prev_iter)  # (B, D)
