@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=smnist_sweep 
-#SBATCH --error=.logs/smnist_sweep_%j_%a.err         
-#SBATCH --output=.logs/smnist_sweep_%j_%a.out     
-#SBATCH --time=47:59:59                 
+#SBATCH --job-name=smnist 
+#SBATCH --error=.logs/smnist_%j_%a.err         
+#SBATCH --output=.logs/smnist_%j_%a.out     
+#SBATCH --time=99:59:59                 
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4
 #SBATCH --constraint='GPU_SKU:A100_SXM4&GPU_MEM:80GB'
