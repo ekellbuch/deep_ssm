@@ -4,15 +4,20 @@ Test the pRNN model implementation, it should be able to replicate the GRU imple
 One full run can be tested with:
   python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
   python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 model_cfg.configs.parallel=false
+  python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1 +model_cfg.configs.quasi=false
 
 Comments:
 - tolerance is device dependent
+- To debug a single function run:
+    pytest test_prnn.py -k test_prnn_deer
+
 """
 import torch
 import torch.nn as nn
 from deep_ssm.mixers.prnn import pRNN, diagonalize_and_reparameterize, AugmentedGRUCell
 import pytest
 import numpy as np
+import wandb
 
 # Detect the appropriate device for execution
 try:
@@ -48,7 +53,10 @@ class Arguments:
                 method="gru", 
                 parallel=False,
                 checkpoint=False,
-                reparameterize=False):
+                reparameterize=False,
+                quasi=True,
+                while_loop=False,
+                 ):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -60,6 +68,7 @@ class Arguments:
         self.num_iters = num_iters
         self.checkpoint = checkpoint
         self.reparameterize = reparameterize
+        self.quasi = quasi
 
 
 def update_name(param_name, suffix=""):
@@ -98,8 +107,16 @@ def compare_parameters(model1, model2,update_name_fn=update_name, grad=False, at
         p2 = model2_params[name2]
         try:
             if grad:
+                if torch.isnan(p1.grad).any():
+                    print(f"Grad of m1 is nan {name1}")
+                if torch.isnan(p2.grad).any():
+                    print(f"Grad of m2 is nan {name2}")
                 assert torch.allclose(p1.grad, p2.grad, atol=atol), f"{name2} did not match"
             else:
+                if torch.isnan(p1).any():
+                    print(f"m1 is nan {name1}")
+                if torch.isnan(p2).any():
+                    print(f"m2 is nan {name2}")
                 assert torch.allclose(p1, p2, atol=atol), f"{name2} did not match"
         except:
             breakpoint()
@@ -209,20 +226,21 @@ def compare_reparameters(model1, model2, update_name_fn=update_name, grad=False,
 
     return True
 
-seqlens = [32, 64, 256]
+seqlens = [32, 64, 256, 784]
 batch_sizes = [1, 2, 8]
 dims = [2, 8]
 bidirectionality =[False, True]
 num_layerss = [1, 2, 3]
 num_iterss = [10, 20]
 
-seqlens = [2]
+"""
+seqlens = [784]
 batch_sizes = [1]
 dims = [1]
 bidirectionality = [False]
 num_layerss = [1]
 num_iterss = [10]
-
+"""
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch", batch_sizes)
 @pytest.mark.parametrize("dim", dims)
@@ -270,6 +288,7 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
     # Compare with sequential model
     h0.grad = None
     torch.manual_seed(42)
+    wandb.init(mode='disabled')
     prnn = pRNN(**vars(cfg)).to(DEVICE)
     
     if bidirectional:
@@ -327,7 +346,8 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
     
     # ----------------
     # Compare with reparametrized model
-    exit()
+    if True:
+        return
     cfg2 = cfg
     cfg2.parallel = False
     cfg2.num_iters = num_iters
@@ -359,13 +379,6 @@ def test_prnn(batch, seqlen, dim, bidirectional,num_layers, num_iters):
     # Compare gradients
     #assert compare_parameters(gru_model, prnn3, grad=True, atol=atol, update_name_fn=update_name_fn)
 
-
-seqlens = [32]
-batch_sizes = [1]
-dims = [2]
-bidirectionality = [False]
-num_layerss = [1]
-num_iterss = [10]
 
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch", batch_sizes)
@@ -473,6 +486,85 @@ def test_gru_diag_derivative(input_dim, hidden_dim, batch_size):
     )
     our_outputs_v2 = my_gru_cell.diagonal_derivative(inputs, hiddens)
     assert torch.allclose(func_outputs_v2, our_outputs_v2)
+
+
+@pytest.mark.parametrize("seqlen", seqlens)
+@pytest.mark.parametrize("batch", batch_sizes)
+@pytest.mark.parametrize("dim", dims)
+@pytest.mark.parametrize("bidirectional", bidirectionality)
+@pytest.mark.parametrize("num_layers", num_layerss)
+@pytest.mark.parametrize("num_iters", num_iterss)
+def test_prnn_deer(batch, seqlen, dim, bidirectional, num_layers, num_iters):
+    # Create an instance of Arguments
+    cfg = Arguments(input_size=dim,
+                    bidirectional=bidirectional,
+                    num_layers=num_layers,
+                    quasi=False,
+                    checkpoint=True,
+                    while_loop=False,
+                    num_iters=num_iters,
+                    )
+
+    D = 2 if cfg.bidirectional else 1
+    hidden_size = cfg.hidden_size * D
+    # Pass arguments to pRNN
+    torch.manual_seed(42)
+    np.random.seed(42)
+
+    x = torch.randn(batch, seqlen, dim).to(DEVICE)
+    h0 = torch.randn(D * num_layers, batch, cfg.hidden_size).to(DEVICE)
+
+    # ---------
+    # Get model
+    torch.manual_seed(42)
+    gru_model = nn.GRU(cfg.input_size,
+                       cfg.hidden_size,
+                       cfg.num_layers,
+                       batch_first=cfg.batch_first,
+                       dropout=cfg.dropout,
+                       bidirectional=cfg.bidirectional,
+                       ).to(DEVICE)
+
+    output1, hidden1 = gru_model(x, h0)
+
+    assert output1.shape == (batch, seqlen, hidden_size)
+    assert hidden1.shape == (D * num_layers, batch, cfg.hidden_size)
+
+    # Compute loss and gradients for GRU
+    gru_model.zero_grad()
+    gru_loss = output1.mean()
+    gru_loss.backward()
+
+    wandb.init(mode="offline")
+    # ----------------
+    # Compare with parallel model
+    cfg2 = cfg
+    cfg2.parallel = True
+    cfg2.num_iters = num_iters
+
+    h0.grad = None
+    torch.manual_seed(42)
+    prnn2 = pRNN(**vars(cfg2)).to(DEVICE)
+
+    if bidirectional:
+        prnn2 = assign_parameters(gru_model, prnn2)
+    assert compare_parameters(gru_model, prnn2, atol=atol)
+
+    output2, hidden2 = prnn2(x, h0)
+
+    assert output2.shape == (batch, seqlen, hidden_size), f"prnn_parallel outputs dimension mismatch"
+    assert hidden2.shape == (D * num_layers, batch, cfg.hidden_size), f"prnn_parallel hidden vars dimension mismatch"
+
+    assert torch.allclose(output1, output2, atol=atol), f"gru and prnn_parallel outputs not match"
+    assert torch.allclose(hidden1, hidden2, atol=atol), f"gru and prnn_parallel hidden vars not match"
+
+    # Compute loss and gradients for pRNN2
+    prnn2_loss = output2.mean()
+    prnn2_loss.backward()
+
+    # Compare gradients
+    assert  torch.allclose(prnn2_loss, gru_loss, atol=atol)
+    assert compare_parameters(gru_model, prnn2, grad=True, atol=atol)
 
 if __name__ == "__main__":
     test_prnn()

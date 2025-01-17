@@ -154,9 +154,10 @@ def main(cfg: DictConfig):
             break
 
     # Evaluate on Test Set
-    model.load_state_dict(torch.load(best_model_path))
-    model.to(device)
-    print("Best model loaded for evaluation.")
+    if not cfg.trainer_cfg.fast_dev_run:
+        model.load_state_dict(torch.load(best_model_path))
+        model.to(device)
+        print("Best model loaded for evaluation.")
 
     model.eval()
     test_loss = 0.0
