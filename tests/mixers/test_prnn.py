@@ -233,14 +233,14 @@ bidirectionality =[False, True]
 num_layerss = [1, 2, 3]
 num_iterss = [10, 20]
 
-
+"""
 seqlens = [784]
 batch_sizes = [1]
 dims = [1]
 bidirectionality = [False]
 num_layerss = [1]
 num_iterss = [10]
-
+"""
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("batch", batch_sizes)
 @pytest.mark.parametrize("dim", dims)
