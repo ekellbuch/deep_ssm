@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=smnist_sweep 
-#SBATCH --error=smnist_sweep_%j_%a.err         
-#SBATCH --output=smnist_sweep_%j_%a.out     
+#SBATCH --error=.logs/smnist_sweep_%j_%a.err         
+#SBATCH --output=.logs/smnist_sweep_%j_%a.out     
 #SBATCH --time=47:59:59                 
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4
@@ -13,6 +13,12 @@ module load cuda/12.4
 
 # Activate conda environment
 source /scratch/users/xavier18/miniconda3/bin/activate nonlinear_ssm
+
+# Ensure the .logs/ directory exists
+LOG_DIR=".logs"
+if [ ! -d "$LOG_DIR" ]; then
+  mkdir -p "$LOG_DIR"
+fi
 
 # Get Sweep ID from the command line argument
 SWEEP_ID=$1
