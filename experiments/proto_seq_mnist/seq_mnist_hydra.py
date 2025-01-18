@@ -80,6 +80,7 @@ def main(cfg: DictConfig):
         learn_initial_states=cfg.model_cfg.learn_initial_states,
         while_loop=cfg.model_cfg.while_loop,
         quasi=cfg.model_cfg.quasi,
+        family=cfg.model_cfg.family,
         num_classes=10,
     )
     model.to(device)
