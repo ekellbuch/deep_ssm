@@ -45,7 +45,8 @@ class Mamba(nn.Module):
         layer_idx=None,
         device=None,
         dtype=None,
-        d_out=None
+        d_out=None,
+        as_complex=False,
     ):
         """
         The Mamba class defines a neural network layer that combines elements of state-space models (SSMs),
@@ -113,6 +114,8 @@ class Mamba(nn.Module):
 
         dtype: torch.dtype, optional
             The data type of the model's parameters (e.g., torch.float32, torch.float16).
+
+        as_complex: A is complex, B is complex, and C is complex.
         """
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -124,6 +127,10 @@ class Mamba(nn.Module):
         self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
+        self.as_complex = as_complex
+
+        #if self.as_complex:
+        #    self.d_state = self.d_state // 2  # parameter match real model
 
         # projects block input from D to 2*D (two branches)
         self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
@@ -182,6 +189,11 @@ class Mamba(nn.Module):
         A_log = torch.log(A)  # Keep A_log in fp32
         self.A_log = nn.Parameter(A_log)
         self.A_log._no_weight_decay = True
+
+        if self.as_complex:
+            # S4 initialization:
+            A_imag = math.pi * torch.arange(self.d_state).repeat(self.d_inner, 1)
+            self.A_imag = nn.Parameter(A_imag)
 
         # 5.3: initialize D, the skip connection
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
@@ -243,7 +255,10 @@ class Mamba(nn.Module):
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
         # Compute the matrix `A` by applying an exponential function to the stored `A_log` parameter
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        if self.as_complex:
+            A = -torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+        else:
+            A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         # Fast path for execution: use a fused kernel if available and no inference parameters are provided
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
@@ -370,7 +385,11 @@ class Mamba(nn.Module):
         dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
         # Don't add dt_bias here
         dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        if self.as_complex:
+            A = -torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+        else:
+            A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         # SSM step
         if selective_state_update is None:
