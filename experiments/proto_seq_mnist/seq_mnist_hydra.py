@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import time
+import numpy as np
 
 from lightning.pytorch.loggers import WandbLogger
 import lightning as L
@@ -21,9 +22,17 @@ from deep_ssm.models.time_series_classifiers import pRNNClassifier
 @hydra.main(version_base=None, config_path="../../configs/seq_mnist", config_name="seq_mnist")
 def main(cfg: DictConfig):
     L.seed_everything(cfg.seed)
-
+    def d_from_l(num_layers):
+        total_params = 200_000
+        D = int(np.sqrt(total_params / (4 * num_layers - 2)))
+        return D
     # Set hyperparameters
-    hidden_size = cfg.model_cfg.hidden_size
+    if cfg.model_cfg.family=='min_gru':
+        hidden_size = d_from_l(cfg.model_cfg.num_layers)
+    elif cfg.model_cfg.family=='prnn':
+        hidden_size = cfg.model_cfg.hidden_size
+    else:
+        raise ValueError(f"Unknown family: {cfg.model_cfg.family}")
     num_epochs = cfg.trainer_cfg.num_epochs
     num_iters = cfg.model_cfg.num_iters
     batch_size = cfg.data_cfg.batch_size
@@ -56,9 +65,11 @@ def main(cfg: DictConfig):
     print(f"Using device: {device}")
 
     # Initialize model
+    print(f"hiddensize: {hidden_size}")
     model = pRNNClassifier(
         input_size=1,
         hidden_size=hidden_size,
+        num_layers=cfg.model_cfg.num_layers,
         num_iters=num_iters,
         parallel=use_parallel,
         learn_diags=cfg.model_cfg.learn_diags,
@@ -69,9 +80,16 @@ def main(cfg: DictConfig):
         learn_initial_states=cfg.model_cfg.learn_initial_states,
         while_loop=cfg.model_cfg.while_loop,
         quasi=cfg.model_cfg.quasi,
+        family=cfg.model_cfg.family,
         num_classes=10,
     )
     model.to(device)
+    num_params = sum(p.numel() for p in model.rnn.parameters())
+    for p in model.parameters():
+        print(p.shape)
+    print(f"Number of parameters: {num_params}")
+    wandb.config.num_params = num_params
+    wandb.watch(model, log="gradients", log_freq=500)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 

@@ -44,7 +44,7 @@ def split_train_val(train, val_split, seed):
 def load_sequential_mnist_all(batch_size, val_split=0.1, seed=0):
     """
     It is frusturating that the MNIST dataset comes in train and test split only, so that the val_split has to be done manually out of the train
-    So, we write a function that returns train, val, and test, altogethe!
+    So, we write a function that returns train, val, and test, all together!
     """
     # Define the transform
     transform = transforms.Compose(
