@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from deep_ssm.mixers.prnn import pRNN
+from deep_ssm.mixers.min_gru import minGRUModel
 
 
 class pRNNClassifier(nn.Module):
@@ -33,24 +34,30 @@ class pRNNClassifier(nn.Module):
                  learn_initial_states=False,
                  while_loop=False,
                  quasi=True,
+                 family="prnn", # alternatively, "min_gru"
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
-        self.rnn = pRNN(input_size,
-                        hidden_size,
-                        num_layers=num_layers,
-                        batch_first=batch_first,
-                        bidirectional=bidirectional,
-                        num_iters=num_iters,
-                        k=k,
-                        clip=clip,
-                        method=method,
-                        parallel=parallel,
-                        checkpoint=checkpoint,
-                        learn_diags=learn_diags,
-                        last_only=last_only,
-                        learn_initial_states=learn_initial_states,
-                        while_loop=while_loop,
-                        quasi=quasi)
+        if family=="prnn":
+            self.rnn = pRNN(input_size,
+                            hidden_size,
+                            num_layers=num_layers,
+                            batch_first=batch_first,
+                            bidirectional=bidirectional,
+                            num_iters=num_iters,
+                            k=k,
+                            clip=clip,
+                            method=method,
+                            parallel=parallel,
+                            checkpoint=checkpoint,
+                            learn_diags=learn_diags,
+                            last_only=last_only,
+                            learn_initial_states=learn_initial_states,
+                            while_loop=while_loop,
+                            quasi=quasi)
+        elif family=="min_gru":
+            self.rnn = minGRUModel(input_size, hidden_size, num_layers=num_layers)
+        else:
+            raise ValueError(f"Unknown family: {family}")
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
@@ -72,5 +79,5 @@ class pRNNClassifier(nn.Module):
         """
         Convenience method for getting class predictions
         """
-        logits = self(x)
+        logits, _ = self(x)
         return torch.argmax(logits, dim=1)

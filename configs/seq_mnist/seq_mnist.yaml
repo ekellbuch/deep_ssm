@@ -18,6 +18,8 @@ model_cfg:
   method: "gru"
   while_loop: False
   quasi: True
+  family: "prnn" # alternative is min_gru
+  num_layers: 1
 
 optimizer_cfg:
   lr: 0.001
