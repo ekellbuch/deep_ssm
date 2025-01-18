@@ -42,4 +42,4 @@ parameters:
       - 10
 program: seq_mnist_hydra.py
 project: nonlinear_ssm
-name: clip
+name: k
