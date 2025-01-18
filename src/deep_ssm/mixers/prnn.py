@@ -22,6 +22,8 @@ except:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 import wandb
 
+import pdb
+
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
 
 
@@ -75,19 +77,17 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
                 total_nans += isnan
         states_guess = step(states_guess)
     elif while_loop:
+        # currently not tracking nans
         err = 100
         count = 0
-        with torch.no_grad():
-            while err > 1e-4:
-                states_guess_new, isnan = step(states_guess)
-                total_nans += isnan
-                err = torch.max(torch.abs(states_guess_new - states_guess))
-                states_guess = states_guess_new
-                count += 1
-                if count > 1000:
-                    break
-        states_guess, isnan = step(states_guess)
-        count += 1
+        while err > 1e-4:
+            states_guess_new = checkpoint_torch(lambda s: step(s)[0], states_guess, use_reentrant=False)
+            # pdb.set_trace()
+            err = torch.max(torch.abs(states_guess_new - states_guess))
+            states_guess = states_guess_new
+            count += 1
+            if count > 1000:
+                break
     else:
         for _ in range(num_iters):
             states_guess, isnan = step(states_guess)
