@@ -1,6 +1,7 @@
 Comment: >
   # This trains the baseline model (fast_dev_run is a debugging flag)
-  python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+  python run_group_multiplication.py --config-name="quasideer_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
+  python run_group_multiplication.py --config-name="quasideer_gru" trainer_cfg.max_epochs=1  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
 
 project_name: "group_multiplication"
 experiment_name: "quasideer_gru"
@@ -13,7 +14,7 @@ data_cfg:
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
-  datasetPath: "/scratch/groups/swl1/group_multiplication/data"
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
 
 model_cfg:
   type: "state_tracking_prnn"
@@ -49,4 +50,4 @@ eval_cfg:
 
 hydra:
   run:
-    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
+    dir: "${oc.env:GROUP_SCRATCH}/${oc.env:USER}/outputs/${now:%y-%m-%d}/${now:%H-%M-%S}"
