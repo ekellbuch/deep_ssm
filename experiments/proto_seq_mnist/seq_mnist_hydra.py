@@ -47,6 +47,9 @@ def main(cfg: DictConfig):
         num_epochs = 1
         # offline = True
 
+    while_loop = cfg.model_cfg.while_loop
+    if cfg.model_cfg.rt:
+        while_loop = True
     # Initialize wandb logger
     logger = WandbLogger(project="nonlinear_ssm", offline=offline)
     logger.log_hyperparams(OmegaConf.to_container(cfg))
@@ -78,9 +81,10 @@ def main(cfg: DictConfig):
         method=cfg.model_cfg.method,
         last_only=cfg.model_cfg.last_only,
         learn_initial_states=cfg.model_cfg.learn_initial_states,
-        while_loop=cfg.model_cfg.while_loop,
+        while_loop=while_loop,
         quasi=cfg.model_cfg.quasi,
         family=cfg.model_cfg.family,
+        use_mean=cfg.model_cfg.use_mean,
         num_classes=10,
     )
     model.to(device)
@@ -102,6 +106,8 @@ def main(cfg: DictConfig):
     for epoch in tqdm(range(num_epochs)):
         # train loop
         model.train()
+        if cfg.model_cfg.rt:
+            model.rnn.parallel = True
         correct, total = 0, 0
         train_loss = 0.0
         grad_norms = []
@@ -110,9 +116,14 @@ def main(cfg: DictConfig):
             x, y = x.to(device), y.to(device)
             x = x.permute(0, 2, 1)  # (B, T, D)
             optimizer.zero_grad()
+            if cfg.model_cfg.rt:
+                num_iters = np.random.randint(3, 785) # hard code the number of iterations for sMNIST
+                model.rnn.num_iters = num_iters
             logits = model(x)
             predictions = torch.argmax(logits, dim=1)
             loss = criterion(logits, y)
+            if cfg.model_cfg.rt:
+                loss = loss * num_iters # weight by number of fixed point iterations used
             correct += torch.sum(predictions == y)
             total += len(y)
             train_loss += loss.item() * x.size(0)
@@ -140,6 +151,8 @@ def main(cfg: DictConfig):
 
         # Evaluation Loop
         model.eval()
+        if cfg.model_cfg.rt:
+            model.rnn.parallel = False
         correct, total = 0, 0
         val_loss = 0.0
         with torch.no_grad():
@@ -178,6 +191,8 @@ def main(cfg: DictConfig):
         print("Best model loaded for evaluation.")
 
     model.eval()
+    if cfg.model_cfg.rt:
+        model.rnn.parallel = False
     test_loss = 0.0
     correct, total = 0, 0
     with torch.no_grad():

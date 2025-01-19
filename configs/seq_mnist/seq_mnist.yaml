@@ -20,6 +20,8 @@ model_cfg:
   quasi: True
   family: "prnn" # alternative is min_gru
   num_layers: 1
+  rt: False # randomized truncation
+  use_mean: False # for the classifier, use the mean over hidden states or only the last one?
 
 optimizer_cfg:
   lr: 0.001

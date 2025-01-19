@@ -68,6 +68,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
 
     Notes:
         VERY important!! Note that step needs to close over initial_state and inputs
+        Note, if while loop is true, then num_iters controls the max number of iters!
     """
     total_nans = 0
     if last_only:
@@ -86,7 +87,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
             err = torch.max(torch.abs(states_guess_new - states_guess))
             states_guess = states_guess_new
             count += 1
-            if count > 1000:
+            if count > num_iters:
                 break
     else:
         for _ in range(num_iters):
@@ -655,7 +656,7 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
 
 class pRNN(nn.Module):
     """
-    An RNN that can be evaluated in parallel using quasi-ELK
+    An RNN that can be evaluated in parallel using quasi-ELK.
     """
 
     def __init__(
@@ -869,18 +870,6 @@ class pRNN(nn.Module):
                     return cell.diagonal_derivative(input_t, state_t)
 
             input = input.transpose(1, 2)  # (batch_size, input_size, seq_len)
-            # output = quasi_deer_torch(
-            #     f=cell,
-            #     diagonal_derivative=diagonal_derivative,
-            #     initial_state=h0[:, 0],
-            #     states_guess=states_guess,
-            #     inputs=input,
-            #     num_iters=self.num_iters,
-            #     k=self.k,
-            #     clip=self.clip,
-            #     last_only=self.last_only,
-            #     while_loop=self.while_loop,
-            # )  # (B,D,T)
             diag_deriv = None
             if self.quasi:
                 diag_deriv = diagonal_derivative
