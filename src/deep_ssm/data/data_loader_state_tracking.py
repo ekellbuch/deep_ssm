@@ -178,28 +178,16 @@ def pad_collate(
 
     Performs channel-wise padding of the inputs and targets.
     """
-    # Only pad `labels` if len(labels) > 1,
-    channels_to_pad = ["input_ids"]
-    if samples[0]["labels"].dim() > 0:
-        channels_to_pad.append("labels")
+    max_len = max([s["input_ids"].shape[0] for s in samples])
+    masks = torch.zeros((len(samples), max_len), dtype=torch.bool)
+    for i, s in enumerate(samples):
+        masks[i, :s["input_ids"].shape[0]] = 1
+        if max_len > s["input_ids"].shape[0]:
+            s["input_ids"] = F.pad(s["input_ids"], (0, max_len - s["input_ids"].shape[0]), value=pad_token_id)
+            s["labels"] = F.pad(s["labels"], (0, max_len - s["labels"].shape[0]), value=pad_token_id)
 
-    max_lens = {}
-    for c in channels_to_pad:
-        max_lens[c] = max([s[c].shape[0] for s in samples])
-
-    for s in samples:
-        for c in channels_to_pad:
-            if max_lens[c] > s[c].shape[0]:
-                s[c] = F.pad(s[c], (0, max_lens[c] - s[c].shape[0]), value=pad_token_id)
-
-    # collated = {
-    #     "input_ids": torch.stack([s["input_ids"] for s in samples]),
-    #     "labels": torch.stack([s["labels"] for s in samples]),
-    # }
-    # collated["masks"] = torch.ones_like(collated["labels"], dtype=bool)
     input_ids = torch.stack([s["input_ids"] for s in samples])
     labels = torch.stack([s["labels"] for s in samples])
-    masks = torch.ones_like(labels, dtype=bool)
 
     return input_ids, labels, masks
 
@@ -244,8 +232,7 @@ def get_dataset(
 
     if strict_len:
         assert k > 1, "`k` must be at least 2"
-        # data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in [2, k]]
-        data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in [k]]
+        data_paths = [os.path.join(data_dir, f"{group}={i}.csv") for i in [2, k]]
         data_paths = list(OrderedSet(data_paths))
         if not os.path.exists(data_paths[0]):
             raise FileNotFoundError(f"You must have data for {group}={2}.")

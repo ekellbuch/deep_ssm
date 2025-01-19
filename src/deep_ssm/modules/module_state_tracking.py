@@ -47,7 +47,7 @@ class StateTrackingDecoder(L.LightningModule):
     self.log(f"avg_{flag_name}_acc", acc, on_epoch=True, prog_bar=True)
     return acc
 
-  def _custom_step_v2(self, batch, batch_idx, flag_name='test'):
+  def _custom_step_final_position(self, batch, batch_idx, flag_name='test'):
     src, tgt, mask = batch
 
     # Forward pass
@@ -82,7 +82,7 @@ class StateTrackingDecoder(L.LightningModule):
     self.train_step_outputs.clear()
 
   def validation_step(self, batch, batch_idx):
-    output = self._custom_step_v2(batch, batch_idx, flag_name='validation')
+    output = self._custom_step_final_position(batch, batch_idx, flag_name='validation')
     self.validation_step_outputs.append(output)
     return output
 
@@ -92,7 +92,7 @@ class StateTrackingDecoder(L.LightningModule):
     self.validation_step_outputs.clear()
 
   def test_step(self, batch, batch_idx):
-    output = self._custom_step_v2(batch, batch_idx, flag_name='test')
+    output = self._custom_step_final_position(batch, batch_idx, flag_name='test')
     self.test_step_outputs.append(output)
     return output
 

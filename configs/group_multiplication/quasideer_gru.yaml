@@ -9,7 +9,7 @@ seed: 0
 
 data_cfg:
   group: "S5"
-  k: 40
+  k: 15
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
@@ -19,12 +19,16 @@ model_cfg:
   type: "state_tracking_prnn"
   configs:
     embed_size: 128
-    hidden_size: 202
-    num_layers: 3
+    hidden_size: 256
+    num_layers: 1
     bidirectional: false
     num_iters: 2
     method: "gru"
     parallel: true
+    k: 0.1
+    clip: false
+    quasi: true
+    reparameterize: true
 
 module_cfg:
   type: "state_tracking"

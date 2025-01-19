@@ -9,14 +9,14 @@ from typing import Optional
 
 from einops import rearrange, repeat
 
-# try:
-#     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
-# except:
-#     from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
-#     from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
+try:
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
+except:
+    from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+    from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
 
-from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
-from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
+# from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+# from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -310,6 +310,19 @@ class Mamba(nn.Module):
 
             # Perform the selective scan operation using the computed parameters
             assert self.activation in ["silu", "swish"]
+            # y = selective_scan_fn(
+            #     x,
+            #     dt,
+            #     A,
+            #     B,
+            #     C,
+            #     self.D.float(),
+            #     z=z,
+            #     delta_bias=self.dt_proj.bias.float(),
+            #     delta_softplus=True,
+            #     return_last_state=ssm_state is not None,
+            #     neg_pos_eigenvalues=neg_pos_eigenvalues,
+            # )
             y = selective_scan_fn(
                 x,
                 dt,
@@ -321,7 +334,6 @@ class Mamba(nn.Module):
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
-                neg_pos_eigenvalues=neg_pos_eigenvalues,
             )
 
             # Update the state-space model (SSM) state if it's provided

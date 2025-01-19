@@ -22,19 +22,21 @@ class GRUDecoder(nn.Module):
 
 class pRNNDecoder(nn.Module):
     def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1, num_iters=2, bidirectional=False,
-                 method='minrnn', parallel=True):
+                 method='gru', parallel=True, k=0.0, clip=False, quasi=True, reparameterize=True):
         super(pRNNDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
         self.model= pRNN(embed_size, hidden_size, num_layers=num_layers, 
                          batch_first=True, bidirectional=bidirectional, num_iters=num_iters, 
-                         method=method, parallel=parallel)
+                         method=method, parallel=parallel, k=k, clip=clip, quasi=quasi, reparameterize=reparameterize)
         self.linear = nn.Linear(hidden_size, vocab_size)
 
     def forward(self, x):
         x = self.embedding(x)
         x, _ = self.model(x)
+        print(x)
         x = self.linear(x)
+        print(x)
         return x
 
 

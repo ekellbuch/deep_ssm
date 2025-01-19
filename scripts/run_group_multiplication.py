@@ -16,12 +16,10 @@ from deep_ssm.utils.callbacks import all_callbacks
 import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
 
-
 @hydra.main(config_path="../configs/group_multiplication", config_name="quasideer_gru", version_base=None)
 def main(args: DictConfig) -> None:
     train(args)
     return
-
 
 def train(args):
     L.seed_everything(args.seed, workers=True)
@@ -33,12 +31,13 @@ def train(args):
       output_dir = None
 
     try:
-        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_quasi={args.model_cfg.configs.quasi}_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
     except:
-        # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{model_cfg.configs.neg_pos_eigenvalues}negpos_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
-        experiment_name = args.experiment_name
+        # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.neg_pos_eigenvalues}negpos_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        # experiment_name = args.experiment_name
 
     # setup logger:
     if args.trainer_cfg.fast_dev_run:

@@ -10,17 +10,17 @@ seed: 0
 
 data_cfg:
   group: "S5"
-  k: 32
+  k: 15
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
-  datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
+  datasetPath: "/scratch/groups/swl1/group_multiplication/data"
 
 model_cfg:
   type: "state_tracking_gru"
   configs:
     embed_size: 128
-    hidden_size: 370
+    hidden_size: 128
     num_layers: 1
 
 module_cfg:
