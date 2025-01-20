@@ -53,7 +53,7 @@ def main(cfg: DictConfig):
 
     # Load datasets
     train_loader, val_loader, test_loader = load_sequential_mnist_all(
-        batch_size=batch_size, val_split=0.1, seed=cfg.seed)
+        batch_size=batch_size, val_split=0.1, seed=cfg.seed, explore=cfg.model_cfg.explore)
 
     # set device
     if torch.backends.mps.is_available():

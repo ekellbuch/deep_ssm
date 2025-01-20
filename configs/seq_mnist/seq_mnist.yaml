@@ -5,6 +5,7 @@ seed: 0
 
 data_cfg:
   batch_size: 256
+  explore: False # if True, don't use hold out test set; if False, use hold out test set
 
 model_cfg:
   hidden_size: 256

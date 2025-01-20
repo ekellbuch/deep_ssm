@@ -41,10 +41,16 @@ def split_train_val(train, val_split, seed):
     return train, val
 
 
-def load_sequential_mnist_all(batch_size, val_split=0.1, seed=0):
+def load_sequential_mnist_all(batch_size, val_split=0.1, seed=0, explore=False):
     """
     It is frusturating that the MNIST dataset comes in train and test split only, so that the val_split has to be done manually out of the train
     So, we write a function that returns train, val, and test, all together!
+
+    Args:
+        batch_size (int): batch size
+        val_split (float): proportion of the training data to be used as validation
+        seed (int): seed for the random split
+        exlpore (bool): if explore is True, we don't use the hold out test set
     """
     # Define the transform
     transform = transforms.Compose(
@@ -54,11 +60,14 @@ def load_sequential_mnist_all(batch_size, val_split=0.1, seed=0):
     bigtrainset = datasets.MNIST(
         root="./data", train=True, download=True, transform=transform
     )
-    testset = datasets.MNIST(
-        root="./data", train=False, download=True, transform=transform
-    )
 
     trainset, valset = split_train_val(bigtrainset, val_split, seed)
+    if explore:
+        trainset, testset = split_train_val(trainset, val_split, seed)
+    else:
+        testset = datasets.MNIST(
+            root="./data", train=False, download=True, transform=transform
+        )
 
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
     valloader = DataLoader(valset, batch_size=batch_size, shuffle=False)
