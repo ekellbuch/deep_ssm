@@ -42,6 +42,7 @@ def train(args):
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
       logger = None
+      wandb.init(mode='disabled')
     else:
       if args.trainer_cfg.logger == "wandb":
         if args.trainer_cfg.accelerator == "ddp":
