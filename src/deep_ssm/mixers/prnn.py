@@ -378,6 +378,11 @@ class AugmentedGRUCell(nn.GRUCell):
         Returns:
             new_hidden: Updated hidden state, shape (batch_size, hidden_size).
         """
+        # Cast input and hidden to the model parameter dtype
+        dtype = self.weight_ih.dtype
+        input = input.to(dtype)
+        hidden = hidden.to(dtype)
+
         # Chunk the weight matrices for the reset (r), update (z), and candidate (n) gates
         w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)  # input-to-hidden weights
         w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)  # hidden-to-hidden weights
@@ -405,6 +410,11 @@ class AugmentedGRUCell(nn.GRUCell):
         return new_hidden
 
     def diagonal_derivative(self, input, hidden):
+        # Cast input and hidden to the model parameter dtype
+        dtype = self.weight_ih.dtype
+        input = input.to(dtype)
+        hidden = hidden.to(dtype)
+
         batch_size, hidden_size = hidden.shape
         input_size = input.shape[1]
 
@@ -461,6 +471,11 @@ class AugmentedGRUCell(nn.GRUCell):
         return diag_jacobian
 
     def full_derivative_v2(self, input, hidden):
+        # Cast input and hidden to the model parameter dtype
+        dtype = self.weight_ih.dtype
+        input = input.to(dtype)
+        hidden = hidden.to(dtype)
+
         batch_size, hidden_size = hidden.shape
 
         # Chunk weights and biases
@@ -500,6 +515,11 @@ class AugmentedGRUCell(nn.GRUCell):
         return jacobian.squeeze(-1)
 
     def full_derivative(self, input, hidden):
+        # Cast input and hidden to the model parameter dtype
+        dtype = self.weight_ih.dtype
+        input = input.to(dtype)
+        hidden = hidden.to(dtype)
+
         batch_size, hidden_size = hidden.shape
 
         # Chunk weights and biases
