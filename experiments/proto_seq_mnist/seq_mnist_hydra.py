@@ -16,7 +16,7 @@ import lightning as L
 from omegaconf import OmegaConf
 import wandb
 
-from deep_ssm.data.basic import load_sequential_mnist_all
+from deep_ssm.data.basic import load_sequential_pixels_all
 from deep_ssm.models.time_series_classifiers import pRNNClassifier
 
 @hydra.main(version_base=None, config_path="../../configs/seq_mnist", config_name="seq_mnist")
@@ -52,8 +52,8 @@ def main(cfg: DictConfig):
     logger.log_hyperparams(OmegaConf.to_container(cfg))
 
     # Load datasets
-    train_loader, val_loader, test_loader = load_sequential_mnist_all(
-        batch_size=batch_size, val_split=0.1, seed=cfg.seed, explore=cfg.model_cfg.explore)
+    train_loader, val_loader, test_loader = load_sequential_pixels_all(
+        batch_size=batch_size, val_split=0.1, seed=cfg.seed, explore=cfg.data_cfg.explore, dataset_name=cfg.data_cfg.dataset_name)
 
     # set device
     if torch.backends.mps.is_available():
@@ -64,10 +64,16 @@ def main(cfg: DictConfig):
         device = torch.device("cpu")
     print(f"Using device: {device}")
 
+    if cfg.data_cfg.dataset_name=='mnist':
+        d_input=1
+    elif cfg.data_cfg.dataset_name=='cifar':
+        d_input=3
+    else:
+        raise ValueError(f"Unknown dataset: {cfg.data_cfg.dataset_name}")
     # Initialize model
     print(f"hiddensize: {hidden_size}")
     model = pRNNClassifier(
-        input_size=1,
+        input_size=d_input,
         hidden_size=hidden_size,
         num_layers=cfg.model_cfg.num_layers,
         num_iters=num_iters,
