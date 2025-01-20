@@ -349,6 +349,17 @@ def checkpoint(f):
             return f(self, *args)
     return f_
 
+def to_complex(model, dtype=torch.complex64):
+    """
+    Convert all parameters and buffers of the module to the specified complex dtype.
+    Args:
+        dtype: The complex data type to convert to, e.g., torch.complex64 or torch.complex128.
+    """
+    for param in model.parameters():
+        param.data = param.data.to(dtype)
+        if param.grad is not None:
+            param.grad.data = param.grad.data.to(dtype)
+
 class AugmentedGRUCell(nn.GRUCell):
     """
     torch.nn.GRUCell with diagonal derivative:
@@ -691,7 +702,7 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
 
     P0_inv = torch.linalg.inv(eigvecs.cpu()).to(device=J_f.device)
     # Return the reparameterized cell
-    return ReparameterizedCell(model_cell, eigvecs, P0_inv, eigenvalues)
+    return ReparameterizedCell(to_complex(model_cell), eigvecs, P0_inv, eigenvalues)
 
 
 class pRNN(nn.Module):
