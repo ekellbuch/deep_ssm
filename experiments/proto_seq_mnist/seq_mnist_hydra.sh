@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=smnist 
-#SBATCH --error=.logs/smnist_%j_%a.err         
-#SBATCH --output=.logs/smnist_%j_%a.out     
+#SBATCH --job-name=pixels
+#SBATCH --error=.logs/pixels_%j_%a.err         
+#SBATCH --output=.logs/pixels_%j_%a.out     
 #SBATCH --time=47:59:59                 
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-gpu=4
@@ -33,19 +33,4 @@ fi
 # Construct the full Sweep Identifier
 FULL_SWEEP_ID="xavier_gonzalez/nonlinear_ssm/$SWEEP_ID"
 
-# logic to make robust to preemption
-# Define checkpoint file
-CHECKPOINT_FILE=".checkpoint/${SLURM_JOB_ID}.ckpt"
-mkdir -p .checkpoint
-
-# Handle preemption (trap SIGTERM)
-trap 'wandb agent --resume $FULL_SWEEP_ID' SIGTERM
-
-# Run the W&B agent
-if [ -f "$CHECKPOINT_FILE" ]; then
-  echo "Resuming from checkpoint..."
-  wandb agent --resume $FULL_SWEEP_ID
-else
-  echo "Starting new W&B run..."
-  wandb agent $FULL_SWEEP_ID
-fi
+wandb agent $FULL_SWEEP_ID
