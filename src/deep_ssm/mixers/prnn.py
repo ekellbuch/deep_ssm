@@ -617,7 +617,7 @@ class ReparameterizedCell(nn.Module):
         """
         # Transform the hidden state to Z-space:
         # z_hx = torch.matmul(hx, self.P0_inv)
-        z_hx = torch.einsum('bi,ji->bj', hx, self.P0)
+        z_hx = torch.einsum('bi,ji->bj', hx.to(dtype=self.P0.dtype), self.P0)
 
         # use the original cell's weights the output would be
         #if self.complex:
