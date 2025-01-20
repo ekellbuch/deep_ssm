@@ -34,9 +34,7 @@ class pRNNDecoder(nn.Module):
     def forward(self, x):
         x = self.embedding(x)
         x, _ = self.model(x)
-        print(x)
         x = self.linear(x)
-        print(x)
         return x
 
 

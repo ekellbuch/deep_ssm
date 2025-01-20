@@ -357,6 +357,41 @@ class AugmentedGRUCell(nn.GRUCell):
     def __init__(self, input_size, hidden_size, bias=True):
         super().__init__(input_size, hidden_size, bias)
 
+    def forward(self, input, hidden):
+        """
+        Forward pass for the GRU cell with batch processing.
+        Args:
+            input: Input tensor at the current time step, shape (batch_size, input_size).
+            hidden: Hidden state tensor from the previous time step, shape (batch_size, hidden_size).
+        Returns:
+            new_hidden: Updated hidden state, shape (batch_size, hidden_size).
+        """
+        # Chunk the weight matrices for the reset (r), update (z), and candidate (n) gates
+        w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)  # input-to-hidden weights
+        w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)  # hidden-to-hidden weights
+
+        # Compute the reset gate
+        r = torch.sigmoid(
+            torch.einsum('bi,oi->bo', input, w_ir) + self.bias_ih[:self.hidden_size] +
+            torch.einsum('bh,oh->bo', hidden, w_hr) + self.bias_hh[:self.hidden_size]
+        )
+
+        # Compute the update gate
+        z = torch.sigmoid(
+            torch.einsum('bi,oi->bo', input, w_iz) + self.bias_ih[self.hidden_size:2*self.hidden_size] +
+            torch.einsum('bh,oh->bo', hidden, w_hz) + self.bias_hh[self.hidden_size:2*self.hidden_size]
+        )
+
+        # Compute the new gate
+        n = torch.tanh(
+            torch.einsum('bi,oi->bo', input, w_in) + self.bias_ih[2*self.hidden_size:] +
+            r * (torch.einsum('bh,oh->bo', hidden, w_hn) + self.bias_hh[2*self.hidden_size:])
+        )
+
+        # Compute the new hidden state
+        new_hidden = (1 - z) * n + z * hidden
+        return new_hidden
+
     def diagonal_derivative(self, input, hidden):
         batch_size, hidden_size = hidden.shape
         input_size = input.shape[1]
@@ -581,20 +616,22 @@ class ReparameterizedCell(nn.Module):
             new_hx (torch.Tensor): Updated hidden state, shape (batch_size, hidden_size).
         """
         # Transform the hidden state to Z-space:
-        z_hx = torch.matmul(hx, self.P0_inv)
+        # z_hx = torch.matmul(hx, self.P0_inv)
+        z_hx = torch.einsum('bi,ji->bj', hx, self.P0)
 
         # use the original cell's weights the output would be
         #if self.complex:
         #    input = input.to(dtype=torch.complex64)
         #    z_hx = z_hx.to(dtype=torch.complex64)
 
-        o_new, z_new = self.original_cell(input, z_hx)        
+        z_new = self.original_cell(input, z_hx)        
         #o_old, z_old = self.original_cell(input, hx)
 
         # Transform back to X-space
-        z_new = z_new @ self.P0
+        # z_new = z_new @ self.P0
+        output = torch.einsum('bi,ji->bj', z_new, self.P0_inv)
 
-        return o_new, z_new
+        return output
 
     def diagonal_derivative(self, input, hx):
         """
@@ -607,15 +644,18 @@ class ReparameterizedCell(nn.Module):
         Returns:
             diag_jacobian_z (torch.Tensor): Diagonal of the Jacobian in Z-space, shape (batch_size, hidden_size).
         """
-        z_hx = torch.matmul(hx, self.P0_inv)
+        # z_hx = torch.matmul(hx, self.P0_inv)
 
         # Compute the Jacobian diagonal in the Z-space
-        diag_jacobian_z = self.original_cell.diagonal_derivative(input, z_hx)
+        jacobian_x = self.original_cell.full_derivative(input, hx)
+        jacobian = torch.einsum('ai,bij,jc->bac', self.P0_inv, jacobian_x, self.P0)
+        # print(jacobian)
+        diag_jacobian = torch.func.vmap(torch.diag)(jacobian)
 
         #if self.complex:
         #    diag_jacobian_z = diag_jacobian_z.to(dtype=torch.complex64)
 
-        return diag_jacobian_z
+        return diag_jacobian
 
 
 def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None, h0=None, as_real=False):
@@ -639,7 +679,7 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
         h0 = torch.zeros(1, hidden_size, requires_grad=True)  # Correct hidden size
 
     # Get the Jacobian
-    jacobian = torch.autograd.functional.jacobian(lambda h: model_cell(x0, h)[1], h0)
+    jacobian = torch.autograd.functional.jacobian(lambda h: model_cell(x0, h), h0)
 
     # Reshape Jacobian to (hidden_size, hidden_size)
     J_f = jacobian.squeeze()
