@@ -10,6 +10,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import pdb
+
 
 # helper code from Feng '24 for the log space version
 def parallel_scan_log(log_coeffs, log_values):
@@ -96,8 +98,9 @@ class minGRUModel(nn.Module):
         super(minGRUModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.layers = nn.ModuleList([minGRUResidualBlock(input_size, hidden_size)])
-        for _ in range(num_layers - 1):
+        self.input_projection = nn.Linear(input_size, hidden_size)
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers):
             self.layers.append(minGRUResidualBlock(hidden_size, hidden_size))
 
     def forward(self, inputs):
@@ -107,7 +110,7 @@ class minGRUModel(nn.Module):
         Outputs:
           x: (B, T, hidden_size)
         """
-        x = inputs
+        x = self.input_projection(inputs)
         for layer in self.layers:
             x = layer(x)
         return x, None

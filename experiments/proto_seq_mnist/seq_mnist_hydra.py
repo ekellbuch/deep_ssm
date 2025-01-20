@@ -15,6 +15,7 @@ from lightning.pytorch.loggers import WandbLogger
 import lightning as L
 from omegaconf import OmegaConf
 import wandb
+import pdb
 
 from deep_ssm.data.basic import load_sequential_pixels_all
 from deep_ssm.models.time_series_classifiers import pRNNClassifier
@@ -24,7 +25,7 @@ def main(cfg: DictConfig):
     L.seed_everything(cfg.seed)
     def d_from_l(num_layers):
         total_params = 200_000
-        D = int(np.sqrt(total_params / (4 * num_layers - 2)))
+        D = int(np.sqrt(total_params / (4 * num_layers)))
         return D
     # Set hyperparameters
     if cfg.model_cfg.family=='min_gru':
@@ -125,6 +126,7 @@ def main(cfg: DictConfig):
             if cfg.model_cfg.rt:
                 num_iters = np.random.randint(3, 785) # hard code the number of iterations for sMNIST
                 model.rnn.num_iters = num_iters
+            # pdb.set_trace()
             logits = model(x)
             predictions = torch.argmax(logits, dim=1)
             loss = criterion(logits, y)

@@ -5,6 +5,8 @@ Build some models to do time series classification, building off of prnn
 import torch
 import torch.nn as nn
 
+import pdb
+
 from deep_ssm.mixers.prnn import pRNN
 from deep_ssm.mixers.min_gru import minGRUModel
 
@@ -67,6 +69,7 @@ class pRNNClassifier(nn.Module):
         x: (batch_size, seq_len, input_size)
         returns: (batch_size, num_classes)
         """
+        # pdb.set_trace()
         rnn_output, _ = self.rnn(x)
 
         if self.use_mean:
