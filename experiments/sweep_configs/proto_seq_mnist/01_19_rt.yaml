@@ -1,0 +1,37 @@
+# Created 1/19/25
+# Goal: see if randomized truncation can get good validation and test accuracy
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  seed:
+    values:
+      - 1
+      - 2
+      - 3
+  model_cfg.rt:
+    values:
+      - True
+  model_cfg.parallel:
+    values:
+      - True
+  model_cfg.method:
+    values:
+      - "gru"
+  model_cfg.while_loop:
+    values:
+      - True
+  model_cfg.clip:
+    values:
+      - False
+      - True
+  model_cfg.use_mean:
+    values:
+      - False
+      - True
+program: seq_mnist_hydra.py
+project: nonlinear_ssm
+name: rt

@@ -35,6 +35,7 @@ class pRNNClassifier(nn.Module):
                  while_loop=False,
                  quasi=True,
                  family="prnn", # alternatively, "min_gru"
+                 use_mean=False, # should the summary statistic be mean or last hidden state?
                  num_classes=10):
         super(pRNNClassifier, self).__init__()
         if family=="prnn":
@@ -59,6 +60,7 @@ class pRNNClassifier(nn.Module):
         else:
             raise ValueError(f"Unknown family: {family}")
         self.classifier = nn.Linear(hidden_size, num_classes)
+        self.use_mean = use_mean
 
     def forward(self, x):
         """
@@ -67,11 +69,13 @@ class pRNNClassifier(nn.Module):
         """
         rnn_output, _ = self.rnn(x)
 
-        # Use the last output for classification
-        last_hidden = rnn_output[:, -1, :]  # (batch_size, hidden_size)
+        if self.use_mean:
+            sum_stat = torch.mean(rnn_output, dim=1)
+        else:
+            sum_stat = rnn_output[:, -1, :]
 
         # Pass through the classifier
-        logits = self.classifier(last_hidden)  # (batch_size, num_classes)
+        logits = self.classifier(sum_stat)  # (batch_size, num_classes)
 
         return logits
 
@@ -79,5 +83,5 @@ class pRNNClassifier(nn.Module):
         """
         Convenience method for getting class predictions
         """
-        logits, _ = self(x)
+        logits = self(x)
         return torch.argmax(logits, dim=1)
