@@ -83,7 +83,8 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
         while err > 1e-4:
             states_guess_new = checkpoint_torch(lambda s: step(s)[0], states_guess, use_reentrant=False)
             # pdb.set_trace()
-            err = torch.max(torch.abs(states_guess_new - states_guess))
+            with torch.no_grad():
+                err = torch.max(torch.abs(states_guess_new - states_guess))
             states_guess = states_guess_new
             count += 1
             if count > 1000:
