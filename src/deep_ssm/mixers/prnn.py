@@ -96,7 +96,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
     if while_loop:
         # print("Number of iterations: ", count)
         wandb.log({"num_iters": count})  # is this going to break everything?
-    wandb.log({"total_nans": total_nans})
+    # wandb.log({"total_nans": total_nans})
     return states_guess  # deer_traces[-1]  # (B, D, T)
 
 def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False, derivative_fn=None, clip=False):
