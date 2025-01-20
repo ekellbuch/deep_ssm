@@ -1,0 +1,45 @@
+# Created 1/17/25
+# Goal: see if scaling helps with the smnist task
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  seed:
+    values:
+      - 1
+      - 2
+      - 3
+  model_cfg.parallel:
+    values:
+      - True
+  model_cfg.method:
+    values:
+      - "gru"
+  model_cfg.learn_diags:
+    values:
+      - False
+  model_cfg.clip:
+    values:
+      - False
+  model_cfg.k:
+    values:
+      - 0.05
+      - 0.1
+  model_cfg.num_iters:
+    values:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+program: seq_mnist_hydra.py
+project: nonlinear_ssm
+name: k

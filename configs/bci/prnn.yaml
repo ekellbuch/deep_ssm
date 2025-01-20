@@ -1,5 +1,7 @@
 Comment: >
   # parallel rnn
+  python run.py --config-name="prnn" trainer_cfg.limit_train_batches=1 model_cfg.configs.num_iters=5
+  python run.py --config-name="prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_iters=10
 
 project_name: "speech_bci"
 experiment_name: "parallel_rnn"
@@ -66,6 +68,10 @@ callbacks:
     logging_interval: "step"
   grad_norm:
     type:
+  checkpoint_cfg:
+    monitor: "ctc_loss_validation"
+    save_top_k: 1
+
 
 trainer_cfg:
   fast_dev_run: false
@@ -81,3 +87,4 @@ eval_cfg:
 hydra:
   run:
     dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
+

@@ -1,0 +1,33 @@
+# Created 1/18/25
+# Goal: look at layers of mingru
+# where the hidden size is a function of the layer
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  seed:
+    values:
+      - 1
+      - 2
+      - 3
+  model_cfg.num_layers:
+    values:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+  model_cfg.family:
+    values:
+      - "min_gru"
+program: seq_mnist_hydra.py
+project: nonlinear_ssm
+name: min_gru

@@ -120,7 +120,9 @@ def apply_ssm(
     Bu_elements = torch.vmap(lambda u: B_bars @ u)(cinput_sequence)
 
   if Lambda_bars.ndim == 1:  # Repeat for associative_scan
-    Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
+    Lambda_real = Lambda_bars.real.tile(input_sequence.shape[0], 1)
+    lambda_imag = Lambda_bars.imag.tile(input_sequence.shape[0], 1)
+    Lambda_bars = torch.complex(Lambda_real, lambda_imag)
 
   Lambda_bars[0] = Lambda_bars[0] * prev_state
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u

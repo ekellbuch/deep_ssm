@@ -1,0 +1,25 @@
+# Run seeded gru w elk
+# for 2 and 3 seeds
+name: compare_elk_iters
+program: scripts/run.py
+method: grid
+metric:
+  name: ctc_loss_validation
+  goal: minimize
+parameters:
+  seed:
+    values: [0, 1, 2]
+
+
+
+#Comment: >
+#  Run: run sweeps across best mamba configuration.
+#  wandb sweep experiments/bci_seeds/run_seeded_mamba.yaml
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--config-name"
+  - "baseline_mamba"
+  - ${args_no_hyphens}

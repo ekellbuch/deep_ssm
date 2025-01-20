@@ -1,0 +1,33 @@
+# Run seeded gru w elk
+# for 2 and 3 seeds
+name: compare_elk_iters
+program: scripts/run.py
+method: grid
+metric:
+  name: ctc_loss_validation
+  goal: minimize
+parameters:
+  model_cfg.configs.num_iters:
+    values: [1, 2, 3]
+  model_cfg.configs.method:
+    values: ["gru"]
+  model_cfg.configs.parallel:
+    values: [true]
+  trainer_cfg.max_steps:
+    values: [15000]
+  seed:
+    values: [0, 1, 2]
+
+
+
+#Comment: >
+#  Run: run sweeps across best mamba configuration.
+#  wandb sweep experiments/bci_seeds/run_seeded_elk.yaml
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--config-name"
+  - "prnn"
+  - ${args_no_hyphens}

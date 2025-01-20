@@ -1,0 +1,42 @@
+# Created 1/19/25
+# Goal: run 3 seeds over 10 iters of a minGRU on sCIFAR
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  seed:
+    values:
+      - 1
+      - 2
+      - 3
+  data_cfg.explore:
+    values:
+      - True
+  data_cfg.dataset_name:
+    values:
+      - "cifar"
+  model_cfg.num_layers:
+    values:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+  model_cfg.family:
+    values:
+      - "min_gru"
+  model_cfg.use_mean:
+    values:
+      - True
+      - False
+program: seq_mnist_hydra.py
+project: nonlinear_ssm
+name: cifar-mingru

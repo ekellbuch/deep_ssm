@@ -1,5 +1,19 @@
 """
 Compare memory and timing:
+
+
+Self CPU time total: 98.280ms
+Self CUDA time total: 88.289us
+
+Self CPU time total: 40.235ms
+Self CUDA time total: 1.267ms
+
+
+# Before 
+Self CPU time total: 106.018ms
+Self CUDA time total: 3.509ms
+
+
 """
 import torch
 import torch.nn as nn
@@ -34,10 +48,23 @@ torch.set_default_dtype(torch.float32)
 
 
 
+import gc
+
+
+def clear_memory():
+    gc.collect()  # Free CPU memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Free GPU memory
+        torch.cuda.reset_peak_memory_stats()
+
+
 def profile_memory(model, x, device="cuda"):
     model.to(device)
     x = x.to(device)
-
+    output, hidden = model(x)
+    # Backward pass
+    loss = output.mean()
+    loss.backward()
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         profile_memory=True,
@@ -120,6 +147,43 @@ def measure_timing(model, x, device="cuda"):
     return forward_time, backward_time
 
 
+def measure_gpu_memory(model, x, device="cuda"):
+    model.to(device)
+    x = x.to(device)
+
+    # Clear any existing cache
+    torch.cuda.empty_cache()
+
+    # Measure memory before forward pass
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.synchronize()
+    before_fwd = torch.cuda.memory_allocated(device)
+
+    # Forward pass
+    output, hidden = model(x)
+
+    torch.cuda.synchronize()
+    after_fwd = torch.cuda.memory_allocated(device)
+    peak_fwd = torch.cuda.max_memory_allocated(device)
+
+    # Backward pass
+    loss = output.mean()
+    loss.backward()
+    torch.cuda.synchronize()
+    after_bwd = torch.cuda.memory_allocated(device)
+    peak_bwd = torch.cuda.max_memory_allocated(device)
+
+    # Results
+    return {
+        "memory_before_fwd": before_fwd,
+        "memory_after_fwd": after_fwd,
+        "peak_memory_fwd": peak_fwd,
+        "memory_after_bwd": after_bwd,
+        "peak_memory_bwd": peak_bwd,
+    }
+
+
+
 
 class Arguments:
     def __init__(self, 
@@ -147,10 +211,10 @@ class Arguments:
 
 
 def main():
-    dim = 2
-    bidirectional = True
-    num_layers = 2
-    batch = 2
+    dim = 1
+    bidirectional = False
+    num_layers = 1
+    batch = 1
     seqlen = 32
     num_iters = 10
 
@@ -166,6 +230,9 @@ def main():
     np.random.seed(42)
 
     x = torch.randn(batch, seqlen, dim)#.to(DEVICE)
+
+    #f_eval = measure_gpu_memory
+    f_eval = profile_memory
 
     if DEVICE.type in ("cpu","mps"):
         f_eval = profile_memory
@@ -185,13 +252,22 @@ def main():
                        bidirectional=cfg.bidirectional)
 
     print("\n Profiling GRU:")
+    #profile_memory(gru_model, x, device=DEVICE)
+
     memory_usage = f_eval(gru_model, x, device=DEVICE)
+    return
     print(memory_usage)
     del gru_model
-
     clear_memory()
-    """
-    prnn_model = pRNN(**vars(cfg))
+    
+   
+    prnn = pRNN(**vars(cfg))
+
+    print("\n Profiling pRNN:")
+    memory_usage = f_eval(prnn, x, device=DEVICE)
+    print(memory_usage)
+    del prnn
+    clear_memory()
 
     print("\n Profiling pRNN:")
     memory_usage = f_eval(prnn_model, x, device=DEVICE)
@@ -203,9 +279,11 @@ def main():
     cfg2.parallel = True
     cfg2.num_iters = num_iters
     prnn2 = pRNN(**vars(cfg2))
+
     print("\n Profiling pRNN parallel:")
     memory_usage = f_eval(prnn2, x, device=DEVICE)
     print(memory_usage)
+    #profile_memory(prnn2, x, device=DEVICE)
 
 
 if __name__ == "__main__":
