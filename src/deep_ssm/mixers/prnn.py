@@ -911,7 +911,7 @@ class pRNN(nn.Module):
         if not self.batch_first:
             output = output.transpose(0, 1)
 
-        return output, h_n
+        return output.to(dtype=torch.float32), h_n.to(dtype=torch.float32)
 
     @checkpoint
     def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None):
