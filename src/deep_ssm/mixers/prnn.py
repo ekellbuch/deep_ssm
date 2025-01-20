@@ -359,6 +359,7 @@ def to_complex(model, dtype=torch.complex64):
         param.data = param.data.to(dtype)
         if param.grad is not None:
             param.grad.data = param.grad.data.to(dtype)
+    return model
 
 class AugmentedGRUCell(nn.GRUCell):
     """
