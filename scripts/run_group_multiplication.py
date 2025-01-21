@@ -99,6 +99,8 @@ def train(args):
         local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
       if args.callbacks.get("eigen_track", None):
         local_callbacks.append(all_callbacks["eigen_track"])
+      if args.callbacks.get("trun_iters", None):
+        local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks, deterministic=True, gradient_clip_val=1.0)
     # trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)

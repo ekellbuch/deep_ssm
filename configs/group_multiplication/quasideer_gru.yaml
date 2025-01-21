@@ -29,7 +29,7 @@ model_cfg:
     k: 0.1
     clip: false
     quasi: true
-    reparameterize: true
+    reparameterize: false
 
 module_cfg:
   type: "state_tracking"

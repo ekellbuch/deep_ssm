@@ -785,6 +785,16 @@ class pRNN(nn.Module):
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
 
+    def set_num_iters(self, new_num_iters):
+        """
+        Update the number of iterations for quasi-DEER dynamically.
+        Args:
+            new_num_iters (int): The new number of iterations to set.
+        """
+        if not isinstance(new_num_iters, int) or new_num_iters <= 0:
+            raise ValueError("num_iters must be a positive integer.")
+        self.num_iters = new_num_iters
+
     def forward(self, input, hx=None):
         if not self.batch_first:
             input = input.transpose(0, 1)
@@ -883,7 +893,8 @@ class pRNN(nn.Module):
                                 states_guess,
                                 input,
                                 diagonal_derivative=diag_deriv,
-                                num_iters=self.num_iters, k=self.k,
+                                num_iters=self.num_iters,
+                                k=self.k,
                                 clip=self.clip,
                                 while_loop=self.while_loop,
                                 derivative_fn=derivative_fn) # (B, D, T)
