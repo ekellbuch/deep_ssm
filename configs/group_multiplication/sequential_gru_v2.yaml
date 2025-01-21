@@ -14,13 +14,13 @@ data_cfg:
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
-  datasetPath: "/scratch/groups/swl1/group_multiplication/data"
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
 
 model_cfg:
   type: "state_tracking_gru"
   configs:
     embed_size: 128
-    hidden_size: 128
+    hidden_size: 370
     num_layers: 1
 
 module_cfg:
