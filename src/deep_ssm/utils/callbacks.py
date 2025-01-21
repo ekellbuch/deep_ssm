@@ -61,7 +61,6 @@ class TruncatedIterations(Callback):
                  truncation_schedule="fixed_values",
                  truncation_epochs=[2, 3],
                  fixed_epochs=10,  # First 10 epochs are fixed
-                 dynamic_method="random_sample"  # Use random sampling for dynamic phase
                  ):
         """
 
@@ -76,14 +75,12 @@ class TruncatedIterations(Callback):
                 "random_values"
             truncation_epochs: List of truncation epochs
             fixed_epochs: Number of initial epochs to remain fixed
-            dynamic_method: Method to use after fixed_epochs
         """
         self.truncation_method = truncation_method
         self.truncation_epochs = truncation_epochs
         self.truncation_values = truncation_values
         self.truncation_schedule = truncation_schedule
         self.fixed_epochs = fixed_epochs
-        self.dynamic_method = dynamic_method
 
 
     def on_train_epoch_start(self, trainer, pl_module):
@@ -91,24 +88,26 @@ class TruncatedIterations(Callback):
         max_num_iters = pl_module.model.model.num_iters
         # Determine if we are in the fixed or dynamic phase
         if epoch < self.fixed_epochs:
-            truncate_now = False
-            # if we have set fixed values:
-            if self.truncation_method == "fixed_values" and epoch in self.truncation_epochs:
-                index = self.truncation_epochs.index(epoch)
-                new_num_deer_iters = self.truncation_values[index]
+            return
+
+
+        # if we have set fixed values:
+        if self.truncation_schedule == "fixed_epochs":
+            if epoch in self.truncation_epochs:
+                if self.truncation_method == "fixed_values":
+                    index = self.truncation_epochs.index(epoch)
+                    new_num_deer_iters = self.truncation_values[index]
+                elif self.truncation_method == "random_sample":
+                    new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
+                else:
+                    raise ValueError("Unknown truncation method")
                 truncate_now = False if new_num_deer_iters == max_num_iters else True
 
-            else:
-                return
-        else:
-            # Dynamic truncation:
-            if self.truncation_method == "random_sample":
-                new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
-                truncate_now = False if new_num_deer_iters == max_num_iters else True
-            elif self.truncation_schedule == "random_interval":
+        elif self.truncation_schedule == "random_interval":
                 # flip a coin to see if we truncate on this interval
                 truncate_now = torch.randint(0, 1, (1,)).item()
-            else:
+                new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
+        else:
                 truncate_now = False
 
         if not truncate_now:

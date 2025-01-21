@@ -50,7 +50,6 @@ callbacks:
     truncation_epochs: [2, 3]
     truncation_values: [2, 1]
     fixed_epochs: 10
-    dynamic_method: "random_sample"  # Use random sampling for dynamic phase
 
 
 trainer_cfg:
