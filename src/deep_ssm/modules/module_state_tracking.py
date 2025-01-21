@@ -13,19 +13,35 @@ class StateTrackingDecoder(L.LightningModule):
     self.validation_step_outputs = []
     self.test_step_outputs = []
 
+  def check_rescaling_factor(self):
+    rescale_type = self.args.get("rescale_loss", None)
+    if rescale_type == "num_iters":
+      # Loss is scaled by the # iterations: steps which run for more iteration get higher weight
+      rescale_factor = self.model.model.num_iters
+    elif rescale_type == "progressive":
+      current_epoch = self.trainer.current_epoch
+      raise NotImplementedError("Progressive rescaling not implemented.")
+      # rescale_factor = self.model.model.num_iters
+    else:
+      # Loss is not rescaled: all steps are weighted equally
+      rescale_factor = 1
+    return rescale_factor
+
   def _custom_step(self, batch, batch_idx, flag_name='test'):
     src, tgt, mask = batch
 
     # Forward pass
     logits = self.model(src)  # Shape: [batch_size, seq_len, vocab_size]
-
     # Reshape for cross entropy
     flat_logits = logits.view(-1, logits.size(-1))  # [batch_size*seq_len, vocab_size]
     flat_targets = tgt.view(-1)  # [batch_size*seq_len]
     flat_mask = mask.view(-1)  # [batch_size*seq_len]
 
+    rescale_factor = self.check_rescaling_factor()
     # Calculate loss only on non-padded positions
-    loss = self.loss_fn(flat_logits[flat_mask], flat_targets[flat_mask])
+    # rescale loss is number of iters
+    loss = rescale_factor * self.loss_fn(flat_logits[flat_mask], flat_targets[flat_mask])
+
     # self.log(f"loss_{flag_name}", loss)
 
     # Calculate accuracy on non-padded positions

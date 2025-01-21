@@ -21,10 +21,10 @@ model_cfg:
   type: "state_tracking_prnn"
   configs:
     embed_size: 128
-    hidden_size: 256
+    hidden_size: 370
     num_layers: 1
     bidirectional: false
-    num_iters: 2
+    num_iters: 10
     method: "gru"
     parallel: true
     k: 0.1
@@ -34,6 +34,7 @@ model_cfg:
 
 module_cfg:
   type: "state_tracking"
+  rescale_loss: "num_iters"
 
 optimizer_cfg:
   type: "adam"
@@ -44,11 +45,13 @@ callbacks:
   lr_monitor:
     logging_interval: "step"
   trun_iters:
-    truncation_method: "random_sample" # random_sample or fixed_value
+    truncation_method: "random_sample" # random_sample or fixed_values
     truncation_schedule: "random_interval" # random_interval or fixed_epochs
     truncation_epochs: [2, 3]
     truncation_values: [2, 1]
-    max_num_iterations: 10
+    fixed_epochs: 10
+    dynamic_method: "random_sample"  # Use random sampling for dynamic phase
+
 
 trainer_cfg:
   fast_dev_run: false
