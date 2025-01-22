@@ -14,7 +14,7 @@ model_cfg:
   parallel: True
   learn_diags: False
   k: 0
-  clip: False
+  clip: True
   last_only: False
   learn_initial_states: False
   method: "gru"
@@ -24,6 +24,7 @@ model_cfg:
   num_layers: 1
   rt: False # randomized truncation
   use_mean: False # for the classifier, use the mean over hidden states or only the last one?
+  conv: False # use a CausalConv(kernel size 4) before explicit layers
 
 optimizer_cfg:
   lr: 0.001
@@ -34,7 +35,7 @@ trainer_cfg:
   num_epochs: 100
   patience: 5
   min_delta: 0.0001
-  fast_dev_run: False
+  fast_dev_run: True
 
 logger_cfg:
   use_wandb: True

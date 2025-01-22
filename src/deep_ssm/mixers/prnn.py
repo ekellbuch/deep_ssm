@@ -25,6 +25,7 @@ import wandb
 import pdb
 
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
+from deep_ssm.mixers.min_gru import CausalConv1d
 
 
 def _batch_along_time(x):
@@ -681,6 +682,7 @@ class pRNN(nn.Module):
         reparameterize=False, # reparameterize a cell
         while_loop=False, # run to convergence
         quasi=True, # use quasi deer
+        use_conv=False, # use convolutions in each layer
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -707,6 +709,7 @@ class pRNN(nn.Module):
         self.learn_initial_states = learn_initial_states
         self.num_iters = num_iters  # number of iterations for quasi-DEER
         self.while_loop = while_loop
+        self.use_conv = use_conv
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -746,6 +749,10 @@ class pRNN(nn.Module):
             )
         else:
             self.fwd_state_fns = [None] * num_layers
+        if self.use_conv:
+            self.fwd_convs = nn.ModuleList([CausalConv1d(hidden_size, 4) for i in range(num_layers)])
+        else:
+            self.fwd_convs = [None] * num_layers
 
         if bidirectional:
             self.reverse_cells = nn.ModuleList()
@@ -783,6 +790,10 @@ class pRNN(nn.Module):
                 )
             else:
                 self.rev_state_fns = [None] * num_layers
+            if self.use_conv:
+                self.rev_convs = nn.ModuleList([CausalConv1d(hidden_size, 4) for i in range(num_layers)])
+            else:
+                self.rev_convs = [None] * num_layers
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
 
@@ -810,7 +821,8 @@ class pRNN(nn.Module):
                 hx[layer * num_directions],
                 self.forward_cells[layer],
                 self.fwd_diagonals[layer], 
-                self.fwd_state_fns[layer]
+                self.fwd_state_fns[layer],
+                self.fwd_convs[layer],
             )
             if self.bidirectional:
                 reverse_layer_output = self._process_layer(
@@ -819,6 +831,7 @@ class pRNN(nn.Module):
                     self.reverse_cells[layer],
                     self.rev_diagonals[layer],
                     self.rev_state_fns[layer],
+                    self.rev_convs[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
                 
@@ -843,7 +856,7 @@ class pRNN(nn.Module):
         return output, h_n
 
     @checkpoint
-    def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None):
+    def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None, conv=None):
         """
         Function for working through each layer
         Args:
@@ -855,6 +868,10 @@ class pRNN(nn.Module):
         """
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
+
+        # apply optional conv
+        if conv:
+            input = conv(input)
 
         if self.parallel:
             device = input.device

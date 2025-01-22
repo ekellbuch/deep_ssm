@@ -38,7 +38,7 @@ def main(cfg: DictConfig):
     num_iters = cfg.model_cfg.num_iters
     batch_size = cfg.data_cfg.batch_size
     learning_rate = cfg.optimizer_cfg.lr
-
+    num_layers = cfg.model_cfg.num_layers
     use_parallel = cfg.model_cfg.parallel
     offline = not cfg.logger_cfg.use_wandb
 
@@ -47,6 +47,7 @@ def main(cfg: DictConfig):
         hidden_size = 2
         num_epochs = 1
         # offline = True
+        num_layers = 2
 
     while_loop = cfg.model_cfg.while_loop
     if cfg.model_cfg.rt:
@@ -79,7 +80,7 @@ def main(cfg: DictConfig):
     model = pRNNClassifier(
         input_size=d_input,
         hidden_size=hidden_size,
-        num_layers=cfg.model_cfg.num_layers,
+        num_layers=num_layers,
         num_iters=num_iters,
         parallel=use_parallel,
         learn_diags=cfg.model_cfg.learn_diags,
@@ -92,6 +93,7 @@ def main(cfg: DictConfig):
         quasi=cfg.model_cfg.quasi,
         family=cfg.model_cfg.family,
         use_mean=cfg.model_cfg.use_mean,
+        conv=cfg.model_cfg.conv,
         num_classes=10,
     )
     model.to(device)
@@ -107,9 +109,17 @@ def main(cfg: DictConfig):
     # Training Loop
     epochs_without_improvement = 0
     best_val_loss = torch.inf
-    experiment_dir = f"./checkpoints/{wandb.run.id}"
+    sweep_id = wandb.run.sweep_id if wandb.run.sweep_id else "no_sweep"
+    if cfg.model_cfg.family=='prnn':
+        best_model_string = f"prnn_iters={cfg.model_cfg.num_iters}_data={cfg.data_cfg.dataset_name}_{wandb.run.id}"
+        experiment_dir = f"./checkpoints/{sweep_id}/{best_model_string}"
+    elif cfg.model_cfg.family=='min_gru':
+        best_model_string = f"mingru_layers={cfg.model_cfg.num_layers}_data={cfg.data_cfg.dataset_name}_{wandb.run.id}"
+        experiment_dir = f"./checkpoints/{sweep_id}/{best_model_string}"
+    else:
+        raise ValueError(f"Unknown family: {cfg.model_cfg.family}")
     os.makedirs(experiment_dir, exist_ok=True)
-    best_model_path = os.path.join(experiment_dir, "best_model.pth")
+    best_model_path = os.path.join(experiment_dir, f"{best_model_string}_best_model.pth")
     for epoch in tqdm(range(num_epochs)):
         # train loop
         model.train()
@@ -201,6 +211,20 @@ def main(cfg: DictConfig):
     model.eval()
     if cfg.model_cfg.rt:
         model.rnn.parallel = False
+    test_acc, test_loss = eval_loop(model, test_loader, device, criterion)
+    print(f"Test Accuracy: {round(100 * test_acc.item(), 2)}%, Test Loss: {test_loss:.4f}")
+
+    # Evaluate in sequential mode also
+    model.rnn.parallel = False
+    seq_test_acc, seq_test_loss = eval_loop(model, test_loader, device, criterion)
+
+    # Log Test Metrics to Wandb
+    logger.log_metrics({"test_accuracy": test_acc.item(),
+                        "test_loss": test_loss,
+                        "seq_test_accuracy": seq_test_acc.item(),
+                        "seq_test_loss": seq_test_loss})
+
+def eval_loop(model, test_loader, device, criterion):
     test_loss = 0.0
     correct, total = 0, 0
     with torch.no_grad():
@@ -216,10 +240,7 @@ def main(cfg: DictConfig):
 
     test_loss /= total
     test_acc = correct / total
-    print(f"Test Accuracy: {round(100 * test_acc.item(), 2)}%, Test Loss: {test_loss:.4f}")
-
-    # Log Test Metrics to Wandb
-    logger.log_metrics({"test_accuracy": test_acc.item(), "test_loss": test_loss})
+    return test_acc, test_loss
 
 
 if __name__ == "__main__":

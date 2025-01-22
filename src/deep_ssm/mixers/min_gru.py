@@ -117,10 +117,16 @@ class minGRUResidualBlock(nn.Module):
     The residual block maps between sequences with the same dimensions
     """
 
-    def __init__(self, D):
+    def __init__(self, D, conv=False):
+        """
+        D: dimension of the data
+        conv: bool, whether to use a convolutional layer or not
+        """
         super(minGRUResidualBlock, self).__init__()
         # Causal convolution: kernel_size=4
-        self.causal_conv = CausalConv1d(D, 4)
+        self.conv = conv
+        if conv:
+            self.causal_conv = CausalConv1d(D, 4)
         self.gru = minGRUSequenceLayer(D, D)
         self.mlp = nn.Sequential(
             nn.Linear(D, 4 * D),
@@ -133,8 +139,9 @@ class minGRUResidualBlock(nn.Module):
         residual = x
 
         # Transpose for Conv1d: (batch_size, seq_len, input_size) -> (batch_size, input_size, seq_len)
-        x = self.causal_conv(x)
-        print(x.shape)
+        if self.conv:
+            x = self.causal_conv(x)
+        # print(x.shape)
         # Transpose back to (batch_size, seq_len, input_size)
 
         out = self.gru(x)
@@ -149,14 +156,19 @@ class minGRUModel(nn.Module):
     (i.e. minGRU acting on the sequence, coupled with nonlinearities)
     """
 
-    def __init__(self, input_size=1, hidden_size=16, num_layers=1):
+    def __init__(self, input_size=1, hidden_size=16, num_layers=1, conv=False):
+        """
+        Args:
+            conv: bool, whether to use a convolutional layer or not
+        """
         super(minGRUModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.input_projection = nn.Linear(input_size, hidden_size)
         self.layers = nn.ModuleList()
+        self.conv = conv
         for _ in range(num_layers):
-            self.layers.append(minGRUResidualBlock(hidden_size))
+            self.layers.append(minGRUResidualBlock(hidden_size, conv=conv))
 
     def forward(self, inputs):
         """
