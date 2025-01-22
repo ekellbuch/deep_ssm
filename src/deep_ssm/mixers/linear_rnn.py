@@ -50,7 +50,7 @@ class LinearRNNSequenceLayer(nn.Module):
         h = h_init
         for t in range(T):
             u_t = inputs[:, t, :]  # Get input for time step t
-            h = self.sigma(self.A(h) + self.B(u_t))  # Compute next hidden state
+            h = self.A(h) + self.B(u_t) # Compute next hidden state
             y = self.C(h) + self.D(u_t)  # Compute output
             outputs.append(y.unsqueeze(1))  # Append to outputs list
         outputs = torch.cat(outputs, dim=1)
