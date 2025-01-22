@@ -34,6 +34,52 @@ def log_g(x):
     return torch.where(x >= 0, (F.relu(x) + 0.5).log(), -F.softplus(-x))
 
 
+class CausalConv1d(nn.Module):
+    """
+    Adapted from xLSTM: https://github.com/NX-AI/xlstm/blob/5feeeaf11b973e37b960553bd8749ca9dadbdfe4/xlstm/components/conv.py
+    Implements causal depthwise convolution of a time series tensor.
+    Input:  Tensor of shape (B,T,D), i.e. (batch, time, feature)
+    Output: Tensor of shape (B,T,D)
+
+    Args:
+        feature_dim: number of features in the input tensor
+        kernel_size: size of the kernel for the depthwise convolution
+        causal_conv_bias: whether to use bias in the depthwise convolution
+        channel_mixing: whether to use channel mixing (i.e. groups=1) or not (i.e. groups=feature_dim)
+                        If True, it mixes the convolved features across channels.
+                        If False, all the features are convolved independently.
+    """
+
+    def __init__(self, D, kernel_size):
+        super().__init__()
+        self.groups = D
+        self.kernel_size = kernel_size
+        self.pad = (
+            self.kernel_size - 1
+        )  # padding of this size assures temporal causality.
+        self.conv = nn.Conv1d(
+            in_channels=D,
+            out_channels=D,
+            kernel_size=kernel_size,
+            padding=self.pad,
+            groups=self.groups,
+        )
+        # B, C, L
+
+    def forward(self, x) -> torch.Tensor:
+        """
+        Args:
+            x: Tensor of shape (B,T,D)
+        Returns:
+            Tensor of shape (B,T,D)
+        """
+        if self.kernel_size == 0:
+            return x
+        y = x.transpose(2, 1)  # (B,D,T) tensor - now in the right shape for conv layer.
+        y = self.conv(y)  # (B,D,T+pad) tensor
+        return y[:, :, : -self.pad].transpose(2, 1)
+
+
 class minGRUSequenceLayer(nn.Module):
     """
     Sequence layer implementing the minGRU
@@ -67,21 +113,30 @@ class minGRUSequenceLayer(nn.Module):
 
 class minGRUResidualBlock(nn.Module):
     """
-    Residual Block for minGRU
+    Residual Block for minGRU with a causal convolution layer.
+    The residual block maps between sequences with the same dimensions
     """
 
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, D):
         super(minGRUResidualBlock, self).__init__()
-        self.gru = minGRUSequenceLayer(input_size, hidden_size)
+        # Causal convolution: kernel_size=4
+        self.causal_conv = CausalConv1d(D, 4)
+        self.gru = minGRUSequenceLayer(D, D)
         self.mlp = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(D, 4 * D),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(4 * D, D),
         )
-        self.norm = nn.RMSNorm(hidden_size)
+        self.norm = nn.RMSNorm(D)
 
     def forward(self, x):
         residual = x
+
+        # Transpose for Conv1d: (batch_size, seq_len, input_size) -> (batch_size, input_size, seq_len)
+        x = self.causal_conv(x)
+        print(x.shape)
+        # Transpose back to (batch_size, seq_len, input_size)
+
         out = self.gru(x)
         out = self.mlp(out)
         out = self.norm(out + residual)
@@ -101,7 +156,7 @@ class minGRUModel(nn.Module):
         self.input_projection = nn.Linear(input_size, hidden_size)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.layers.append(minGRUResidualBlock(hidden_size, hidden_size))
+            self.layers.append(minGRUResidualBlock(hidden_size))
 
     def forward(self, inputs):
         """
