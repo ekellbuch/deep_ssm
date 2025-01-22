@@ -67,7 +67,7 @@ class RNNUnit(nn.Module):
         if u.dim() == 2:  # [batch_size, seq_length]
             u = u.unsqueeze(1)  # Add channel dimension
 
-        batch_size, n_channels, seq_length = u.shape
+        batch_size, seq_length, n_channels = u.shape
         assert (
             n_channels == self.input_size
         ), f"Expected input size {self.input_size}, got {n_channels}"
