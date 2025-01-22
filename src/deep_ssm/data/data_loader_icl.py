@@ -11,6 +11,7 @@ class InContextLinearRegressionDataset(Dataset):
         d_input=5,
         d_output=1,
         noise_std=0.0,
+        batch_size=1024,
         **kwargs
     ):
         """
@@ -27,6 +28,7 @@ class InContextLinearRegressionDataset(Dataset):
         self.d_output = d_output
         self.noise_std = noise_std
         self.n_w_samples = n_w_samples
+        self.batch_size = batch_size
 
         if self.n_w_samples != 0:
             self.w_samples = self._generate_w_samples(self.n_w_samples)
@@ -101,13 +103,6 @@ class InContextLinearRegressionDataset(Dataset):
             x, y = self._current_batch
             return x[batch_idx], y[batch_idx]
 
-    def set_batch_size(self, batch_size):
-        """
-        Set the batch size for efficient trajectory generation.
-        Should be called before creating the DataLoader.
-        """
-        self.batch_size = batch_size
-
     def get_loss(self, y_pred, y_true):
         """
         Compute the mean squared error loss between y_pred and y_true.
@@ -123,3 +118,61 @@ class InContextLinearRegressionDataset(Dataset):
         )  # (seq_length // 2)
 
 
+class InContextLinearRegressionDataModule(L.LightningDataModule):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.train_dataset = InContextLinearRegressionDataset(
+            n_trajectories=args.n_trajectories,
+            n_w_samples=args.n_w_samples,
+            seq_length=args.seq_length,
+            d_input=args.d_input,
+            d_output=args.d_output,
+            noise_std=args.noise_std,
+            batch_size=args.batch_size,
+        )
+        self.val_dataset = InContextLinearRegressionDataset(
+            n_trajectories=args.n_trajectories,
+            n_w_samples=args.n_w_samples,
+            seq_length=args.seq_length,
+            d_input=args.d_input,
+            d_output=args.d_output,
+            noise_std=args.noise_std,
+            batch_size=args.batch_size,
+        )
+        self.test_dataset = InContextLinearRegressionDataset(
+            n_trajectories=args.n_trajectories,
+            n_w_samples=args.n_w_samples,
+            seq_length=args.seq_length,
+            d_input=args.d_input,
+            d_output=args.d_output,
+            noise_std=args.noise_std,
+            batch_size=args.batch_size,
+        )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.batch_size,
+            shuffle=True,
+            num_workers=self.args.num_workers,
+            pin_memory=True,
+        )
+    
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.args.batch_size,
+            shuffle=False,
+            num_workers=self.args.num_workers,
+            pin_memory=True,
+        )
+    
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.args.batch_size,
+            shuffle=False,
+            num_workers=self.args.num_workers,
+            pin_memory=True,
+        )
