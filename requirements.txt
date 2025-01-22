@@ -13,6 +13,7 @@ triton
 edit-distance
 pyparsing
 causal-conv1d
+# for state tracking
 polars
 ordered_set
 # mamba-ssm[causal-conv1d]

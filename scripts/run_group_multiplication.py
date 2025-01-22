@@ -18,6 +18,7 @@ torch.set_float32_matmul_precision('medium')  # Or 'high'
 
 @hydra.main(config_path="../configs/group_multiplication", config_name="quasideer_gru", version_base=None)
 def main(args: DictConfig) -> None:
+    print(f"Loaded configuration: {args}")
     train(args)
     return
 
