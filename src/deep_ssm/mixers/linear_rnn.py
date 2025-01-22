@@ -76,9 +76,6 @@ class RNNUnit(nn.Module):
         if x_init is None:
             x_init = torch.zeros(batch_size, self.hidden_size, device=u.device)
 
-        # Transpose to iterate over sequence
-        u = u.transpose(1, 2)  # [batch_size, seq_length, input_size]
-
         outputs = []
         x = x_init
 
@@ -88,9 +85,6 @@ class RNNUnit(nn.Module):
 
         # Stack outputs along sequence dimension
         outputs = torch.stack(outputs, dim=1)  # [batch_size, seq_length, output_size]
-
-        # Transpose back to channel format
-        outputs = outputs.transpose(1, 2)  # [batch_size, output_size, seq_length]
 
         # For scalar outputs, squeeze the channel dimension
         if self.output_size == 1:
