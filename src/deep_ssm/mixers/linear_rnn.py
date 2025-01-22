@@ -62,15 +62,20 @@ class LinearRNNResidualBlock(nn.Module):
     Residual Block for minGRU
     """
 
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, d_model, d_state):
+        """
+        Args:
+            d_model: dimension of us and ys in SSM notation
+            d_state: dimension of latent xs in SSM notation
+        """
         super(LinearRNNResidualBlock, self).__init__()
-        self.sequence_mixer = LinearRNNSequenceLayer(input_size, hidden_size)
+        self.sequence_mixer = LinearRNNSequenceLayer(d_model, d_state)
         self.mlp = nn.Sequential(
-            nn.Linear(hidden_size, 4 * hidden_size),
+            nn.Linear(d_model, 4 * d_model),
             nn.ReLU(),
-            nn.Linear(4 * hidden_size, hidden_size),
+            nn.Linear(4 * d_model, d_model,
         )
-        self.norm = nn.RMSNorm(hidden_size)
+        self.norm = nn.RMSNorm(d_model)
 
     def forward(self, x):
         residual = x
