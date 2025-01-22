@@ -1,128 +1,318 @@
-"""
-Code for a deep linear RNN sequence model
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional, List
 
-class LinearRNNSequenceLayer(nn.Module):
-    """
-    Sequence layer implementing a dense linear RNN
-    Currently evaluated sequentially
-    """
-
-    def __init__(self, input_size, hidden_size):
-        """
-        Args:
-            input_size: aka d_model
-            hidden_size: aka d_state
-        """
-        super(LinearRNNSequenceLayer, self).__init__()
-        self.input_size = input_size # aka d_model, 255 for IDS4
-        self.hidden_size = hidden_size # aka d_state, 110 for IDS4
+class RNNUnit(nn.Module):
+    def __init__(
+        self, input_size=1, output_size=1, hidden_size=32, nonlinearity="linear"
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size
 
         # Weight matrices
         self.A = nn.Linear(hidden_size, hidden_size, bias=False)  # hidden-to-hidden
         self.B = nn.Linear(input_size, hidden_size, bias=False)  # input-to-hidden
-        self.C = nn.Linear(
-            hidden_size, self.input_size, bias=False
-        )  # hidden-to-output
-        self.D = nn.Linear(input_size, self.input_size, bias=False)  # input-to-output
+        self.C = nn.Linear(hidden_size, output_size, bias=False)  # hidden-to-output
+        self.D = nn.Linear(
+            input_size, output_size, bias=False
+        )  # input-to-output (skip connection)
 
-        # Initialize weights orthogonally
+        # Initialize with orthogonal weights for better gradient flow
         nn.init.orthogonal_(self.A.weight)
         nn.init.orthogonal_(self.B.weight)
         nn.init.orthogonal_(self.C.weight)
         nn.init.orthogonal_(self.D.weight)
 
-    def forward(self, inputs):
-        """
+        # Set nonlinearity function
+        if nonlinearity == "identity":
+            self.sigma = lambda x: x
+        elif nonlinearity == "tanh":
+            self.sigma = torch.tanh
+        elif nonlinearity == "relu":
+            self.sigma = F.relu
+        else:
+            raise ValueError(f"Unsupported nonlinearity: {nonlinearity}.")
+
+    def forward_step(self, u, x):
+        """Single step forward.
         Args:
-          inputs: (B, T, input_size)
-        Outputs:
-          outputs: (B, T, input_size)
+            u: current input [batch_size, input_size]
+            x: current hidden state [batch_size, hidden_size]
+        Returns:
+            y: current output [batch_size, output_size]
+            x_next: next hidden state [batch_size, hidden_size]
         """
-        B, T, _ = inputs.shape
-        h_init = torch.zeros(B, self.hidden_size, device=inputs.device)
-        # Iterate through the sequence
+        # Hidden state update: x_k = σ(Ax_{k-1} + Bu_k)
+        x_next = self.sigma(self.A(x) + self.B(u))
+
+        # Output: y_k = Cx_k + Du_k
+        y = self.C(x_next) + self.D(u)
+
+        return y, x_next
+
+    def forward(self, u, x_init=None):
+        """Forward pass through the sequence.
+        Args:
+            u: input sequence [batch_size, input_size, seq_length]
+               OR [batch_size, seq_length] for scalar inputs
+            x_init: initial hidden state (optional) [batch_size, hidden_size]
+        Returns:
+            outputs: sequence outputs [batch_size, output_size, seq_length]
+            OR [batch_size, seq_length] for scalar outputs
+        """
+        # Handle both scalar and vector inputs
+        if u.dim() == 2:  # [batch_size, seq_length]
+            u = u.unsqueeze(1)  # Add channel dimension
+
+        batch_size, n_channels, seq_length = u.shape
+        assert (
+            n_channels == self.input_size
+        ), f"Expected input size {self.input_size}, got {n_channels}"
+
+        # Initialize hidden state if not provided
+        if x_init is None:
+            x_init = torch.zeros(batch_size, self.hidden_size, device=u.device)
+
+        # Transpose to iterate over sequence
+        u = u.transpose(1, 2)  # [batch_size, seq_length, input_size]
+
         outputs = []
-        h = h_init
-        for t in range(T):
-            u_t = inputs[:, t, :]  # Get input for time step t
-            h = self.A(h) + self.B(u_t) # Compute next hidden state
-            y = self.C(h) + self.D(u_t)  # Compute output
-            outputs.append(y.unsqueeze(1))  # Append to outputs list
-        outputs = torch.cat(outputs, dim=1)
+        x = x_init
+
+        for t in range(seq_length):
+            y, x = self.forward_step(u[:, t], x)
+            outputs.append(y)
+
+        # Stack outputs along sequence dimension
+        outputs = torch.stack(outputs, dim=1)  # [batch_size, seq_length, output_size]
+
+        # Transpose back to channel format
+        outputs = outputs.transpose(1, 2)  # [batch_size, output_size, seq_length]
+
+        # For scalar outputs, squeeze the channel dimension
+        if self.output_size == 1:
+            outputs = outputs.squeeze(1)
+
         return outputs
 
 
-class LinearRNNResidualBlock(nn.Module):
-    """
-    Residual Block for minGRU
-    """
+class RNNBlock(nn.Module):
+    """Sequence layer with RNNUnit, GLU, dropout and normalization"""
 
-    def __init__(self, d_model, d_state):
-        """
-        Args:
-            d_model: dimension of us and ys in SSM notation
-            d_state: dimension of latent xs in SSM notation
-        """
-        super(LinearRNNResidualBlock, self).__init__()
-        self.sequence_mixer = LinearRNNSequenceLayer(d_model, d_state)
-        self.mlp = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model),
-            nn.ReLU(),
-            nn.Linear(4 * d_model, d_model)
-        )
-        self.norm = nn.RMSNorm(d_model)
-
-    def forward(self, x):
-        residual = x
-        out = self.sequence_mixer(x)
-        out = self.mlp(out)
-        out = self.norm(out + residual)
-        return out
-
-
-class LinearRNNModel(nn.Module):
-    """
-    Model featuring stacks of LinearRNN residual blocks
-    (i.e. LinearRNN acting on the sequence, coupled with nonlinearities)
-    """
-
-    def __init__(self, d_model=255, d_state=110, num_layers=1, input_size=None):
-        """
-        Args:
-            d_model: in SSM notation, the dimension of the inputs us and the outputs ys
-            d_state: in SSM notation, the dimension of the hidden states xs
-            num_layers: the number of residual blocks
-            input_size: if None, assumes same as d_model
-        """
-        super(LinearRNNModel, self).__init__()
+    def __init__(
+        self,
+        d_model: int,
+        hidden_size: int = 32,
+        dropout: float = 0.0,
+        norm_type: str = "layer",
+        nonlinearity: str = "identity",
+    ):
+        super().__init__()
         self.d_model = d_model
-        self.d_state = d_state
-        self.num_layers = num_layers
-        self.input_size = input_size
-        if self.input_size is not None:
-            self.input_projection = nn.Linear(input_size, d_model)
-        self.layers = nn.ModuleList()
-        for _ in range(num_layers):
-            self.layers.append(LinearRNNResidualBlock(self.d_model, self.d_state))
+        self.hidden_size = hidden_size
+        self.dropout = dropout
+        self.norm_type = norm_type
 
-    def forward(self, inputs):
+        # RNN Unit
+        self.rnn = RNNUnit(
+            input_size=d_model,
+            output_size=d_model,
+            hidden_size=hidden_size,
+            nonlinearity=nonlinearity,
+        )
+
+        # Output projections for GLU
+        self.out1 = nn.Linear(d_model, d_model)
+        self.out2 = nn.Linear(d_model, d_model)
+
+        # Normalization
+        if norm_type == "layer":
+            self.norm = nn.LayerNorm(d_model)
+        else:  # "batch"
+            self.norm = nn.BatchNorm1d(d_model)
+
+        # Dropout
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, u, x_init=None):
         """
         Args:
-          inputs: (B, T, input_size)
-        Outputs:
-          x: (B, T, d_model)
+            u: input tensor [batch_size, d_model, seq_length]
+            x_init: initial hidden state (optional)
+        Returns:
+            output tensor [batch_size, d_model, seq_length]
         """
-        if self.input_size is None:
-            assert len(inputs.shape) == 3, f"inputs shape: {inputs.shape}, but it needs to be (B,T,d_model)"
-            assert inputs.shape[-1] == self.d_model, f"inputs have d_model {inputs.shape[-1]}, but it needs to be {self.d_model}"
-            x = inputs
+        # Apply normalization (handles different dimensions for layer/batch norm)
+        if self.norm_type == "layer":
+            # LayerNorm expects [batch, seq, features]
+            x_norm = u.transpose(1, 2)
+            x_norm = self.norm(x_norm)
+            x_norm = x_norm.transpose(1, 2)
         else:
-            x = self.input_projection(inputs)
-        for layer in self.layers:
-            x = layer(x)
-        return x, None
+            # BatchNorm expects [batch, features, seq]
+            x_norm = self.norm(u)
+
+        # Apply RNN
+        rnn_out = self.rnn(x_norm, x_init)
+
+        # Apply GELU activation
+        rnn_out = F.gelu(rnn_out)
+        rnn_out = self.drop(rnn_out)
+
+        # GLU: out1(x) * sigmoid(out2(x))
+        # Transpose to [batch, seq, features] for dense layers
+        rnn_out = rnn_out.transpose(1, 2)
+        out1 = self.out1(rnn_out)
+        out2 = self.out2(rnn_out)
+        glu_out = out1 * torch.sigmoid(out2)
+        # Back to [batch, features, seq]
+        glu_out = glu_out.transpose(1, 2)
+
+        # Final dropout
+        glu_out = self.drop(glu_out)
+
+        # Skip connection
+        return u + glu_out
+
+
+class RNNModel(nn.Module):
+    """
+    Stack of RNN layers with optional input/output projections
+    """
+
+    def __init__(
+        self,
+        d_input: int,
+        d_output: int,
+        d_model: int,
+        n_layers: int,
+        hidden_size: int = 32,
+        dropout: float = 0.0,
+        norm_type: str = "layer",
+        layer_norm_first: bool = True,
+        layer_norm_last: bool = True,
+        nonlinearity: str = "identity",
+        **kwargs,
+    ):
+        """
+        Args:
+            d_input: Input dimension
+            d_output: Output dimension
+            d_model: Model dimension (internal representation)
+            n_layers: Number of RNN layers
+            hidden_size: Hidden state size in each RNN
+            dropout: Dropout probability
+            norm_type: Type of normalization ("layer" or "batch")
+            layer_norm_first: Whether to add LayerNorm after input projection
+            layer_norm_last: Whether to add LayerNorm before output projection
+            nonlinearity: Activation function for RNN ('identity', 'tanh', or 'relu')
+        """
+        super().__init__()
+        self.d_input = d_input
+        self.d_output = d_output
+        self.d_model = d_model
+        self.n_layers = n_layers
+
+        # Input projection if needed
+        if d_input != d_model:
+            self.input_proj = nn.Linear(d_input, d_model)
+            if layer_norm_first:
+                if norm_type == "layer":
+                    self.input_norm = nn.LayerNorm(d_model)
+                else:
+                    self.input_norm = nn.BatchNorm1d(d_model)
+            else:
+                self.input_norm = nn.Identity()
+        else:
+            self.input_proj = nn.Identity()
+            self.input_norm = nn.Identity()
+
+        # Stack of RNN layers
+        self.layers = nn.ModuleList(
+            [
+                RNNBlock(
+                    d_model=d_model,
+                    hidden_size=hidden_size,
+                    dropout=dropout,
+                    norm_type=norm_type,
+                    nonlinearity=nonlinearity,
+                )
+                for _ in range(n_layers)
+            ]
+        )
+
+        # Output projection if needed
+        if d_output != d_model:
+            if layer_norm_last:
+                if norm_type == "layer":
+                    self.output_norm = nn.LayerNorm(d_model)
+                else:
+                    self.output_norm = nn.BatchNorm1d(d_model)
+            else:
+                self.output_norm = nn.Identity()
+            self.output_proj = nn.Linear(d_model, d_output)
+        else:
+            self.output_norm = nn.Identity()
+            self.output_proj = nn.Identity()
+
+    def forward(
+        self, x: torch.Tensor, states: Optional[List[torch.Tensor]] = None
+    ) -> torch.Tensor:
+        """
+        Forward pass through the model.
+        Args:
+            x: Input tensor [batch_size, d_input, seq_length]
+            states: Optional list of initial hidden states for each layer
+        Returns:
+            output tensor [batch_size, d_output, seq_length]
+        """
+        # Initialize states if not provided
+        if states is None:
+            states = [None] * self.n_layers
+
+        # Input projection and normalization
+        if self.d_input != self.d_model:
+            # [batch, d_input, seq] -> [batch, seq, d_input]
+            x = x.transpose(1, 2)
+            x = self.input_proj(x)
+            # [batch, seq, d_model] -> [batch, d_model, seq]
+            x = x.transpose(1, 2)
+
+        if isinstance(self.input_norm, nn.LayerNorm):
+            x = x.transpose(1, 2)
+            x = self.input_norm(x)
+            x = x.transpose(1, 2)
+        else:
+            x = self.input_norm(x)
+
+        # Process through layers
+        new_states = []
+        for layer, state in zip(self.layers, states):
+            x = layer(x, state)
+            # Store the final hidden state from each layer
+            new_states.append(x)
+
+        # Output normalization and projection
+        if isinstance(self.output_norm, nn.LayerNorm):
+            x = x.transpose(1, 2)
+            x = self.output_norm(x)
+            x = x.transpose(1, 2)
+        else:
+            x = self.output_norm(x)
+
+        if self.d_output != self.d_model:
+            x = x.transpose(1, 2)
+            x = self.output_proj(x)
+            x = x.transpose(1, 2)
+
+        return x
+
+    def get_states(self, batch_size: int, device: torch.device) -> List[torch.Tensor]:
+        """Initialize hidden states for all layers"""
+        return [
+            torch.zeros(batch_size, self.d_model, device=device)
+            for _ in range(self.n_layers)
+        ]

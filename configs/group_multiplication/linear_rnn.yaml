@@ -17,9 +17,9 @@ data_cfg:
 model_cfg:
   type: "state_tracking_linear"
   configs:
-    embed_size: 255
-    hidden_size: 110
-    num_layers: 1
+    embed_size: 128
+    hidden_size: 16
+    num_layers: 3
 
 module_cfg:
   type: "state_tracking"

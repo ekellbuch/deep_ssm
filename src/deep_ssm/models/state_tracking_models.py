@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.prnn import pRNN
-from deep_ssm.mixers.linear_rnn import LinearRNNModel
+from deep_ssm.mixers.linear_rnn import RNNModel
 import torch.nn.functional as F
 
 
@@ -58,13 +58,11 @@ class LinearRNNDecoder(nn.Module):
         super(LinearRNNDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.model = LinearRNNModel(d_model=embed_size, d_state=hidden_size, num_layers=num_layers)
-        self.linear = nn.Linear(embed_size, vocab_size)
+        self.model = RNNModel(d_input=embed_size, d_output=vocab_size, d_model=embed_size, n_layers=num_layers, d_state=hidden_size)
 
     def forward(self, x):
         x = self.embedding(x)
-        x, _ = self.model(x)
-        x = self.linear(x)
+        x = self.model(x)
         return x
 
 

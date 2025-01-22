@@ -79,6 +79,7 @@ def train(args):
       modelito.load_state_dict(weights)
 
     model = all_modules[args.module_cfg.type](args, modelito)
+    wandb.watch(modelito, log='all')
 
     # set trainer:
     trainer_config = OmegaConf.to_container(args.trainer_cfg)
