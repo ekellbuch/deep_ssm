@@ -35,7 +35,6 @@ class pRNNClassifier(nn.Module):
                  last_only=False,
                  learn_initial_states=False,
                  while_loop=False,
-                 quasi=True,
                  family="prnn", # alternatively, "min_gru"
                  use_mean=False, # should the summary statistic be mean or last hidden state?
                  num_classes=10):
@@ -55,8 +54,7 @@ class pRNNClassifier(nn.Module):
                             learn_diags=learn_diags,
                             last_only=last_only,
                             learn_initial_states=learn_initial_states,
-                            while_loop=while_loop,
-                            quasi=quasi)
+                            while_loop=while_loop)
         elif family=="min_gru":
             self.rnn = minGRUModel(input_size, hidden_size, num_layers=num_layers)
         else:

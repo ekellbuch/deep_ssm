@@ -60,9 +60,9 @@ def main(cfg: DictConfig):
         batch_size=batch_size, val_split=0.1, seed=cfg.seed, explore=cfg.data_cfg.explore, dataset_name=cfg.data_cfg.dataset_name)
 
     # set device
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")  # macOS Metal backend
-    elif torch.cuda.is_available():
+    # if torch.backends.mps.is_available():
+    #     device = torch.device("mps")  # macOS Metal backend
+    if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
@@ -89,7 +89,6 @@ def main(cfg: DictConfig):
         last_only=cfg.model_cfg.last_only,
         learn_initial_states=cfg.model_cfg.learn_initial_states,
         while_loop=while_loop,
-        quasi=cfg.model_cfg.quasi,
         family=cfg.model_cfg.family,
         use_mean=cfg.model_cfg.use_mean,
         num_classes=10,

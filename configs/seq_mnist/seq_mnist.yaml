@@ -19,7 +19,6 @@ model_cfg:
   learn_initial_states: False
   method: "gru"
   while_loop: False
-  quasi: True
   family: "prnn" # alternative is min_gru
   num_layers: 1
   rt: False # randomized truncation
