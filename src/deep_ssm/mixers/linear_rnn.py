@@ -140,7 +140,7 @@ class RNNBlock(nn.Module):
     def forward(self, u, x_init=None):
         """
         Args:
-            u: input tensor [batch_size, d_model, seq_length]
+            u: input tensor [batch_size, seq_length, d_model]
             x_init: initial hidden state (optional)
         Returns:
             output tensor [batch_size, d_model, seq_length]
@@ -148,9 +148,9 @@ class RNNBlock(nn.Module):
         # Apply normalization (handles different dimensions for layer/batch norm)
         if self.norm_type == "layer":
             # LayerNorm expects [batch, seq, features]
-            x_norm = u.transpose(1, 2)
+            x_norm = u
             x_norm = self.norm(x_norm)
-            x_norm = x_norm.transpose(1, 2)
+            x_norm = x_norm
         else:
             # BatchNorm expects [batch, features, seq]
             x_norm = self.norm(u)
@@ -164,12 +164,12 @@ class RNNBlock(nn.Module):
 
         # GLU: out1(x) * sigmoid(out2(x))
         # Transpose to [batch, seq, features] for dense layers
-        rnn_out = rnn_out.transpose(1, 2)
+        rnn_out = rnn_out
         out1 = self.out1(rnn_out)
         out2 = self.out2(rnn_out)
         glu_out = out1 * torch.sigmoid(out2)
         # Back to [batch, features, seq]
-        glu_out = glu_out.transpose(1, 2)
+        glu_out = glu_out
 
         # Final dropout
         glu_out = self.drop(glu_out)
@@ -264,10 +264,10 @@ class RNNModel(nn.Module):
         """
         Forward pass through the model.
         Args:
-            x: Input tensor [batch_size, d_input, seq_length]
+            x: Input tensor [batch_size, seq_length, D]
             states: Optional list of initial hidden states for each layer
         Returns:
-            output tensor [batch_size, d_output, seq_length]
+            output tensor [batch_size, T, D]
         """
         # Initialize states if not provided
         if states is None:
@@ -275,16 +275,10 @@ class RNNModel(nn.Module):
 
         # Input projection and normalization
         if self.d_input != self.d_model:
-            # [batch, d_input, seq] -> [batch, seq, d_input]
-            x = x.transpose(1, 2)
             x = self.input_proj(x)
-            # [batch, seq, d_model] -> [batch, d_model, seq]
-            x = x.transpose(1, 2)
 
         if isinstance(self.input_norm, nn.LayerNorm):
-            x = x.transpose(1, 2)
             x = self.input_norm(x)
-            x = x.transpose(1, 2)
         else:
             x = self.input_norm(x)
 
@@ -297,16 +291,12 @@ class RNNModel(nn.Module):
 
         # Output normalization and projection
         if isinstance(self.output_norm, nn.LayerNorm):
-            x = x.transpose(1, 2)
             x = self.output_norm(x)
-            x = x.transpose(1, 2)
         else:
             x = self.output_norm(x)
 
         if self.d_output != self.d_model:
-            x = x.transpose(1, 2)
             x = self.output_proj(x)
-            x = x.transpose(1, 2)
 
         return x
 
