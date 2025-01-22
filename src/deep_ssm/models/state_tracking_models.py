@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.prnn import pRNN
+from deep_ssm.mixers.linear_rnn import LinearRNNModel
 import torch.nn.functional as F
 
 
@@ -29,6 +30,35 @@ class pRNNDecoder(nn.Module):
         self.model= pRNN(embed_size, hidden_size, num_layers=num_layers, 
                          batch_first=True, bidirectional=bidirectional, num_iters=num_iters, 
                          method=method, parallel=parallel, k=k, clip=clip, quasi=quasi, reparameterize=reparameterize)
+        self.linear = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x, _ = self.model(x)
+        x = self.linear(x)
+        return x
+
+class LinearRNNDecoder(nn.Module):
+    """
+    implements a deep linear RNN decoder (the linear layers are connected via non-linearities)
+    we match the size of the IDS4 matrices from Merrill
+    the point is to demonstrate Picard iterations take more layers/iterations than Newton iterations
+    Args:
+        vocab size: size of the vocabulary
+        embed_size: size of the embedding
+        hidden_size: size of the hidden state
+    """
+    def __init__(
+        self,
+        vocab_size,
+        embed_size,
+        hidden_size,
+        num_layers=1,
+    ):
+        super(LinearRNNDecoder, self).__init__()
+
+        self.embedding = nn.Embedding(vocab_size, embed_size)
+        self.model = LinearRNNModel(input_size=embed_size, hidden_size=hidden_size, num_layers=num_layers)
         self.linear = nn.Linear(hidden_size, vocab_size)
 
     def forward(self, x):
