@@ -73,7 +73,7 @@ class LinearRNNResidualBlock(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(d_model, 4 * d_model),
             nn.ReLU(),
-            nn.Linear(4 * d_model, d_model,
+            nn.Linear(4 * d_model, d_model)
         )
         self.norm = nn.RMSNorm(d_model)
 
