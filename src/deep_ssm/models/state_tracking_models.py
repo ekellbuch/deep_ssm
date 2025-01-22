@@ -45,8 +45,8 @@ class LinearRNNDecoder(nn.Module):
     the point is to demonstrate Picard iterations take more layers/iterations than Newton iterations
     Args:
         vocab size: size of the vocabulary
-        embed_size: size of the embedding
-        hidden_size: size of the hidden state
+        embed_size: size of the embedding, ends up being d_model in SSM notation
+        hidden_size: size of the hidden state, ends up being d_state in SSM notation
     """
     def __init__(
         self,
@@ -58,8 +58,8 @@ class LinearRNNDecoder(nn.Module):
         super(LinearRNNDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.model = LinearRNNModel(input_size=embed_size, hidden_size=hidden_size, num_layers=num_layers)
-        self.linear = nn.Linear(hidden_size, vocab_size)
+        self.model = LinearRNNModel(d_model=embed_size, d_state=hidden_size, num_layers=num_layers)
+        self.linear = nn.Linear(embed_size, vocab_size)
 
     def forward(self, x):
         x = self.embedding(x)

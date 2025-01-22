@@ -9,5 +9,6 @@ all_models = {
   'bci_prnn': bci_models.pRNNDecoder,
   "state_tracking_gru": state_tracking_models.GRUDecoder,
   "state_tracking_prnn": state_tracking_models.pRNNDecoder,
-  "state_tracking_mamba": state_tracking_models.MambaDecoder
+  "state_tracking_mamba": state_tracking_models.MambaDecoder,
+  "state_tracking_linear": state_tracking_models.LinearRNNDecoder
 }
