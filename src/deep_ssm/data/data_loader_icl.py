@@ -102,8 +102,8 @@ class InContextLinearRegressionDataset(Dataset):
 
             # Return from current batch
             x, y = self._current_batch
-            x = x.transpose(1,2)
-            y = y.transpose(1,2)
+            x = x.transpose(1, 2)
+            y = y.transpose(1, 2)
             return x[batch_idx], y[batch_idx]
 
     def get_loss(self, y_pred, y_true):
@@ -149,7 +149,7 @@ class InContextLinearRegressionDataModule(L.LightningDataModule):
         self.test_dataset = InContextLinearRegressionDataset(
             n_trajectories=self.args.n_trajectories,
             n_w_samples=self.args.n_w_samples,
-            seq_length=self.args.seq_length,
+            seq_length=self.args.seq_length * 3,
             d_input=self.args.d_input,
             d_output=self.args.d_output,
             noise_std=self.args.noise_std,
@@ -164,7 +164,7 @@ class InContextLinearRegressionDataModule(L.LightningDataModule):
             num_workers=self.args.num_workers,
             pin_memory=True,
         )
-    
+
     def val_dataloader(self):
         return DataLoader(
             self.val_dataset,
@@ -173,7 +173,7 @@ class InContextLinearRegressionDataModule(L.LightningDataModule):
             num_workers=self.args.num_workers,
             pin_memory=True,
         )
-    
+
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
