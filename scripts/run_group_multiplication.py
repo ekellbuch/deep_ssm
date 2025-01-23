@@ -34,12 +34,12 @@ def train(args):
       output_dir = None
 
     try:
-        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_quasi={args.model_cfg.configs.quasi}_reparam={args.model_cfg.configs.reparameterize}_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_quasi={args.model_cfg.configs.quasi}_quasik={args.model_cfg.configs.k}_clip={args.model_cfg.configs.clip}_reparam={args.model_cfg.configs.reparameterize}_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
     except:
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.neg_pos_eigenvalues}negpos_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
-        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_positiveEigvals_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = args.experiment_name
 
     # setup logger:
@@ -122,7 +122,7 @@ def train(args):
     # Save model
     # experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{wandb.run.id}"
     try:
-        experiment_dir = f"/scratch/users/hdlee/state_tracking/checkpoints/{experiment_name}"
+        experiment_dir = f"/oak/stanford/groups/swl1/hdlee/state_tracking/icml2025/checkpoints/{experiment_name}"
         os.makedirs(experiment_dir, exist_ok=True)
         model_path = os.path.join(experiment_dir, "model.ckpt")
         # torch.save(model.state_dict(), model_path)

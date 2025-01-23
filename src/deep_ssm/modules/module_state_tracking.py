@@ -3,30 +3,6 @@ import torch
 import torch.nn.functional as F
 import wandb
 
-def cross_entropy_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """
-    A basic custom cross-entropy loss for multi-class classification.
-
-    Args:
-        logits (torch.Tensor): Model outputs (unnormalized logits),
-            shape (N, C) where N is the batch size and C is the number of classes.
-        targets (torch.Tensor): Ground-truth class indices, shape (N,).
-
-    Returns:
-        torch.Tensor: Scalar loss value.
-    """
-    # 1. Convert logits to log probabilities
-    log_probs = F.log_softmax(logits, dim=1)
-
-    # 2. Gather the log probabilities corresponding to the correct labels
-    # Each row in log_probs corresponds to one example; we pick the log probability 
-    # at the correct class index in `targets`.
-    # shape of `-log_probs[range(N), targets]` is (N,)
-    loss = -log_probs[range(logits.shape[0]), targets]
-
-    # 3. Return the mean over the batch
-    return loss.mean()
-
 class StateTrackingDecoder(L.LightningModule):
   def __init__(self, args, model):
     super().__init__()
@@ -122,7 +98,7 @@ class StateTrackingDecoder(L.LightningModule):
     outputs = self.train_step_outputs
     self._custom_epoch_end(outputs, flag_name='train')
     self.train_step_outputs.clear()
-    wandb.log({"A_norm": torch.linalg.norm(self.model.model.forward_cells[0].A, ord='fro')})
+    # wandb.log({"A_norm": torch.linalg.norm(self.model.model.forward_cells[0].A, ord='fro')})
 
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # x0 = torch.zeros(1, self.model.model.input_size, requires_grad=True).to(device)

@@ -10,7 +10,7 @@ seed: 0
 
 data_cfg:
   group: "S5"
-  k: 40
+  k: 32
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
@@ -23,10 +23,10 @@ model_cfg:
     hidden_size: 370
     num_layers: 1
     bidirectional: false
-    num_iters: 20
+    num_iters: 4
     method: "gru"
     parallel: true
-    k: 0
+    k: 0.0
     clip: true
     quasi: true
     reparameterize: false
