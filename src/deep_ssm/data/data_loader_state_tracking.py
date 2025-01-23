@@ -226,6 +226,7 @@ def get_dataset(
     data_dir: str,
     supervised: bool = True,
     max_samples: Optional[int] = None,
+    seed: int = 0,
 ) -> dict:
     """Construct dataset."""
     assert train_size > 0 and train_size <= 1, "`train_size` must be in (0,1]"
@@ -315,7 +316,7 @@ def get_dataset(
         train_data = concatenate_datasets(train_data)
 
         if train_size < 1:
-            dataset = k_data.train_test_split(train_size=train_size)
+            dataset = k_data.train_test_split(train_size=train_size, seed=seed)
             dataset["train"] = concatenate_datasets([dataset["train"], train_data])
         else:
             dataset = concatenate_datasets([train_data, k_data])
@@ -331,6 +332,7 @@ class GroupMultiplicationDataModule(L.LightningDataModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
+        
         datadict = get_dataset(
             group=self.args.group,
             k=self.args.k,
@@ -339,6 +341,7 @@ class GroupMultiplicationDataModule(L.LightningDataModule):
             data_dir=self.args.datasetPath,
             supervised=True,
             max_samples=self.args.max_samples,
+            seed=self.args.seed
         )
         dataset = datadict["dataset"]
         self.n_vocab = datadict["n_vocab"]
