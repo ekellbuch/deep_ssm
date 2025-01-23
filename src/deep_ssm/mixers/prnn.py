@@ -265,14 +265,18 @@ def quasi_deer_torch(
         # inputs and states are (B,D,T-1)
         As = diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
         As = _unbatch_to_time(As, B)  # (B, D, T-1)
+        # print('As: ', As.abs())
         if clip:
             As.clamp_(min=-1, max=1)
         elif k > 0:
             As.mul_(1.0 - k)
         bs = fs - As * states[..., :-1]  # (B, D, T-1)
+        # print('bs: ', bs)
 
         # initial_state is h0
         b0 = f(inputs[..., 0], initial_state)  # h1 = f(e0, h0), (B,D)
+        # print('b0: ', b0)
+        # print('#####################################################')
         A0 = torch.zeros_like(As[..., 0])  # (B,D)
         A = torch.cat(
             [A0.unsqueeze(-1), As, torch.zeros([B, D, padded_T - T], device=device)],
@@ -339,6 +343,20 @@ class MinRNNCell(nn.Module):
             u + (prev_state - z) * u * (1 - u) * self.recurrent_weights.diagonal()
         )
         return derivative
+
+    def full_derivative(self, input, prev_state):
+        z = torch.tanh(torch.matmul(input, self.input_weights.T) + self.input_bias)
+        u = torch.sigmoid(
+            torch.matmul(prev_state, self.recurrent_weights.T)
+            + torch.matmul(z, self.U_z.T)
+            + self.b_u
+        )
+        derivative = (
+            torch.diag_embed(u) + ((prev_state - z) * u * (1 - u)).unsqueeze(-1) * self.recurrent_weights
+        )
+        return derivative
+
+
 
 
 def checkpoint(f):
@@ -533,34 +551,115 @@ class AugmentedGRUCell(nn.GRUCell):
             self.bias_hh.chunk(3, 0) if self.bias_hh is not None else (0, 0, 0)
         )
 
-        # Compute gates
-        ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr
-        zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz
-        r = torch.sigmoid(ract)
-        z = torch.sigmoid(zact)
+        # # Compute gates
+        # ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr
+        # zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz
+        # r = torch.sigmoid(ract)
+        # z = torch.sigmoid(zact)
 
-        rcomp = hidden @ w_hn.t() + b_hn
-        n_act = input @ w_in.t() + b_in + r * rcomp
-        n = torch.tanh(n_act)
+        # rcomp = hidden @ w_hn.t() + b_hn
+        # n_act = input @ w_in.t() + b_in + r * rcomp
+        # n = torch.tanh(n_act)
 
-        # Compute partial derivatives efficiently
-        r_grad = r * (1 - r)  # Gradient of r w.r.t. ract
-        z_grad = z * (1 - z)  # Gradient of z w.r.t. zact
-        n_grad = 1 - n**2     # Gradient of n w.r.t. n_act
+        # # Compute partial derivatives efficiently
+        # r_grad = r * (1 - r)  # Gradient of r w.r.t. ract
+        # z_grad = z * (1 - z)  # Gradient of z w.r.t. zact
+        # n_grad = 1 - n**2     # Gradient of n w.r.t. n_act
 
-        # Avoid creating large intermediate tensors; use batched operations directly
-        dr_dh = r_grad.unsqueeze(-1) * w_hr  # Shape: (B, hidden_size, hidden_size)
-        dz_dh = z_grad.unsqueeze(-1) * w_hz  # Shape: (B, hidden_size, hidden_size)
-        dn_dh = n_grad.unsqueeze(-1) * (
-            r.unsqueeze(-1) * w_hn + dr_dh @ rcomp.unsqueeze(-1)
-        )  # Shape: (B, hidden_size, hidden_size)
+        # # Avoid creating large intermediate tensors; use batched operations directly
+        # dr_dh = r_grad.unsqueeze(-1) * w_hr  # Shape: (B, hidden_size, hidden_size)
+        # dz_dh = z_grad.unsqueeze(-1) * w_hz  # Shape: (B, hidden_size, hidden_size)
+        # dn_dh = n_grad.unsqueeze(-1) * (
+        #     r.unsqueeze(-1) * w_hn + dr_dh @ rcomp.unsqueeze(-1)
+        # )  # Shape: (B, hidden_size, hidden_size)
 
-        # Efficiently compute the Jacobian
-        jacobian = (
-            torch.diag_embed(z) +
-            torch.diag_embed(1 - z) @ dn_dh +
-            dz_dh @ (hidden.unsqueeze(-1) - n.unsqueeze(-1))
-        )
+        # # Efficiently compute the Jacobian
+        # jacobian = (
+        #     torch.diag_embed(z) +
+        #     torch.diag_embed(1 - z) @ dn_dh +
+        #     dz_dh @ (hidden.unsqueeze(-1) - n.unsqueeze(-1))
+        # )
+
+        # ---------------------------------------------------------------------
+        # 1) Forward pass to get gates and next hidden state
+        # ---------------------------------------------------------------------
+        # Reset gate
+        ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr   # shape (B, hidden_size)
+        r = torch.sigmoid(ract)                                # (B, hidden_size)
+    
+        # Update gate
+        zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz   # (B, hidden_size)
+        z = torch.sigmoid(zact)                                # (B, hidden_size)
+    
+        # Candidate hidden
+        rcomp = hidden @ w_hn.t() + b_hn                       # (B, hidden_size)
+        n_act = input @ w_in.t() + b_in + r * rcomp                # (B, hidden_size)
+        n = torch.tanh(n_act)                                  # (B, hidden_size)
+    
+        # h_t = z * hidden + (1 - z) * n
+    
+        # ---------------------------------------------------------------------
+        # 2) Gate derivatives (elementwise)
+        # ---------------------------------------------------------------------
+        r_grad = r * (1 - r)      # d(r)/d(ract)
+        z_grad = z * (1 - z)      # d(z)/d(zact)
+        n_grad = 1 - n * n        # d(n)/d(n_act)
+    
+        # ---------------------------------------------------------------------
+        # 3) Build the partial derivatives for r, z, n wrt hidden
+        #    We'll do a batch dimension B, so we do batched matrix multiplications.
+        # ---------------------------------------------------------------------
+    
+        B, hidden_size = hidden.shape
+    
+        # Expand W matrices to shape (B, hidden_size, hidden_size) for batched matmul
+        w_hrB = w_hr.unsqueeze(0).expand(B, -1, -1)  # (B, hidden_size, hidden_size)
+        w_hzB = w_hz.unsqueeze(0).expand(B, -1, -1)
+        w_hnB = w_hn.unsqueeze(0).expand(B, -1, -1)
+    
+        # diag_embed(vec) => shape (B, hidden_size, hidden_size) with vec on diagonal
+        # we can use torch.diag_embed(vec) for each batch row
+        Dr = torch.bmm(torch.diag_embed(r_grad), w_hrB)  # D_r = diag(r') * W_hr
+        Dz = torch.bmm(torch.diag_embed(z_grad), w_hzB)  # D_z = diag(z') * W_hz
+    
+        # Next, partial of (r * rcomp) w.r.t. hidden => product rule:
+        # rcomp = hidden @ w_hn^T + b_hn => partial rcomp wrt hidden = w_hn
+        # => partial (r_j * rcomp_j) wrt hidden = diag(rcomp) Dr + diag(r) w_hn
+        # for each sample in the batch:
+        # We'll define it as J_a below:
+        rcomp_diag = torch.diag_embed(rcomp)      # (B, hidden_size, hidden_size)
+        r_diag = torch.diag_embed(r)             # (B, hidden_size, hidden_size)
+    
+        # J_a = partial (r * rcomp) / partial hidden
+        #      = rcomp_diag @ Dr + r_diag @ w_hnB
+        J_a = torch.bmm(rcomp_diag, Dr) + torch.bmm(r_diag, w_hnB)
+    
+        # partial n wrt hidden => partial n wrt n_act times partial n_act wrt hidden
+        # n_grad = 1 - n^2 => diag(n_grad)
+        # => J_n = diag(n_grad) @ J_a
+        J_n = torch.bmm(torch.diag_embed(n_grad), J_a)
+    
+        # ---------------------------------------------------------------------
+        # 4) Combine everything for h_t = z*h_{t-1} + (1-z)*n
+        # ---------------------------------------------------------------------
+        # We'll break it down:
+        # partial(z*h_{t-1}) wrt h_{t-1}
+        #   = diag(z) + diag(h_{t-1}) * Dz
+        #
+        # partial((1-z)*n) wrt h_{t-1}
+        #   = - diag(n) Dz + diag(1-z) J_n
+        #
+        # Summation of these pieces is the full Jacobian.
+    
+        hidden_diag = torch.diag_embed(hidden)  # (B, hidden_size, hidden_size)
+        z_diag = torch.diag_embed(z)
+        n_diag = torch.diag_embed(n)
+        one_minus_z_diag = torch.diag_embed(1 - z)
+    
+        part1 = z_diag + torch.bmm(hidden_diag, Dz)     # z * h_{t-1} part
+        part2 = torch.bmm(-n_diag, Dz) + torch.bmm(one_minus_z_diag, J_n)
+    
+        jacobian = part1 + part2  # (B, hidden_size, hidden_size)
 
         return jacobian.squeeze(-1)
 
@@ -619,7 +718,7 @@ class ReparameterizedCell(nn.Module):
     Takes an original cell as input and performs reparameterization.
 
     """
-    def __init__(self, original_cell, P0, P0_inv, eigenvalues, complex=False):
+    def __init__(self, original_cell):
         """
         Args:
             original_cell (nn.GRUCell): The original GRU cell to reparameterize.
@@ -628,15 +727,15 @@ class ReparameterizedCell(nn.Module):
         """
         super().__init__()
         self.original_cell = original_cell
-        self.hidden_size = original_cell.hidden_size
-        self.input_size = original_cell.input_size
+        hidden_size = self.original_cell.hidden_size
+        
+        self.A = nn.Parameter(torch.zeros(hidden_size, hidden_size, dtype=torch.complex64))
 
-        # Store P0 and P0_inv as buffers (non-trainable parameters)
-        self.register_buffer("P0", P0)
-        self.register_buffer("P0_inv", P0_inv)
-        self.register_buffer("eigenvalues", eigenvalues)
+        # # Store P and P_inv as buffers (non-trainable parameters)
+        # self.register_buffer("P", P)
+        # self.register_buffer("P_inv", torch.linalg.inv(self.P))
    
-    def forward(self, input, hx):
+    def forward(self, us, zs):
         """
         Forward pass in the Z-space with reparameterized parameters.
 
@@ -647,25 +746,21 @@ class ReparameterizedCell(nn.Module):
         Returns:
             new_hx (torch.Tensor): Updated hidden state, shape (batch_size, hidden_size).
         """
-        # Transform the hidden state to Z-space:
-        # z_hx = torch.matmul(hx, self.P0_inv)
-        z_hx = torch.einsum('bi,ji->bj', hx.to(dtype=self.P0.dtype), self.P0)
 
-        # use the original cell's weights the output would be
-        #if self.complex:
-        #    input = input.to(dtype=torch.complex64)
-        #    z_hx = z_hx.to(dtype=torch.complex64)
+        A_skew = 0.5 * (self.A - self.A.T.conj())
+        # Exponential map to get an orthogonal matrix
+        P = torch.linalg.matrix_exp(A_skew)
+        P_inv = torch.linalg.inv(P)
+        
+        # Transform the hidden state to S-space:
+        states = torch.einsum('ik,...k->...i', P, zs.to(dtype=P.dtype)).real
+        states = self.original_cell(us, states).to(dtype=P.dtype)
+        # new_zs = torch.func.vmap(torch.linalg.solve, in_dims=(None, 0))(self.P, states)
+        new_zs = torch.einsum('ik,...k->...i', P_inv, states)
 
-        z_new = self.original_cell(input, z_hx)        
-        #o_old, z_old = self.original_cell(input, hx)
+        return new_zs
 
-        # Transform back to X-space
-        # z_new = z_new @ self.P0
-        output = torch.einsum('bi,ji->bj', z_new, self.P0_inv)
-
-        return output
-
-    def diagonal_derivative(self, input, hx):
+    def diagonal_derivative(self, us, zs):
         """
         Compute the diagonal of the Jacobian in Z-space.
 
@@ -676,21 +771,36 @@ class ReparameterizedCell(nn.Module):
         Returns:
             diag_jacobian_z (torch.Tensor): Diagonal of the Jacobian in Z-space, shape (batch_size, hidden_size).
         """
-        # z_hx = torch.matmul(hx, self.P0_inv)
 
-        # Compute the Jacobian diagonal in the Z-space
-        jacobian_x = self.original_cell.full_derivative(input, hx)
-        jacobian = torch.einsum('ai,bij,jc->bac', self.P0_inv, jacobian_x, self.P0)
-        # print(jacobian)
+        A_skew = 0.5 * (self.A - self.A.T.conj())
+        # Exponential map to get an orthogonal matrix
+        P = torch.linalg.matrix_exp(A_skew)
+        P_inv = torch.linalg.inv(P)
+        
+        states = torch.einsum('ik,...k->...i', P, zs.to(dtype=P.dtype))
+
+        # Compute the Jacobian diagonal in the S-space
+        jacobian_s = self.original_cell.full_derivative(us, states.real)
+        jacobian = torch.einsum('ai,bij,jc->bac', P_inv, jacobian_s.to(dtype=P.dtype), P)
+        # jacobian = torch.einsum('bij,jc->bic', jacobian_s.to(dtype=self.P.dtype), self.P)
+        # jacobian = torch.func.vmap(torch.linalg.solve, in_dims=(None, 0))(self.P, jacobian)
         diag_jacobian = torch.func.vmap(torch.diag)(jacobian)
 
-        #if self.complex:
-        #    diag_jacobian_z = diag_jacobian_z.to(dtype=torch.complex64)
+        # # Compute the absolute values of the eigenvalues
+        # abs_values = torch.abs(diag_jacobian)
+        # # Clip the magnitudes to 1
+        # diag_jacobian = diag_jacobian / torch.maximum(abs_values, torch.tensor(1.0, device=diag_jacobian.device))
+
+        # mag = torch.max(diag_jacobian.abs(), dim=-1, keepdim=True).values
+        # mask = mag[:, 0] > 1
+        # diag_jacobian[mask] = diag_jacobian[mask] / mag[mask]
+        # # diag_jacobian = diag_jacobian / mag
+        # print(diag_jacobian.abs().max())
 
         return diag_jacobian
 
 
-def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None, h0=None, as_real=False):
+def reparameterize_cell(model_cell, input_size, hidden_size, x0=None, h0=None):
     """
     Compute the Jacobian at (x0, h0), diagonalize it, and return a reparameterized cell.
 
@@ -705,25 +815,27 @@ def diagonalize_and_reparameterize(model_cell, input_size, hidden_size, x0=None,
         reparam_cell (ReparameterizedCell): The reparameterized cell.
     """
     # Compute the Jacobian numerically around x0, h0
-    if x0 is None:
-        x0 = torch.zeros(1, input_size, requires_grad=True)  # Correct input size 
-    if h0 is None:
-        h0 = torch.zeros(1, hidden_size, requires_grad=True)  # Correct hidden size
+    # if x0 is None:
+    #     x0 = torch.zeros(1, input_size, requires_grad=True)  # Correct input size 
+    # if h0 is None:
+    #     h0 = torch.zeros(1, hidden_size, requires_grad=True)  # Correct hidden size
 
-    # Get the Jacobian
-    jacobian = torch.autograd.functional.jacobian(lambda h: model_cell(x0, h), h0)
+    # # Get the Jacobian
+    # # jacobian = model_cell.full_derivative(x0, h0)
+    # jacobian = torch.autograd.functional.jacobian(lambda h: model_cell(x0, h), h0)
 
-    # Reshape Jacobian to (hidden_size, hidden_size)
-    J_f = jacobian.squeeze()
+    # # Reshape Jacobian to (hidden_size, hidden_size)
+    # J_f = jacobian.squeeze()
 
-    assert J_f.shape == (hidden_size, hidden_size)
-    # Perform eigendecomposition: J_f = P0 @ V0 @ P0_inv
-    # Given Jacobian not symmetric, the eigenvectors are imaginary 
-    eigenvalues, eigvecs = torch.linalg.eig(J_f)
-
-    P0_inv = torch.linalg.inv(eigvecs.cpu()).to(device=J_f.device)
+    # assert J_f.shape == (hidden_size, hidden_size)
+    # # Perform eigendecomposition: J_f = P0 @ V0 @ P0_inv
+    # # Given Jacobian not symmetric, the eigenvectors are imaginary
+    # eigenvalues, P = torch.linalg.eig(J_f)
+    # # P_inv = torch.linalg.inv(P.cpu()).to(device=J_f.device)
+    # P = torch.eye(hidden_size)
+    
     # Return the reparameterized cell
-    return ReparameterizedCell(to_complex(model_cell), eigvecs, P0_inv, eigenvalues)
+    return ReparameterizedCell(model_cell)
 
 
 class pRNN(nn.Module):
@@ -789,7 +901,7 @@ class pRNN(nn.Module):
                 input_size_, hidden_size, bias=bias
             )
             if reparameterize:
-                cell = diagonalize_and_reparameterize(cell, input_size_, hidden_size)
+                cell = reparameterize_cell(cell, input_size_, hidden_size)
             self.forward_cells.append(cell)
 
         if self.learn_diags:
@@ -826,7 +938,7 @@ class pRNN(nn.Module):
                     input_size_, hidden_size, bias=bias
                 )
                 if reparameterize:
-                    cell = diagonalize_and_reparameterize(cell, input_size_, hidden_size)
+                    cell = reparameterize_cell(cell, input_size_, hidden_size)
                 self.reverse_cells.append(cell)
 
 
@@ -876,22 +988,48 @@ class pRNN(nn.Module):
         h_n = torch.empty_like(hx)
 
         for layer in range(self.num_layers):
+            if self.reparameterize:
+                A = self.forward_cells[layer].A
+                A_skew = 0.5 * (A - A.T.conj())
+                # Exponential map to get an orthogonal matrix
+                P = torch.linalg.matrix_exp(A_skew)
+                P_inv = torch.linalg.inv(P)
+                # h0 = torch.func.vmap(torch.linalg.solve, in_dims=(None, 0))(P, hx[layer * num_directions].to(dtype=P.dtype))
+                h0 = torch.einsum('ik,...bk->...bi', P_inv, hx[layer * num_directions].to(dtype=P_inv.dtype))
+            else:
+                h0 = hx[layer * num_directions]
             forward_layer_output = self._process_layer(
                 output, 
-                hx[layer * num_directions],
+                h0,
                 self.forward_cells[layer],
                 self.fwd_diagonals[layer], 
                 self.fwd_state_fns[layer]
             )
+            if self.reparameterize:
+                # P = self.forward_cells[layer].P
+                forward_layer_output = torch.einsum('ik,...tk->...ti', P, forward_layer_output).real
+            
             if self.bidirectional:
+                if self.reparameterize:
+                    A = self.reverse_cells[layer].A
+                    A_skew = 0.5 * (A - A.T.conj())
+                    # Exponential map to get an orthogonal matrix
+                    P = torch.linalg.matrix_exp(A_skew)
+                    P_inv = torch.linalg.inv(P)                    # h0 = torch.func.vmap(torch.linalg.solve, in_dims=(None, 0))(P, hx[layer * num_directions + 1].to(dtype=P.dtype))
+                    h0 = torch.einsum('ik,...bk->...bi', P_inv, hx[layer * num_directions + 1].to(dtype=P_inv.dtype))
+                else:
+                    h0 = hx[layer * num_directions + 1]
                 reverse_layer_output = self._process_layer(
                     output.flip(1),
-                    hx[layer * num_directions + 1],
+                    h0,
                     self.reverse_cells[layer],
                     self.rev_diagonals[layer],
                     self.rev_state_fns[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
+                if self.reparameterize:
+                    # P = self.reverse_cells[layer].P
+                    reverse_layer_output = torch.einsum('ik,...tk->...ti', P, reverse_layer_output).real
                 
                 # concatenate outputs
                 layer_output = torch.cat(
@@ -907,11 +1045,11 @@ class pRNN(nn.Module):
             output = layer_output
             if self.dropout_layer and layer < self.num_layers - 1:
                 output = self.dropout_layer(output)
-
+        
         if not self.batch_first:
             output = output.transpose(0, 1)
 
-        return output.to(dtype=torch.float32), h_n.to(dtype=torch.float32)
+        return output, h_n
 
     @checkpoint
     def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None):
