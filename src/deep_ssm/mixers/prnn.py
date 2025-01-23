@@ -503,6 +503,7 @@ class LearnableDiagonal(torch.nn.Module):
     """
     Note that you could go even simpler and have the diagonal not be input and hidden dependent but just a learnable parameter
     I think this would be more like LTI (S5), instead of LTV (S6).
+    We may have made this too complicated. What if we just use a linear layer?
     """
     def __init__(self, input_size, hidden_size):
         super().__init__()
@@ -511,8 +512,8 @@ class LearnableDiagonal(torch.nn.Module):
 
         # Linear layers for input and state transformations
         self.input_linear = nn.Linear(input_size, hidden_size)
-        self.state_linear = nn.Linear(hidden_size, hidden_size)
-        self.ffn = FeedForward(hidden_size, hidden_size)
+        # self.state_linear = nn.Linear(hidden_size, hidden_size)
+        # self.ffn = FeedForward(hidden_size, hidden_size)
 
     def forward(self, input, state):
         """
@@ -524,8 +525,9 @@ class LearnableDiagonal(torch.nn.Module):
             Diagonal parameters (batch_size, size), values bounded between -1 and 1
         """
         # Linear readout from input and state
-        linear_out = self.input_linear(input) + self.state_linear(state)
-        nonlinear_out = self.ffn(linear_out) # add more nonlinearity
+        # linear_out = self.input_linear(input) + self.state_linear(state)
+        # nonlinear_out = self.ffn(linear_out) # add more nonlinearity
+        nonlinear_out = self.input_linear(input)
 
         # Apply tanh to bound values between -1 and 1
         return torch.tanh(nonlinear_out)
@@ -750,7 +752,14 @@ class pRNN(nn.Module):
         else:
             self.fwd_state_fns = [None] * num_layers
         if self.use_conv:
-            self.fwd_convs = nn.ModuleList([CausalConv1d(hidden_size, 4) for i in range(num_layers)])
+            self.fwd_convs = nn.ModuleList(
+                [
+                    CausalConv1d(
+                        input_size if i == 0 else hidden_size * num_directions, 4
+                    )
+                    for i in range(num_layers)
+                ]
+            )
         else:
             self.fwd_convs = [None] * num_layers
 
@@ -764,7 +773,6 @@ class pRNN(nn.Module):
                 if reparameterize:
                     cell = diagonalize_and_reparameterize(cell, input_size_, hidden_size)
                 self.reverse_cells.append(cell)
-
 
             if self.learn_diags:
                 self.rev_diagonals = nn.ModuleList(
@@ -791,7 +799,14 @@ class pRNN(nn.Module):
             else:
                 self.rev_state_fns = [None] * num_layers
             if self.use_conv:
-                self.rev_convs = nn.ModuleList([CausalConv1d(hidden_size, 4) for i in range(num_layers)])
+                self.rev_convs = nn.ModuleList(
+                    [
+                        CausalConv1d(
+                            input_size if i == 0 else hidden_size * num_directions, 4
+                        )
+                        for i in range(num_layers)
+                    ]
+                )
             else:
                 self.rev_convs = [None] * num_layers
 
@@ -800,7 +815,7 @@ class pRNN(nn.Module):
     def forward(self, input, hx=None):
         if not self.batch_first:
             input = input.transpose(0, 1)
-    
+
         batch_size = input.size(0)
         num_directions = 2 if self.bidirectional else 1
 
@@ -811,7 +826,7 @@ class pRNN(nn.Module):
                 self.hidden_size,
                 device=input.device,
             )
-            # Here is where we should see the layers 
+            # Here is where we should see the layers
         output = input
         h_n = torch.empty_like(hx)
 
@@ -834,7 +849,7 @@ class pRNN(nn.Module):
                     self.rev_convs[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
-                
+
                 # concatenate outputs
                 layer_output = torch.cat(
                     [forward_layer_output, reverse_layer_output], dim=2
