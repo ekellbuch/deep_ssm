@@ -52,6 +52,122 @@ class RMSNorm(nn.Module):
         return torch.nn.functional.normalize(x, dim=-1) * self.scale * self.gamma
 
 
+class TTTLinear(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        d_conv,
+        layer_idx=None,  # unused
+        num_iters=2,  # number of iterations for quasi-DEER
+        checkpoint=True,
+        parallel=True,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.num_iters = num_iters
+        self.checkpoint = checkpoint
+        self.parallel = parallel
+
+        self.q_conv1d = FastDepthwiseCausalConv1d(d_model, kernel_size=d_conv, bias=True, channel_last=True)
+        self.k_conv1d = FastDepthwiseCausalConv1d(d_model, kernel_size=d_conv, bias=True, channel_last=True)
+        # assume single head for now; need to change proj and out_proj if doing multihead
+        self.in_proj = nn.Linear(d_model, 3 * d_model + 1, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        self.norm = RMSNorm(d_model)
+
+        # mamba style decay
+        num_heads = 1
+        A = torch.empty(num_heads, dtype=torch.float32).uniform_(0, 16)
+        A_log = torch.log(A)
+        self.A_log = nn.Parameter(A_log)
+        dt_min=0.001
+        dt_max=0.1
+        dt_init_floor=1e-4
+        dt = torch.exp(
+            torch.rand(num_heads) * (math.log(dt_max) - math.log(dt_min))
+            + math.log(dt_min)
+        )
+        dt = torch.clamp(dt, min=dt_init_floor)
+        inv_dt = dt + torch.log(-torch.expm1(-dt))
+        self.dt_bias = nn.Parameter(inv_dt)
+
+        input_size = d_model
+        output_size = d_model
+
+        self.W_size = (input_size, output_size)
+
+        W_0 = nn.init.zeros_(torch.empty(1, *self.W_size))
+
+        vectorized_params_0 = torch.cat([vectorize(p) for p in [W_0]], dim=-1)
+        #self.register_buffer("vectorized_params_0", vectorized_params_0)
+        self.register_parameter("vectorized_params_0", nn.Parameter(vectorized_params_0))
+
+    def transition_fn(self, input, prev_state):
+        k, v, lr = torch.split(input, [self.d_model, self.d_model, 1], dim=-1)
+        prev_vectorized_params = prev_state
+        params = self.extract_params(prev_vectorized_params)
+        new_params = linear_gradient_update(params, k, v, lr)
+        new_vectorized_params = torch.cat([vectorize(p) for p in new_params], dim=-1)
+        return new_vectorized_params
+
+    def diagonal_derivative(self, input, prev_state):
+        k, v, lr = torch.split(input, [self.d_model, self.d_model, 1], dim=-1)
+        params = self.extract_params(prev_state)
+        diags = linear_d_grad_update_d_params(params, k, v, lr, diagonal=True)
+        vectorized_diags = torch.cat([vectorize(p) for p in diags], dim=-1)
+        return vectorized_diags
+
+    def extract_params(self, vectorized_params):
+        B, _ = vectorized_params.shape
+        W, = torch.split(vectorized_params, [math.prod(self.W_size)], dim=-1)
+        W = W.view(B, *self.W_size)  # -1 for batch dim
+        params = (W,) 
+        return params
+    
+    @checkpoint
+    def forward(self, x):
+        # x is (B, T, D)
+        B, T, D = x.shape
+        q, k, v, log_lr_ = torch.split(self.in_proj(x), [self.d_model, self.d_model, self.d_model, 1], dim=-1)
+        q, k = self.q_conv1d(q), self.k_conv1d(k)
+
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
+
+        # mamba style decay 
+        log_lr = -self.A_log.exp() * torch.nn.functional.softplus(log_lr_ + self.dt_bias)
+        lr = 0.1 * log_lr.exp()  # Initialize at 0 learning rate to prevent blowing up
+        #lr = 0.1 * torch.ones_like(log_lr)
+
+        vectorized_params_0 = self.vectorized_params_0.expand(B, -1)
+        if self.parallel:
+            vectorized_params = quasi_deer_torch(
+                f=self.transition_fn,
+                diagonal_derivative=self.diagonal_derivative,
+                initial_state=vectorized_params_0,
+                states_guess=repeat(vectorized_params_0, "B D -> B D T", T=T),
+                inputs=rearrange(torch.cat([k, v, lr], dim=-1), "B T D -> B D T"),
+                num_iters=self.num_iters,
+                k=0.1,
+            )
+            vectorized_params = rearrange(vectorized_params, "B D T -> (B T) D")
+        else:
+            curr_vectorized_params = vectorized_params_0
+            vectorized_params = []
+            for t in range(T):
+                curr_vectorized_params = self.transition_fn(torch.cat([k[:, t], v[:, t], lr[:, t]], dim=-1), curr_vectorized_params)
+                vectorized_params.append(curr_vectorized_params)
+            vectorized_params = torch.stack(vectorized_params, dim=-2).reshape(B * T, -1)
+
+        params = self.extract_params(vectorized_params)
+
+        y = rearrange(linear(params, rearrange(q, "B T D -> (B T) D")), "(B T) D -> B T D", B=B)
+        #y = self.out_proj(y)  # causes nans
+        #y = self.norm(y)
+        return y  # TODO: use mamba block?
+
+
+
 class TTTMLP(nn.Module):
     def __init__(
         self,
@@ -112,14 +228,14 @@ class TTTMLP(nn.Module):
         k, v, lr = torch.split(input, [self.d_model, self.d_model, 1], dim=-1)
         prev_vectorized_params = prev_state
         params = self.extract_params(prev_vectorized_params)
-        new_params = gradient_update(params, k, v, lr)
+        new_params = mlp_gradient_update(params, k, v, lr)
         new_vectorized_params = torch.cat([vectorize(p) for p in new_params], dim=-1)
         return new_vectorized_params
 
     def diagonal_derivative(self, input, prev_state):
         k, v, lr = torch.split(input, [self.d_model, self.d_model, 1], dim=-1)
         params = self.extract_params(prev_state)
-        diags = d_grad_update_d_params(params, k, v, lr, diagonal=True)
+        diags = mlp_d_grad_update_d_params(params, k, v, lr, diagonal=True)
         vectorized_diags = torch.cat([vectorize(p) for p in diags], dim=-1)
         return vectorized_diags
 
@@ -186,7 +302,7 @@ def batched_diag_kron(A, B):
 def batch_eye(n, batch_size, device=None, dtype=None):
     return torch.eye(n, device=device, dtype=dtype).repeat(batch_size, 1, 1)
 
-def d_grad_loss_d_params(params, x, y_true, diagonal=True):
+def mlp_d_grad_loss_d_params(params, x, y_true, diagonal=True):
     W1, W2, b1 = params
     B, x_dim = x.shape
     B, hidden_size, input_size = W1.shape
@@ -232,7 +348,22 @@ def d_grad_loss_d_params(params, x, y_true, diagonal=True):
 
     return d_grad_loss_d_W1, d_grad_loss_d_W2, d_grad_loss_d_b1
 
-def d_grad_update_d_params(params, x, y_true, lr, diagonal=True):
+def linear_d_grad_loss_d_params(params, x, y_true, diagonal=True):
+    W, = params
+    B, x_dim = x.shape
+
+    phi_t_phi = einsum(x, x, "B hidden1, B hidden2 -> B hidden1 hidden2")
+    d_grad_loss_d_W = matricize_linear_op(
+        A=batch_eye(W.shape[-2], B, device=W.device, dtype=W.dtype),
+        B=phi_t_phi
+    )
+
+    if diagonal:
+        d_grad_loss_d_W = torch.diagonal(d_grad_loss_d_W, dim1=-2, dim2=-1)
+
+    return (d_grad_loss_d_W, )
+
+def mlp_d_grad_update_d_params(params, x, y_true, lr, diagonal=True):
     W1, W2, b1 = params
     B, x_dim = x.shape
     B, hidden_size, input_size = W1.shape
@@ -242,8 +373,12 @@ def d_grad_update_d_params(params, x, y_true, lr, diagonal=True):
     assert b1_dim == hidden_size 
     assert x_dim == input_size
 
-    hessians = d_grad_loss_d_params(params, x, y_true, diagonal=diagonal)
+    hessians = mlp_d_grad_loss_d_params(params, x, y_true, diagonal=diagonal)
 
+    return tuple(vectorize(torch.ones_like(p)) - add_non_batch_dims(lr, hessian) * hessian for p, hessian in zip(params, hessians))
+
+def linear_d_grad_update_d_params(params, x, y_true, lr, diagonal=True):
+    hessians = linear_d_grad_loss_d_params(params, x, y_true, diagonal=diagonal)
     return tuple(vectorize(torch.ones_like(p)) - add_non_batch_dims(lr, hessian) * hessian for p, hessian in zip(params, hessians))
 
 def vectorize(X):
@@ -259,6 +394,12 @@ def matricize_linear_op(A, B):
     B_T = B.transpose(-2, -1)
     B_T_kron_A = rearrange(einsum(B_T, A, "B M N, B P Q -> B M P N Q"), "B M P N Q -> B (M P) (N Q)")
     return B_T_kron_A
+
+def linear(params, x):
+    W, = params
+    B, x_dim = x.shape
+    y = einsum(W, x, "B output hidden, B hidden -> B output")
+    return y
 
 def mlp(params, x):
     W1, W2, b1 = params
@@ -289,7 +430,7 @@ def auto_gradient_update(model, params, x, y_true, lr):
     new_params = tuple(p - add_non_batch_dims(lr, g) * g for p, g in zip(params, grads))
     return new_params
 
-def gradient_update(params, x, y_true, lr):
+def mlp_gradient_update(params, x, y_true, lr):
     W1, W2, b1 = params
     B, x_dim = x.shape
     B, hidden_size, input_size = W1.shape
@@ -311,6 +452,21 @@ def gradient_update(params, x, y_true, lr):
     grad_W2 = -einsum(diff, phi, "B output, B hidden -> B output hidden")
     grad_b1 = -dphi_t_W2_t_diff
     grads = grad_W1, grad_W2, grad_b1
+
+    new_params = tuple(p - add_non_batch_dims(lr, g) * g for p, g in zip(params, grads))
+    return new_params
+
+def linear_gradient_update(params, x, y_true, lr):
+    W, = params
+    B, x_dim = x.shape
+    B, input_size, output_size = W.shape
+    assert x_dim == input_size
+
+    m_x = einsum(W, x, "B output hidden, B hidden -> B output")
+    diff = y_true - m_x
+
+    grad_W = -einsum(diff, x, "B output, B hidden -> B output hidden")
+    grads = (grad_W,)
 
     new_params = tuple(p - add_non_batch_dims(lr, g) * g for p, g in zip(params, grads))
     return new_params

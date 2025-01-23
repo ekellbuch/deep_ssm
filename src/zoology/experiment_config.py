@@ -77,19 +77,29 @@ for input_seq_len, num_kv_pairs in [
                                     parallel=True,  # parallel implementation
                                 ),
                             ),
+                            "tttlinear": dict(
+                                name="zoology.mixers.ttt_mlp.TTTLinear",
+                                kwargs=dict(
+                                    d_conv=d_conv,
+                                    num_iters=2,
+                                    parallel=False,
+                                ),
+                            ),
                             "tttmlp": dict(
                                 name="zoology.mixers.ttt_mlp.TTTMLP",
                                 kwargs=dict(
                                     d_conv=d_conv,
                                     num_iters=2,
+                                    parallel=False,
                                 ),
                             ),
                         }
 
                         for sequence_mixer in [
                             #"attention",
-                            "prnn",
+                            #"prnn",
                             #"tttmlp",
+                            "tttlinear",
                         ]:
                             block_type = "TransformerBlock"
 
