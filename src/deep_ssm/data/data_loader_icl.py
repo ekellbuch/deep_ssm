@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
+import lightning as L
 
 
 class InContextLinearRegressionDataset(Dataset):
@@ -101,6 +102,8 @@ class InContextLinearRegressionDataset(Dataset):
 
             # Return from current batch
             x, y = self._current_batch
+            x = x.transpose(1,2)
+            y = y.transpose(1,2)
             return x[batch_idx], y[batch_idx]
 
     def get_loss(self, y_pred, y_true):
@@ -122,32 +125,35 @@ class InContextLinearRegressionDataModule(L.LightningDataModule):
     def __init__(self, args):
         super().__init__()
         self.args = args
+
+    def setup(self, stage=None):
+
         self.train_dataset = InContextLinearRegressionDataset(
-            n_trajectories=args.n_trajectories,
-            n_w_samples=args.n_w_samples,
-            seq_length=args.seq_length,
-            d_input=args.d_input,
-            d_output=args.d_output,
-            noise_std=args.noise_std,
-            batch_size=args.batch_size,
+            n_trajectories=self.args.n_trajectories,
+            n_w_samples=self.args.n_w_samples,
+            seq_length=self.args.seq_length,
+            d_input=self.args.d_input,
+            d_output=self.args.d_output,
+            noise_std=self.args.noise_std,
+            batch_size=self.args.batch_size,
         )
         self.val_dataset = InContextLinearRegressionDataset(
-            n_trajectories=args.n_trajectories,
-            n_w_samples=args.n_w_samples,
-            seq_length=args.seq_length,
-            d_input=args.d_input,
-            d_output=args.d_output,
-            noise_std=args.noise_std,
-            batch_size=args.batch_size,
+            n_trajectories=self.args.n_trajectories,
+            n_w_samples=self.args.n_w_samples,
+            seq_length=self.args.seq_length,
+            d_input=self.args.d_input,
+            d_output=self.args.d_output,
+            noise_std=self.args.noise_std,
+            batch_size=self.args.batch_size,
         )
         self.test_dataset = InContextLinearRegressionDataset(
-            n_trajectories=args.n_trajectories,
-            n_w_samples=args.n_w_samples,
-            seq_length=args.seq_length,
-            d_input=args.d_input,
-            d_output=args.d_output,
-            noise_std=args.noise_std,
-            batch_size=args.batch_size,
+            n_trajectories=self.args.n_trajectories,
+            n_w_samples=self.args.n_w_samples,
+            seq_length=self.args.seq_length,
+            d_input=self.args.d_input,
+            d_output=self.args.d_output,
+            noise_std=self.args.noise_std,
+            batch_size=self.args.batch_size,
         )
 
     def train_dataloader(self):

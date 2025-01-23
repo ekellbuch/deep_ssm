@@ -1,6 +1,6 @@
 Comment: >
   # This trains the baseline model (fast_dev_run is a debugging flag)
-  python run.py --config-name="baseline_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
+  python run_icl_regression.py --config-name="baseline_prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
 
 project_name: "icl"
 experiment_name: "baseline_prnn"
@@ -15,27 +15,25 @@ data_cfg:
   d_output: 1
   noise_std: 0.1
   batch_size: 1024
+  num_workers: 0
 
 
 module_cfg:
   type: "icl"
 
 model_cfg:
-  type: "bci_gru"
+  type: "icl_reg_model"
   configs:
-    neural_dim: 256 #nInputFeatures
-    n_classes: 40 #nClasses
-    # gru params
-    hidden_dim: 1024 #nUnits
-    layer_dim: 5 #nLayers
-    dropout: 0.4
-    bidirectional: true
-    # base decoder parameters:
-    gaussianSmoothWidth: 2.0
-    unfolding: true
-    strideLen: 4
-    kernelLen: 32
-    input_nonlinearity: "softsign"
+    input_size: 5 #nInputFeatures
+    hidden_size: 256 #nUnits
+    output_size: 1
+    num_layers: 2 #nLayers
+    bidirectional: false
+    dropout: 0
+    num_iters: 1
+    clip: 2
+    method: "gru"
+    family: "prnn"
 
 optimizer_cfg:
   type: "adam"
@@ -60,7 +58,7 @@ callbacks:
     type:
   checkpoint_cfg:
     save_top_k: 1
-    monitor: "ctc_loss_validation"
+    monitor: "loss_validation"
 
 trainer_cfg:
   fast_dev_run: false
@@ -72,7 +70,8 @@ trainer_cfg:
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+  ckpt_path:
 
 hydra:
   run:
-    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
+    dir: "${oc.env:GROUP_SCRATCH}/${oc.env:USER}/outputs/${now:%y-%m-%d}/${now:%H-%M-%S}"

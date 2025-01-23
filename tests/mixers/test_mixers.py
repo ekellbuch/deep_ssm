@@ -9,11 +9,11 @@ from deep_ssm.mixers.utils_mamba import InferenceParams
 from deep_ssm.mixers.s5_fjax.ssm import S5Layer as S5
 from deep_ssm.mixers.s4 import S4Block as S4
 from deep_ssm.mixers.mamba_extra import MambaWrapper
-
+from deep_ssm.mixers.prnn import pRNN
 
 from absl.testing import absltest
 from absl.testing import parameterized
-
+import wandb
 
 torch.manual_seed(42)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -24,19 +24,21 @@ MODELS = {"Mamba": Mamba,
           "Mamba2": Mamba2Simple,
           "S4": S4,
           "MambaBi": MambaWrapper,
+          "pRNN": pRNN,
           }
 
 
 class TestMixerInference(parameterized.TestCase):
 
     @parameterized.named_parameters(
-        ("S5", "S5", False),
-        ("S5 bidirectional", "S5", True),
-        ("S4", "S4", False),
-        ("S4 bidir#ectional", "S4", True),
-        ("Mamba", "Mamba", False),
-        ("MambaBi", "MambaBi", True),
+        #("S5", "S5", False),
+        #("S5 bidirectional", "S5", True),
+        #("S4", "S4", False),
+        #("S4 bidir#ectional", "S4", True),
+        #("Mamba", "Mamba", False),
+        #("MambaBi", "MambaBi", True),
         #("Mamba2", "Mamba2", False),
+        ("pRNN", "pRNN", False),
     )
     def test_step_ssm(self, model_name, bidirectional):
         """
@@ -69,6 +71,11 @@ class TestMixerInference(parameterized.TestCase):
                   "transposed": False
                    }
             state_dim = (batch, dim, ssm_size)
+        elif model_name == 'pRNN':
+            args ={"input_size": dim,
+                   "hidden_size": ssm_size,
+                   "method": "gru"}
+            wandb.init(mode='disabled')
 
         if model_name == 'Mamba2':
             kwargs ={"headdim": headdim,

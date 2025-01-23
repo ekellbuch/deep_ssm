@@ -795,6 +795,34 @@ class pRNN(nn.Module):
             raise ValueError("num_iters must be a positive integer.")
         self.num_iters = new_num_iters
 
+    def step(self, input, h0, cell):
+        """
+        Sequential mode for running the pRNN layer.
+        Processes the input timestep by timestep.
+
+        Args:
+            input: Input to the layer (batch_size, seq_len, input_size)
+            h0: Initial hidden state (batch_size, hidden_size)
+            cell: The RNN cell to process each timestep
+
+        Returns:
+            output: Output tensor (batch_size, seq_len, hidden_size)
+        """
+        batch_size, seq_len, _ = input.size()
+        hidden_size = h0.size(1)
+
+        # Prepare output tensor
+        output = torch.empty(batch_size, seq_len, hidden_size, device=input.device)
+
+        # Initial hidden state
+        h = h0  # Shape: (batch_size, hidden_size)
+
+        # Process input timestep by timestep
+        for t in range(seq_len):
+            h = cell(input[:, t, :], h)  # Update hidden state
+            output[:, t, :] = h  # Store output for current timestep
+        return output
+
     def forward(self, input, hx=None):
         if not self.batch_first:
             input = input.transpose(0, 1)

@@ -1,6 +1,7 @@
 #from .bci_models import MambaDecoder, GRUDecoder, SashimiDecoder, pRNNDecoder
 from . import bci_models
 from . import state_tracking_models
+from .icl_model import pRNNRegressor
 
 all_models = {
   "bci_gru" : bci_models.GRUDecoder,
@@ -11,4 +12,5 @@ all_models = {
   "state_tracking_prnn": state_tracking_models.pRNNDecoder,
   "state_tracking_mamba": state_tracking_models.MambaDecoder,
   "state_tracking_linear": state_tracking_models.LinearRNNDecoder,
+  "icl_reg_model": pRNNRegressor,
 }
