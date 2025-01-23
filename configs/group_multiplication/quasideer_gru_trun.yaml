@@ -3,15 +3,20 @@ Comment: >
   python run_group_multiplication.py --config-name="quasideer_gru_trun" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
   python run_group_multiplication.py --config-name="quasideer_gru_trun" trainer_cfg.max_epochs=4  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
 
+  # Experiments: randomixed last 40 or last 10 truncations
+  # Experiments: fixed truncation truncation
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=10
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=40
+  
 
-project_name: "group_multiplication"
+project_name: "group_multiplication_trun"
 experiment_name: "quasideer_gru"
 
 seed: 0
 
 data_cfg:
   group: "S5"
-  k: 15
+  k: 32
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
@@ -24,7 +29,7 @@ model_cfg:
     hidden_size: 370
     num_layers: 1
     bidirectional: false
-    num_iters: 10
+    num_iters: 6
     method: "gru"
     parallel: true
     k: 0.1
