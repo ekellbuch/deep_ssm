@@ -265,18 +265,14 @@ def quasi_deer_torch(
         # inputs and states are (B,D,T-1)
         As = diagonal_derivative(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
         As = _unbatch_to_time(As, B)  # (B, D, T-1)
-        # print('As: ', As.abs())
         if clip:
             As.clamp_(min=-1, max=1)
         elif k > 0:
             As.mul_(1.0 - k)
         bs = fs - As * states[..., :-1]  # (B, D, T-1)
-        # print('bs: ', bs)
 
         # initial_state is h0
         b0 = f(inputs[..., 0], initial_state)  # h1 = f(e0, h0), (B,D)
-        # print('b0: ', b0)
-        # print('#####################################################')
         A0 = torch.zeros_like(As[..., 0])  # (B,D)
         A = torch.cat(
             [A0.unsqueeze(-1), As, torch.zeros([B, D, padded_T - T], device=device)],
