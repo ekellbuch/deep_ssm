@@ -303,6 +303,47 @@ def batched_diag_kron(A, B):
 def batch_eye(n, batch_size, device=None, dtype=None):
     return torch.eye(n, device=device, dtype=dtype).repeat(batch_size, 1, 1)
 
+def mlp_d_grad_loss_d_params_diagonal(params, x, y_true):
+    W1, W2, b1 = params
+    B, x_dim = x.shape
+    B, hidden_size, input_size = W1.shape
+    B, output_size, W2_in = W2.shape
+    B, b1_dim = b1.shape
+    assert hidden_size == W2_in
+    assert b1_dim == hidden_size 
+    assert x_dim == input_size
+
+    #### first we get the forward pass
+    phi = torch.relu(einsum(W1, x, "B hidden input, B input -> B hidden") + b1)
+    #m_x = einsum(W2, phi, "B output hidden, B hidden -> B output")
+
+    # derivative of relu
+    dphi = (phi > 0).float()  # should be a diagonal matrix but we store as a vector
+
+    #### now we compute the hessians
+    #diff = y_true - m_x  # not needed because when phi is relu, all terms involving diff will be zero (since relu's second derivative is zero)
+    
+    # W2_dphi is a batch of output_size x hidden_size matrices
+    # so dphi_t_W2_t_W2_dphi is a batch of hidden_size x hidden_size matrices
+
+    # compute for W1
+    W2_dphi = W2 * dphi[:, None, :]
+    dphi_t_W2_t_W2_dphi_diagonal = (W2_dphi ** 2).sum(dim=-2)  # B x hidden_size
+    x_x_t = x ** 2  # B x input_size
+
+    # get diagonal of kron(B^T, A) 
+    d_grad_loss_d_W1_diagonal = einsum(x_x_t, dphi_t_W2_t_W2_dphi_diagonal, "b n, b m -> b n m").flatten(1)
+
+    # compute for W2
+    phi_t_phi_diagonal = phi ** 2  # B x hidden_size
+    d_grad_loss_d_W2_diagonal = einsum(phi_t_phi_diagonal, torch.ones((B ,W2.shape[-2]), device=W2.device, dtype=W2.dtype), "b n, b m -> b n m").flatten(1)
+
+    # compute for b1
+    d_grad_loss_d_b1_diagonal = dphi_t_W2_t_W2_dphi_diagonal
+
+    return d_grad_loss_d_W1_diagonal, d_grad_loss_d_W2_diagonal, d_grad_loss_d_b1_diagonal
+
+
 def mlp_d_grad_loss_d_params(params, x, y_true, diagonal=True):
     W1, W2, b1 = params
     B, x_dim = x.shape
@@ -374,7 +415,8 @@ def mlp_d_grad_update_d_params(params, x, y_true, lr, diagonal=True):
     assert b1_dim == hidden_size 
     assert x_dim == input_size
 
-    hessians = mlp_d_grad_loss_d_params(params, x, y_true, diagonal=diagonal)
+    #hessians = mlp_d_grad_loss_d_params(params, x, y_true, diagonal=diagonal)
+    hessians = mlp_d_grad_loss_d_params_diagonal(params, x, y_true)
 
     return tuple(vectorize(torch.ones_like(p)) - add_non_batch_dims(lr, hessian) * hessian for p, hessian in zip(params, hessians))
 
@@ -482,3 +524,23 @@ def linear_gradient_update(params, x, y_true, lr):
 #model(x).shape
 ## %%
 #
+# %%
+device = "cuda:0"
+input_size = 8
+hidden_size = 4
+output_size = 7
+batch_size = 2
+W1 = torch.randn(batch_size, hidden_size, input_size, device=device, requires_grad=True)
+W2 = torch.randn(batch_size, output_size, hidden_size, device=device, requires_grad=True)
+b1 = torch.randn(batch_size, hidden_size, device=device, requires_grad=True)
+x = torch.randn(batch_size, input_size, device=device)
+y_true = torch.randn(batch_size, output_size, device=device)
+
+
+W1_grad, W2_grad, b1_grad = mlp_d_grad_loss_d_params((W1, W2, b1), x, y_true, diagonal=True)
+W1_grad_new, W2_grad_new, b1_grad_new = mlp_d_grad_loss_d_params_diagonal((W1, W2, b1), x, y_true)
+
+assert torch.allclose(W1_grad, W1_grad_new)
+assert torch.allclose(W2_grad, W2_grad_new)
+assert torch.allclose(b1_grad, b1_grad_new)
+# %%
