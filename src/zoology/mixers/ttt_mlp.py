@@ -208,7 +208,7 @@ class TTTMLP(nn.Module):
         self.dt_bias = nn.Parameter(inv_dt)
 
         input_size = d_model
-        hidden_size = d_model // 4
+        hidden_size = d_model
         output_size = d_model
 
         self.W1_size = (hidden_size, input_size)
@@ -217,7 +217,8 @@ class TTTMLP(nn.Module):
 
         # TODO: train these?
         W1_0 = nn.init.xavier_uniform_(torch.empty(1, *self.W1_size))
-        W2_0 = nn.init.xavier_uniform_(torch.empty(1, *self.W2_size))
+        #W2_0 = nn.init.xavier_uniform_(torch.empty(1, *self.W2_size))
+        W2_0 = nn.init.zeros_(torch.empty(1, *self.W2_size))
         b1_0 = torch.zeros(1, *self.b1_size)
 
         vectorized_params_0 = torch.cat([vectorize(p) for p in [W1_0, W2_0, b1_0]], dim=-1)
