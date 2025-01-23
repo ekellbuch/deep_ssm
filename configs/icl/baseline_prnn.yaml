@@ -13,7 +13,7 @@ data_cfg:
   seq_length: 40
   d_input: 5
   d_output: 1
-  noise_std: 0.1
+  noise_std: 1
   batch_size: 1024
   num_workers: 0
 
@@ -30,7 +30,7 @@ model_cfg:
     num_layers: 2 #nLayers
     bidirectional: false
     dropout: 0
-    num_iters: 10
+    num_iters: 5
     clip: 2
     method: "gru"
     family: "prnn"
