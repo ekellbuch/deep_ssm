@@ -33,7 +33,7 @@ optimizer_cfg:
 
 trainer_cfg:
   num_epochs: 100
-  patience: 5
+  patience: 10
   min_delta: 0.0001
   fast_dev_run: False
 

@@ -97,6 +97,7 @@ def main(cfg: DictConfig):
         num_classes=10,
     )
     model.to(device)
+    model = torch.compile(model)
     num_params = sum(p.numel() for p in model.rnn.parameters())
     for p in model.parameters():
         print(p.shape)
