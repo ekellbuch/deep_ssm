@@ -1,4 +1,6 @@
 import os
+os.environ['HF_HOME'] = '/scratch/users/hdlee/tmp'
+os.environ["HF_DATASETS_CACHE"] = '/scratch/users/hdlee/tmp'
 
 import hydra
 import lightning as L
@@ -32,7 +34,7 @@ def train(args):
       output_dir = None
 
     try:
-        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_quasi={args.model_cfg.configs.quasi}_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_quasi={args.model_cfg.configs.quasi}_reparam={args.model_cfg.configs.reparameterize}_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
     except:

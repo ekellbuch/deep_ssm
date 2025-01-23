@@ -23,7 +23,7 @@ class GRUDecoder(nn.Module):
 
 class pRNNDecoder(nn.Module):
     def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1, num_iters=2, bidirectional=False,
-                 method='gru', parallel=True, k=0.0, clip=False, quasi=True, reparameterize=True):
+                 method='gru', parallel=True, k=0.0, clip=False, quasi=True, reparameterize=False):
         super(pRNNDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
