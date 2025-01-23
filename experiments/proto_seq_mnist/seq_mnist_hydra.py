@@ -60,10 +60,10 @@ def main(cfg: DictConfig):
     train_loader, val_loader, test_loader = load_sequential_pixels_all(
         batch_size=batch_size, val_split=0.1, seed=cfg.seed, explore=cfg.data_cfg.explore, dataset_name=cfg.data_cfg.dataset_name)
 
-    # set device
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")  # macOS Metal backend
-    elif torch.cuda.is_available():
+    # # set device
+    # if torch.backends.mps.is_available():
+    #     device = torch.device("mps")  # macOS Metal backend
+    if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
