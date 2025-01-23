@@ -103,7 +103,7 @@ def main(cfg: DictConfig):
         print(p.shape)
     print(f"Number of parameters: {num_params}")
     wandb.config.num_params = num_params
-    wandb.watch(model, log="gradients", log_freq=500)
+    # wandb.watch(model, log="gradients", log_freq=500)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -128,7 +128,7 @@ def main(cfg: DictConfig):
             model.rnn.parallel = True
         correct, total = 0, 0
         train_loss = 0.0
-        grad_norms = []
+        # grad_norms = []
         t0 = time.time()
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
@@ -148,9 +148,9 @@ def main(cfg: DictConfig):
             train_loss += loss.item() * x.size(0)
             loss.backward()
 
-            # Gradient norm monitoring
-            total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
-            grad_norms.append(total_grad_norm)
+            # # Gradient norm monitoring
+            # total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+            # grad_norms.append(total_grad_norm)
 
             if cfg.optimizer_cfg.clip_grads:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer_cfg.grad_clip_val)
@@ -163,7 +163,7 @@ def main(cfg: DictConfig):
                 "train_accuracy": train_acc.item(),
                 "train_loss": train_loss,
                 "train_time": t1 - t0,
-                "avg_grad_norm": sum(grad_norms) / len(grad_norms),
+                # "avg_grad_norm": sum(grad_norms) / len(grad_norms),
             },
             step=epoch,
         )
