@@ -88,11 +88,14 @@ callbacks:
     verbose: false
     mode: "min"
   masking_scheduler:
-    masking_epochs: [ 25, 50]  # epochs where we reduce masking
+    masking_epochs: [25, 50]  # epochs where we reduce masking
     speckled_mask_p_schedule: [ 0.25, 0]
     feature_mask_p_schedule: [ 0.01, 0]
     temporal_mask_n_schedule: [ 0, 0]
   eigen_track:
+  checkpoint_cfg:
+    save_top_k: 1
+    monitor: "ctc_loss_validation"
 
 trainer_cfg:
   fast_dev_run: false
@@ -106,9 +109,6 @@ trainer_cfg:
   limit_train_batches:
   limit_val_batches:
   
-
-checkpoint_cfg:
-  every_n_train_steps: 1000
 
 
 eval_cfg:

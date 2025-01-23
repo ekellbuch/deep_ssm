@@ -1,0 +1,36 @@
+# Created on 2025-01-11
+# Purpose: Testing if training dynamics when running smnist to convergence but only backpropping through the last layer leads to stable dynamics
+# comparing them to sequential
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  seed:
+    values:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+  model_cfg.parallel:
+    values:
+      - True
+      - False
+  model_cfg.method:
+    values:
+      - "gru"
+  model_cfg.learn_diags:
+    values:
+      - False
+  model_cfg.clip:
+    values:
+      - False
+  model_cfg.while_loop:
+    values:
+      - True
+program: seq_mnist_hydra.py
+project: nonlinear_ssm
+name: smnist_qdeer_vs_seq

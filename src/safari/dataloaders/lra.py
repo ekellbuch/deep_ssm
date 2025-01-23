@@ -8,13 +8,70 @@ from pathlib import Path
 import torch
 from torch import nn
 import torch.nn.functional as F
-import torchtext
+#import torchtext
 import torchvision
 from einops.layers.torch import Rearrange, Reduce
 from PIL import Image  # Only used for Pathfinder
 from datasets import DatasetDict, Value, load_dataset
 
 from safari.dataloaders.base import default_data_path, SequenceDataset, ImageResolutionSequenceDataset
+
+# Replace `torchtext.data.utils.get_tokenizer` functionality
+# Define a function outside of the method
+def tokenize_example(example, tokenizer, l_max):
+    return {"tokens": tokenizer(example["text"])[:l_max]}
+
+# Helper: Custom vocabulary builder
+class Vocabulary:
+    def __init__(self, specials=None, min_freq=1):
+        self.token_to_idx = {}
+        self.idx_to_token = []
+        self.min_freq = min_freq
+        self.specials = specials or []
+        self.counter = Counter()
+
+    def add_tokens(self, tokens):
+        self.counter.update(tokens)
+
+    def build_vocab(self):
+        # Add special tokens first
+        self.idx_to_token = list(self.specials)
+        self.token_to_idx = {token: idx for idx, token in enumerate(self.idx_to_token)}
+
+        # Add tokens that meet the frequency threshold
+        for token, freq in self.counter.items():
+            if freq >= self.min_freq and token not in self.token_to_idx:
+                self.idx_to_token.append(token)
+                self.token_to_idx[token] = len(self.token_to_idx)
+
+    def __len__(self):
+        return len(self.idx_to_token)
+
+    def __getitem__(self, token):
+        return self.token_to_idx.get(token, self.token_to_idx.get("<unk>"))
+
+    def encode(self, tokens):
+        return [self[token] for token in tokens]
+
+    def decode(self, indices):
+        return [self.idx_to_token[idx] for idx in indices]
+
+# Helper: Custom CSV/TSV reader
+def read_tabular_file(path, delimiter="\t", col_idx=None, skip_header=False):
+    data = []
+    with open(os.path.expanduser(path), encoding="utf8") as f:
+        reader = csv.reader(f, delimiter=delimiter)
+        if skip_header:
+            next(reader)
+        for line in reader:
+            data.append(line if col_idx is None else [line[c] for c in col_idx])
+    return data
+
+
+def spacy_tokenizer(text):
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+    return [token.text for token in nlp(text)]
 
 
 class IMDB(SequenceDataset):
@@ -99,14 +156,16 @@ class IMDB(SequenceDataset):
         dataset = load_dataset(self._name_, cache_dir=self.data_dir)
         dataset = DatasetDict(train=dataset["train"], test=dataset["test"])
         if self.level == "word":
-            tokenizer = torchtext.data.utils.get_tokenizer(
-                "spacy", language="en_core_web_sm"
-            )
+            #tokenizer = torchtext.data.utils.get_tokenizer(
+            #    "spacy", language="en_core_web_sm"
+            #)
+            tokenizer = spacy_tokenizer
         else:  # self.level == 'char'
             tokenizer = list  # Just convert a string to a list of chars
         # Account for <bos> and <eos> tokens
         l_max = self.l_max - int(self.append_bos) - int(self.append_eos)
-        tokenize = lambda example: {"tokens": tokenizer(example["text"])[:l_max]}
+        #tokenize = lambda example: {"tokens": tokenizer(example["text"])[:l_max]}
+        tokenize = lambda example: tokenize_example(example, tokenizer, l_max)
         dataset = dataset.map(
             tokenize,
             remove_columns=["text"],
@@ -114,6 +173,19 @@ class IMDB(SequenceDataset):
             load_from_cache_file=False,
             num_proc=max(self.n_workers, 1),
         )
+        # Build vocabulary
+        vocab = Vocabulary(
+            specials=(
+                ["<pad>", "<unk>"]
+                + (["<bos>"] if self.append_bos else [])
+                + (["<eos>"] if self.append_eos else [])
+            ),
+            min_freq=self.min_freq,
+        )
+        for tokens in dataset["train"]["tokens"]:
+            vocab.add_tokens(tokens)
+        vocab.build_vocab()
+        """
         vocab = torchtext.vocab.build_vocab_from_iterator(
             dataset["train"]["tokens"],
             min_freq=self.min_freq,
@@ -123,7 +195,9 @@ class IMDB(SequenceDataset):
                 + (["<eos>"] if self.append_eos else [])
             ),
         )
+        
         vocab.set_default_index(vocab["<unk>"])
+        """
 
         numericalize = lambda example: {
             "input_ids": vocab(
@@ -184,22 +258,11 @@ class TabularDataset(torch.utils.data.Dataset):
         if csv_reader_params is None:
             csv_reader_params = {}
         format = format.lower()
-        assert format in ["tsv", "csv"]
-        with io.open(os.path.expanduser(path), encoding="utf8") as f:
-            if format == "csv":
-                reader = torchtext.utils.unicode_csv_reader(f, **csv_reader_params)
-            elif format == "tsv":
-                reader = torchtext.utils.unicode_csv_reader(
-                    f, delimiter="\t", **csv_reader_params
+        assert format.lower() in ["csv", "tsv"], "Unsupported format. Use 'csv' or 'tsv'."
+        delimiter = "," if format.lower() == "csv" else "\t"
+        self._data = read_tabular_file(
+                    path, delimiter=delimiter, col_idx=col_idx, skip_header=skip_header
                 )
-            else:
-                reader = f
-            if skip_header:
-                next(reader)
-            self._data = [
-                line if col_idx is None else [line[c] for c in col_idx]
-                for line in reader
-            ]
 
     def __len__(self):
         return len(self._data)
@@ -314,6 +377,7 @@ class ListOps(SequenceDataset):
             load_from_cache_file=False,
             num_proc=max(self.n_workers, 1),
         )
+        """
         vocab = torchtext.vocab.build_vocab_from_iterator(
             dataset["train"]["tokens"],
             specials=(
@@ -323,6 +387,19 @@ class ListOps(SequenceDataset):
             ),
         )
         vocab.set_default_index(vocab["<unk>"])
+        """
+        # Build vocabulary
+        vocab = Vocabulary(
+            specials=(
+                ["<pad>", "<unk>"]
+                + (["<bos>"] if self.append_bos else [])
+                + (["<eos>"] if self.append_eos else [])
+            ),
+            min_freq=self.min_freq,
+        )
+        for tokens in dataset["train"]["tokens"]:
+            vocab.add_tokens(tokens)
+        vocab.build_vocab()
 
         numericalize = lambda example: {
             "input_ids": vocab(
@@ -636,7 +713,7 @@ class AAN(SequenceDataset):
             load_from_cache_file=False,
             num_proc=max(self.n_workers, 1),
         )
-        vocab = torchtext.vocab.build_vocab_from_iterator(
+        """        vocab = torchtext.vocab.build_vocab_from_iterator(
             dataset["train"]["tokens1"] + dataset["train"]["tokens2"],
             specials=(
                 ["<pad>", "<unk>"]
@@ -645,6 +722,19 @@ class AAN(SequenceDataset):
             ),
         )
         vocab.set_default_index(vocab["<unk>"])
+        """
+        # Build vocabulary
+        vocab = Vocabulary(
+            specials=(
+                ["<pad>", "<unk>"]
+                + (["<bos>"] if self.append_bos else [])
+                + (["<eos>"] if self.append_eos else [])
+            ),
+            min_freq=self.min_freq,
+        )
+        for tokens in dataset["train"]["tokens"]:
+            vocab.add_tokens(tokens)
+        vocab.build_vocab()
 
         encode = lambda text: vocab(
             (["<bos>"] if self.append_bos else [])

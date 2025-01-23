@@ -1,7 +1,6 @@
 """
-parallel RNN mixer
-
-Includes the code for quasi deer (see quasi_deer_torch). 
+MinRNN mixer
+Using quasi-DEER!
 """
 
 import torch
@@ -21,6 +20,8 @@ except:
     except ImportError:
         print("accelerated_scan not installed; skipping. You won't be able to use the parallel implementation of pRNN.")
 import wandb
+
+import pdb
 
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
 
@@ -66,6 +67,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
 
     Notes:
         VERY important!! Note that step needs to close over initial_state and inputs
+        Note, if while loop is true, then num_iters controls the max number of iters!
     """
     total_nans = 0
     if last_only:
@@ -75,19 +77,18 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
                 total_nans += isnan
         states_guess = step(states_guess)
     elif while_loop:
+        # currently not tracking nans
         err = 100
         count = 0
-        with torch.no_grad():
-            while err > 1e-4:
-                states_guess_new, isnan = step(states_guess)
-                total_nans += isnan
+        while err > 1e-4:
+            states_guess_new = checkpoint_torch(lambda s: step(s)[0], states_guess, use_reentrant=False)
+            # pdb.set_trace()
+            with torch.no_grad():
                 err = torch.max(torch.abs(states_guess_new - states_guess))
-                states_guess = states_guess_new
-                count += 1
-                if count > 1000:
-                    break
-        states_guess, isnan = step(states_guess)
-        count += 1
+            states_guess = states_guess_new
+            count += 1
+            if count > num_iters:
+                break
     else:
         for _ in range(num_iters):
             states_guess, isnan = step(states_guess)
@@ -96,7 +97,7 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
     if while_loop:
         # print("Number of iterations: ", count)
         wandb.log({"num_iters": count})  # is this going to break everything?
-    # wandb.log({"total_nans": total_nans})
+    wandb.log({"total_nans": total_nans})
     return states_guess  # deer_traces[-1]  # (B, D, T)
 
 def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, while_loop=False, derivative_fn=None, clip=False):
@@ -121,7 +122,7 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
 
         Note:
             we have closed over initial_state and inputs
-            This implementation of deer is sequential! 
+            This implementation of deer is sequential!
         """
         B, D, T = states.shape
         prev_state = f(inputs[..., 0], initial_state) # (B,D), in ELK paper notation this is s_1
@@ -130,7 +131,6 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
             prev_state_prev_iter = states[..., t] # (B,D)
             prev_state_diff = prev_state - prev_state_prev_iter # (B,D)
             curr_input = inputs[..., t+1]
-
             if derivative_fn:
                 jacobian_f = derivative_fn(curr_input, prev_state_prev_iter)  # (B, D)
                 f_curr = f(curr_input, prev_state_prev_iter)  # (B, D)
@@ -367,18 +367,6 @@ def checkpoint(f):
             return f(self, *args)
     return f_
 
-def to_complex(model, dtype=torch.complex64):
-    """
-    Convert all parameters and buffers of the module to the specified complex dtype.
-    Args:
-        dtype: The complex data type to convert to, e.g., torch.complex64 or torch.complex128.
-    """
-    for param in model.parameters():
-        param.data = param.data.to(dtype)
-        if param.grad is not None:
-            param.grad.data = param.grad.data.to(dtype)
-    return model
-
 class AugmentedGRUCell(nn.GRUCell):
     """
     torch.nn.GRUCell with diagonal derivative:
@@ -387,52 +375,7 @@ class AugmentedGRUCell(nn.GRUCell):
     def __init__(self, input_size, hidden_size, bias=True):
         super().__init__(input_size, hidden_size, bias)
 
-    def forward(self, input, hidden):
-        """
-        Forward pass for the GRU cell with batch processing.
-        Args:
-            input: Input tensor at the current time step, shape (batch_size, input_size).
-            hidden: Hidden state tensor from the previous time step, shape (batch_size, hidden_size).
-        Returns:
-            new_hidden: Updated hidden state, shape (batch_size, hidden_size).
-        """
-        # Cast input and hidden to the model parameter dtype
-        dtype = self.weight_ih.dtype
-        input = input.to(dtype)
-        hidden = hidden.to(dtype)
-
-        # Chunk the weight matrices for the reset (r), update (z), and candidate (n) gates
-        w_ir, w_iz, w_in = self.weight_ih.chunk(3, 0)  # input-to-hidden weights
-        w_hr, w_hz, w_hn = self.weight_hh.chunk(3, 0)  # hidden-to-hidden weights
-
-        # Compute the reset gate
-        r = torch.sigmoid(
-            torch.einsum('bi,oi->bo', input, w_ir) + self.bias_ih[:self.hidden_size] +
-            torch.einsum('bh,oh->bo', hidden, w_hr) + self.bias_hh[:self.hidden_size]
-        )
-
-        # Compute the update gate
-        z = torch.sigmoid(
-            torch.einsum('bi,oi->bo', input, w_iz) + self.bias_ih[self.hidden_size:2*self.hidden_size] +
-            torch.einsum('bh,oh->bo', hidden, w_hz) + self.bias_hh[self.hidden_size:2*self.hidden_size]
-        )
-
-        # Compute the new gate
-        n = torch.tanh(
-            torch.einsum('bi,oi->bo', input, w_in) + self.bias_ih[2*self.hidden_size:] +
-            r * (torch.einsum('bh,oh->bo', hidden, w_hn) + self.bias_hh[2*self.hidden_size:])
-        )
-
-        # Compute the new hidden state
-        new_hidden = (1 - z) * n + z * hidden
-        return new_hidden
-
     def diagonal_derivative(self, input, hidden):
-        # Cast input and hidden to the model parameter dtype
-        dtype = self.weight_ih.dtype
-        input = input.to(dtype)
-        hidden = hidden.to(dtype)
-
         batch_size, hidden_size = hidden.shape
         input_size = input.shape[1]
 
@@ -489,11 +432,6 @@ class AugmentedGRUCell(nn.GRUCell):
         return diag_jacobian
 
     def full_derivative_v2(self, input, hidden):
-        # Cast input and hidden to the model parameter dtype
-        dtype = self.weight_ih.dtype
-        input = input.to(dtype)
-        hidden = hidden.to(dtype)
-
         batch_size, hidden_size = hidden.shape
 
         # Chunk weights and biases
@@ -533,11 +471,6 @@ class AugmentedGRUCell(nn.GRUCell):
         return jacobian.squeeze(-1)
 
     def full_derivative(self, input, hidden):
-        # Cast input and hidden to the model parameter dtype
-        dtype = self.weight_ih.dtype
-        input = input.to(dtype)
-        hidden = hidden.to(dtype)
-
         batch_size, hidden_size = hidden.shape
 
         # Chunk weights and biases
@@ -797,7 +730,7 @@ class ReparameterizedCell(nn.Module):
         # # diag_jacobian = diag_jacobian / mag
         # print(diag_jacobian.abs().max())
 
-        return diag_jacobian
+        return diag_jacobian_z
 
 
 def reparameterize_cell(model_cell, input_size, hidden_size, x0=None, h0=None):
@@ -840,7 +773,7 @@ def reparameterize_cell(model_cell, input_size, hidden_size, x0=None, h0=None):
 
 class pRNN(nn.Module):
     """
-    An RNN that can be evaluated in parallel using quasi-ELK
+    An RNN that can be evaluated in parallel using quasi-ELK.
     """
 
     def __init__(
@@ -969,10 +902,48 @@ class pRNN(nn.Module):
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
 
+    def set_num_iters(self, new_num_iters):
+        """
+        Update the number of iterations for quasi-DEER dynamically.
+        Args:
+            new_num_iters (int): The new number of iterations to set.
+        """
+        if not isinstance(new_num_iters, int) or new_num_iters <= 0:
+            raise ValueError("num_iters must be a positive integer.")
+        self.num_iters = new_num_iters
+
+    def step(self, input, h0, cell):
+        """
+        Sequential mode for running the pRNN layer.
+        Processes the input timestep by timestep.
+
+        Args:
+            input: Input to the layer (batch_size, seq_len, input_size)
+            h0: Initial hidden state (batch_size, hidden_size)
+            cell: The RNN cell to process each timestep
+
+        Returns:
+            output: Output tensor (batch_size, seq_len, hidden_size)
+        """
+        batch_size, seq_len, _ = input.size()
+        hidden_size = h0.size(1)
+
+        # Prepare output tensor
+        output = torch.empty(batch_size, seq_len, hidden_size, device=input.device)
+
+        # Initial hidden state
+        h = h0  # Shape: (batch_size, hidden_size)
+
+        # Process input timestep by timestep
+        for t in range(seq_len):
+            h = cell(input[:, t, :], h)  # Update hidden state
+            output[:, t, :] = h  # Store output for current timestep
+        return output
+
     def forward(self, input, hx=None):
         if not self.batch_first:
             input = input.transpose(0, 1)
-    
+
         batch_size = input.size(0)
         num_directions = 2 if self.bidirectional else 1
 
@@ -983,7 +954,7 @@ class pRNN(nn.Module):
                 self.hidden_size,
                 device=input.device,
             )
-            # Here is where we should see the layers 
+            # Here is where we should see the layers
         output = input
         h_n = torch.empty_like(hx)
 
@@ -1002,7 +973,7 @@ class pRNN(nn.Module):
                 output, 
                 h0,
                 self.forward_cells[layer],
-                self.fwd_diagonals[layer], 
+                self.fwd_diagonals[layer],
                 self.fwd_state_fns[layer]
             )
             if self.reparameterize:
@@ -1030,7 +1001,6 @@ class pRNN(nn.Module):
                 if self.reparameterize:
                     # P = self.reverse_cells[layer].P
                     reverse_layer_output = torch.einsum('ik,...tk->...ti', P, reverse_layer_output).real
-                
                 # concatenate outputs
                 layer_output = torch.cat(
                     [forward_layer_output, reverse_layer_output], dim=2
@@ -1080,18 +1050,6 @@ class pRNN(nn.Module):
                     return cell.diagonal_derivative(input_t, state_t)
 
             input = input.transpose(1, 2)  # (batch_size, input_size, seq_len)
-            # output = quasi_deer_torch(
-            #     f=cell,
-            #     diagonal_derivative=diagonal_derivative,
-            #     initial_state=h0[:, 0],
-            #     states_guess=states_guess,
-            #     inputs=input,
-            #     num_iters=self.num_iters,
-            #     k=self.k,
-            #     clip=self.clip,
-            #     last_only=self.last_only,
-            #     while_loop=self.while_loop,
-            # )  # (B,D,T)
             diag_deriv = None
             if self.quasi:
                 diag_deriv = diagonal_derivative
@@ -1105,7 +1063,8 @@ class pRNN(nn.Module):
                                 states_guess,
                                 input,
                                 diagonal_derivative=diag_deriv,
-                                num_iters=self.num_iters, k=self.k,
+                                num_iters=self.num_iters,
+                                k=self.k,
                                 clip=self.clip,
                                 while_loop=self.while_loop,
                                 derivative_fn=derivative_fn) # (B, D, T)

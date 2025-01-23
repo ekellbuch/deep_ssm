@@ -1,0 +1,71 @@
+Comment: >
+  # This trains the baseline model (fast_dev_run is a debugging flag)
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" trainer_cfg.max_epochs=4  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
+
+  # Experiments: randomixed last 40 or last 10 truncations
+  # Experiments: fixed truncation truncation
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=10
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=40
+  
+
+project_name: "group_multiplication_trun"
+experiment_name: "quasideer_gru"
+
+seed: 0
+
+data_cfg:
+  group: "S5"
+  k: 32
+  max_samples: 1000000
+  batchSize: 512
+  num_workers: 0
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
+
+model_cfg:
+  type: "state_tracking_prnn"
+  configs:
+    embed_size: 128
+    hidden_size: 370
+    num_layers: 1
+    bidirectional: false
+    num_iters: 6
+    method: "gru"
+    parallel: true
+    k: 0.1
+    clip: false
+    quasi: true
+    reparameterize: false
+
+module_cfg:
+  type: "state_tracking"
+  rescale_loss: "num_iters"
+
+optimizer_cfg:
+  type: "adam"
+  configs:
+    lr: 0.001  # lrStart
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+  trun_iters:
+    truncation_method: "random_sample" # random_sample or fixed_values
+    truncation_schedule: "random_interval" # random_interval or fixed_epochs
+    truncation_epochs: [2, 3]
+    truncation_values: [2, 1]
+    fixed_epochs: 10
+
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_epochs: 50
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+
+hydra:
+  run:
+    dir: "${oc.env:GROUP_SCRATCH}/${oc.env:USER}/outputs/${now:%y-%m-%d}/${now:%H-%M-%S}"

@@ -64,6 +64,9 @@ callbacks:
     logging_interval: "step"
   grad_norm:
     type:
+  checkpoint_cfg:
+    save_top_k: 1
+    monitor: "ctc_loss_validation"
 
 trainer_cfg:
   fast_dev_run: false

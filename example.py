@@ -19,6 +19,9 @@ may require using other backbones.
 The default CIFAR10 model trained by this file should get
 88+% accuracy on the CIFAR10 test set in 250 epochs.
 
+Debug:
+python -m example --dataset mnist --d_model 256 --weight_decay 0.0 --n_layers 1 --batch_size 1 --num_workers 0 --epochs=1
+
 '''
 import torch
 import torch.nn as nn
@@ -36,6 +39,21 @@ import torch.nn.functional as F
 
 import wandb
 
+# Detect the appropriate device for execution
+try:
+    import torch_xla.core.xla_model as xm
+    DEVICE = xm.xla_device()  # TPU
+except:
+    if torch.backends.mps.is_available():
+        DEVICE = torch.device("mps")  # macOS Metal backend
+        compile_backend="aot_eager"
+        compile_backend="eager"
+    elif torch.cuda.is_available():
+        DEVICE = torch.device("cuda")  # GPU
+        compile_backend = None
+    else:
+        DEVICE = torch.device("cpu")  # CPU fallback
+        compile_backend = None
 
 def split_train_val(train, val_split):
   train_len = int(len(train) * (1.0 - val_split))
@@ -333,7 +351,7 @@ def train(epoch, vmap_model, dataloader):
 
     optimizer.zero_grad()
     if batch_idx == 0:
-      states = None
+      states = vmap_model.initial_state(inputs.shape[0])
     outputs, states = vmap_model(inputs, states)
     loss = criterion(outputs, targets)
     if loss.dim() > 0:
@@ -432,7 +450,7 @@ if __name__ == "__main__":
   parser.add_argument('--dataset', default='cifar10', choices=['mnist', 'cifar10'], type=str, help='Dataset')
   parser.add_argument('--grayscale', action='store_true', help='Use grayscale CIFAR10')
   # Dataloader
-  parser.add_argument('--num_workers', default=16, type=int, help='Number of workers to use for dataloader')
+  parser.add_argument('--num_workers', default=14, type=int, help='Number of workers to use for dataloader')
   parser.add_argument('--batch_size', default=50, type=int, help='Batch size')
   # Model
   parser.add_argument('--n_layers', default=6, type=int, help='Number of layers')
@@ -446,7 +464,7 @@ if __name__ == "__main__":
   if args.wandb:
     wandb.init(project="example_cifar10", config=args)
 
-  device = 'cuda' if torch.cuda.is_available() else 'cpu'
+  device = DEVICE
   best_acc = 0  # best test accuracy
   start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
@@ -543,8 +561,11 @@ if __name__ == "__main__":
     bn_momentum=0.95,
   )
   model = model.to(device)
-  #compiled_model = torch.compile(model)
-  compiled_model = model
+  if DEVICE == torch.device("mps"):
+    compiled_model = torch.compile(model, backend=compile_backend)
+  else:
+    #compiled_model = torch.compile(model)
+    compiled_model = model
 
   if args.resume:
     # Load checkpoint.
@@ -566,7 +587,7 @@ if __name__ == "__main__":
 
 
   # Step into both the optimizer and scheduler
-  @torch.compile(fullgraph=False)
+  @torch.compile(fullgraph=False, backend=compile_backend)
   def update_gradient():
     optimizer.step()
     scheduler.step()

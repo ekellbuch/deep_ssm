@@ -14,7 +14,7 @@ data_cfg:
   max_samples: 1000000
   batchSize: 2
   num_workers: 0
-  datasetPath: "/scratch/groups/swl1/group_multiplication/data"
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
 
 model_cfg:
   type: "state_tracking_gru"

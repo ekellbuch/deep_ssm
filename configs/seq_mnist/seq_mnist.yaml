@@ -1,0 +1,41 @@
+Comment : >
+  # yaml file for using hydra for sequential mnist (experiments/proto_seq_mnist)
+
+seed: 0
+
+data_cfg:
+  batch_size: 256
+  explore: False # if True, don't use hold out test set; if False, use hold out test set
+  dataset_name: "mnist" # mnist or cifar
+
+model_cfg:
+  hidden_size: 256
+  num_iters: 2
+  parallel: True
+  learn_diags: False
+  k: 0
+  clip: False
+  last_only: False
+  learn_initial_states: False
+  method: "gru"
+  while_loop: False
+  quasi: True
+  family: "prnn" # alternative is min_gru
+  num_layers: 1
+  rt: False # randomized truncation
+  use_mean: False # for the classifier, use the mean over hidden states or only the last one?
+
+optimizer_cfg:
+  lr: 0.001
+  clip_grads: True
+  grad_clip_val: 1.0
+
+trainer_cfg:
+  num_epochs: 100
+  patience: 5
+  min_delta: 0.0001
+  fast_dev_run: False
+
+logger_cfg:
+  use_wandb: True
+

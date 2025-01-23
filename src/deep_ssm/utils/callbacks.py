@@ -53,6 +53,69 @@ def gradient_norm(model):
     total_norm = total_norm**(1. / 2)
     return total_norm
 
+class TruncatedIterations(Callback):
+
+    def __init__(self,
+                 truncation_method="fixed_values",
+                 truncation_values= [0, 1],
+                 truncation_schedule="fixed_values",
+                 truncation_epochs=[2, 3],
+                 fixed_epochs=10,  # First 10 epochs are fixed
+                 ):
+        """
+
+        Args:
+            args: Configuration arguments for random truncation.
+
+            truncation_method: How we will truncate the model:
+                "fixed_values" : uses the values in truncation_values
+                "random_values" uses a random set of values where
+            truncation_schedule:  How often we will truncate the model:
+                "fixed_values" : uses the values in truncation_epochs
+                "random_values"
+            truncation_epochs: List of truncation epochs
+            fixed_epochs: Number of initial epochs to remain fixed
+        """
+        self.truncation_method = truncation_method
+        self.truncation_epochs = truncation_epochs
+        self.truncation_values = truncation_values
+        self.truncation_schedule = truncation_schedule
+        self.fixed_epochs = fixed_epochs
+
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        epoch = trainer.current_epoch
+        max_num_iters = pl_module.model.model.num_iters
+        # Determine if we are in the fixed or dynamic phase
+        if epoch < self.fixed_epochs:
+            return
+
+
+        # if we have set fixed values:
+        if self.truncation_schedule == "fixed_epochs":
+            if epoch in self.truncation_epochs:
+                if self.truncation_method == "fixed_values":
+                    index = self.truncation_epochs.index(epoch)
+                    new_num_deer_iters = self.truncation_values[index]
+                elif self.truncation_method == "random_sample":
+                    new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
+                else:
+                    raise ValueError("Unknown truncation method")
+                truncate_now = False if new_num_deer_iters == max_num_iters else True
+
+        elif self.truncation_schedule == "random_interval":
+                # flip a coin to see if we truncate on this interval
+                truncate_now = torch.randint(0, 1, (1,)).item()
+                new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
+        else:
+                truncate_now = False
+
+        if not truncate_now:
+            return
+        # update model structure
+        pl_module.model.model.set_num_iters(new_num_deer_iters)
+        trainer.model.model.model.set_num_iters(new_num_deer_iters)
+
 
 class UpdateMaskingStrategy(Callback):
 
@@ -124,4 +187,5 @@ all_callbacks = {
     "vars_pepoch": GradNormCallback_vars_pepoch(),
     "masking_scheduler": UpdateMaskingStrategy,
     "eigen_track": EigenValTracking_pbatch(),
+    "trun_iters": TruncatedIterations,
 }

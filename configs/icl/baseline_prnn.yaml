@@ -1,0 +1,77 @@
+Comment: >
+  # This trains the baseline model (fast_dev_run is a debugging flag)
+  python run_icl_regression.py --config-name="baseline_prnn" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
+
+project_name: "icl"
+experiment_name: "baseline_prnn"
+
+seed: 0
+
+data_cfg:
+  n_trajectories: 1024
+  n_w_samples: 0
+  seq_length: 40
+  d_input: 5
+  d_output: 1
+  noise_std: 0.1
+  batch_size: 1024
+  num_workers: 0
+
+
+module_cfg:
+  type: "icl"
+
+model_cfg:
+  type: "icl_reg_model"
+  configs:
+    input_size: 5 #nInputFeatures
+    hidden_size: 256 #nUnits
+    output_size: 1
+    num_layers: 2 #nLayers
+    bidirectional: false
+    dropout: 0
+    num_iters: 10
+    clip: 2
+    method: "gru"
+    family: "prnn"
+
+optimizer_cfg:
+  type: "adam"
+  configs:
+    lr: 0.02  # lrStart
+    betas: [0.9, 0.999]
+    eps: 0.1
+    weight_decay: 1e-5  #l2_decay
+
+scheduler_cfg:
+  type: "linear"
+  interval: "step"
+  frequency: 1
+  configs:
+    start_factor : 1.0
+    end_factor: 1.0
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+  grad_norm:
+    type:
+  checkpoint_cfg:
+    save_top_k: 1
+    monitor: "loss_validation"
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_steps: 100000
+  log_every_n_steps: 100
+
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+  ckpt_path:
+
+hydra:
+  run:
+    dir: "${oc.env:GROUP_SCRATCH}/${oc.env:USER}/outputs/${now:%y-%m-%d}/${now:%H-%M-%S}"

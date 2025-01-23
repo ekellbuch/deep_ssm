@@ -20,6 +20,7 @@ torch.set_float32_matmul_precision('medium')  # Or 'high'
 
 @hydra.main(config_path="../configs/group_multiplication", config_name="quasideer_gru", version_base=None)
 def main(args: DictConfig) -> None:
+    print(f"Loaded configuration: {args}")
     train(args)
     return
 
@@ -44,6 +45,7 @@ def train(args):
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
       logger = None
+      wandb.init(mode='disabled')
     else:
       if args.trainer_cfg.logger == "wandb":
         if args.trainer_cfg.accelerator == "ddp":
@@ -79,6 +81,7 @@ def train(args):
       modelito.load_state_dict(weights)
 
     model = all_modules[args.module_cfg.type](args, modelito)
+    wandb.watch(modelito, log='all')
 
     # set trainer:
     trainer_config = OmegaConf.to_container(args.trainer_cfg)
@@ -100,6 +103,8 @@ def train(args):
         local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
       if args.callbacks.get("eigen_track", None):
         local_callbacks.append(all_callbacks["eigen_track"])
+      if args.callbacks.get("trun_iters", None):
+        local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks, deterministic=True, gradient_clip_val=1.0)
     # trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
