@@ -61,6 +61,7 @@ class TruncatedIterations(Callback):
                  truncation_schedule="fixed_values",
                  truncation_epochs=[2, 3],
                  fixed_epochs=10,  # First 10 epochs are fixed
+                 max_iters_trunc=20, # maximum number of iterations to allow during random truncation
                  ):
         """
 
@@ -75,12 +76,14 @@ class TruncatedIterations(Callback):
                 "random_values"
             truncation_epochs: List of truncation epochs
             fixed_epochs: Number of initial epochs to remain fixed
+            max_iters_trunc: int, maximum number of iterations to allow during random truncation
         """
         self.truncation_method = truncation_method
         self.truncation_epochs = truncation_epochs
         self.truncation_values = truncation_values
         self.truncation_schedule = truncation_schedule
         self.fixed_epochs = fixed_epochs
+        self.max_iters_trunc = max_iters_trunc
 
 
     def on_train_epoch_start(self, trainer, pl_module):
@@ -98,15 +101,15 @@ class TruncatedIterations(Callback):
                     index = self.truncation_epochs.index(epoch)
                     new_num_deer_iters = self.truncation_values[index]
                 elif self.truncation_method == "random_sample":
-                    new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
+                    new_num_deer_iters = torch.randint(1, self.max_iters_trunc, (1,)).item()
                 else:
                     raise ValueError("Unknown truncation method")
-                truncate_now = False if new_num_deer_iters == max_num_iters else True
+                truncate_now = False if new_num_deer_iters == self.max_iters_trunc else True
 
         elif self.truncation_schedule == "random_interval":
                 # flip a coin to see if we truncate on this interval
                 truncate_now = torch.randint(0, 1, (1,)).item()
-                new_num_deer_iters = torch.randint(1, max_num_iters, (1,)).item()
+                new_num_deer_iters = torch.randint(1, self.max_iters_trunc, (1,)).item()
         else:
                 truncate_now = False
 
@@ -115,7 +118,7 @@ class TruncatedIterations(Callback):
         # update model structure
         pl_module.model.model.set_num_iters(new_num_deer_iters)
         trainer.model.model.model.set_num_iters(new_num_deer_iters)
-
+        pl_module.log("num_iters_trunc", new_num_deer_iters)
 
 class UpdateMaskingStrategy(Callback):
 
