@@ -48,6 +48,7 @@ def deer_torch(
         clip=False,
         while_loop=False,
         derivative_fn=None, # full derivative for DEER speedups
+        clip_post=False,
 ):
     """
     Wrapper function holding both deer and quasi-DEER
@@ -56,7 +57,8 @@ def deer_torch(
     - Currently needs wandb.init(), but you can use wandb.init(mode='disabled') to disable logging
     """
     if diagonal_derivative:
-        return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop)
+        return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop,
+                                clip_post=clip_post)
     else:
         return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop, derivative_fn=derivative_fn, clip=clip)
 
@@ -217,6 +219,7 @@ def quasi_deer_torch(
     clip=False, # instead of scaling the diagonal Jacobian, clip the entries if there are less than / bigger than 1
     last_only=False,  # only differentiate through the last state
     while_loop=False, # run to convergence, using a while loop
+    clip_post=False,
 ):
     """
     quasi-ELK in torch!
@@ -286,10 +289,19 @@ def quasi_deer_torch(
         )  # (B, D, T)
 
         # parallel asscociative scan
+        #breakpoint()
+        #print("A", A.min().item(),A.max().item())
+        #print("b", b.min().item(),b.max().item())
         new_states = scan(A, b)[..., :T]  # (B, D, T)
+
+        if clip_post:
+            new_states.clamp_(min=-1, max=1)
+
         isnan = torch.isnan(new_states).any()
         if not torch.is_complex(new_states):
             new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
+        #print("new_state",new_states.min().item(),new_states.max().item())
+
         return new_states, isnan
 
     return deer_outer_loop(step, states_guess, num_iters=num_iters, while_loop=while_loop, last_only=last_only)
@@ -685,6 +697,7 @@ class pRNN(nn.Module):
         while_loop=False, # run to convergence
         quasi=True, # use quasi deer
         use_conv=False, # use convolutions in each layer
+        clip_post=False,
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -696,6 +709,7 @@ class pRNN(nn.Module):
         self.bidirectional = bidirectional
         self.quasi = quasi
         self.checkpoint = checkpoint
+        self.clip_post= clip_post
         # turn off checkpointing if using deer
         if not self.quasi:
             self.checkpoint=False
@@ -919,7 +933,8 @@ class pRNN(nn.Module):
                                 num_iters=self.num_iters, k=self.k,
                                 clip=self.clip,
                                 while_loop=self.while_loop,
-                                derivative_fn=derivative_fn) # (B, D, T)
+                                derivative_fn=derivative_fn,
+                                clip_post=self.clip_post) # (B, D, T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
             output = torch.empty_like(h0)

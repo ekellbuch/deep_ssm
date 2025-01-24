@@ -39,7 +39,8 @@ class pRNNClassifier(nn.Module):
                  family="prnn", # alternatively, "min_gru"
                  use_mean=False, # should the summary statistic be mean or last hidden state? last state performs better and is more stable
                  conv=False, # should we include a convolution?
-                 num_classes=10):
+                 num_classes=10,
+                 clip_post=False):
         super(pRNNClassifier, self).__init__()
         if family=="prnn":
             self.rnn = pRNN(input_size,
@@ -58,7 +59,8 @@ class pRNNClassifier(nn.Module):
                             learn_initial_states=learn_initial_states,
                             while_loop=while_loop,
                             quasi=quasi,
-                            use_conv=conv)
+                            use_conv=conv,
+                            clip_post=clip_post)
         elif family=="min_gru":
             self.rnn = minGRUModel(input_size, hidden_size, num_layers=num_layers, conv=conv)
         else:
