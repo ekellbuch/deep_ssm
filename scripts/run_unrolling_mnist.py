@@ -178,12 +178,14 @@ def main():
                 # Load checkpoint
                 mask = (runs_df2['seed']) == seed & (runs_df2['clip'] == clip) & (runs_df2['train_iter'] == num_train_iter)
                 checkpoint = runs_df2[mask]['dirs'].values[0]
-                ckpt_path = os.path.join(CKPT_BASE, checkpoint, 'best_model.pth')
-                weights = torch.load(ckpt_path)#['state_dict']
+                #ckpt_path = os.path.join(CKPT_BASE, checkpoint, 'best_model.pth')
+                #breakpoint()
+                ckpt_path = os.path.join('best_model.pth')
+                weights = torch.load(ckpt_path,weights_only=True,map_location=torch.device('cpu'))#['state_dict']
                 #weights = {k.replace('model.', ''): v for k, v in weights.items()}
-
+                #print(ckpt_path)
                 #for num_eval_iter in all_eval_iters:
-                for num_eval_iter in [5]:
+                for num_eval_iter in [4]:
                     # Load model
                     model = pRNNClassifier(
                         input_size=d_input,
@@ -203,6 +205,7 @@ def main():
                         use_mean=cfg.model_cfg.use_mean,
                         conv=cfg.model_cfg.conv,
                         num_classes=10,
+                        clip_post=False,
                     )
 
                     criterion = nn.CrossEntropyLoss()
@@ -213,8 +216,8 @@ def main():
                     torch.compile(model, backend=compile_backend)
                     test_loader = [next(iter(test_loader))]
                     test_acc, test_loss = eval_loop(model, test_loader, DEVICE, criterion)
-                    breakpoint()
                     print(f"Ran seed= {seed}, clip={clip}, num_train_iter={num_train_iter}, num_eval_iter={num_eval_iter} test_acc={test_acc.item()}, test_loss={test_loss}")
+                    #breakpoint()
                     c_output = {"test_acc": test_acc.item(),
                                 "test_loss": test_loss,
                                 "clip": clip,
@@ -226,8 +229,8 @@ def main():
 
     # Finally save all results:
     baseline_results_df = pd.DataFrame(all_outputs)
-    
-    print(baseline_results_df)
+
+    #print(baseline_results_df)
     #main_results_csv_path = f"mnist_unrolling_results2.csv"
 
     #baseline_results_df.to_csv(main_results_csv_path, index=False)
