@@ -75,11 +75,11 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
     """
     total_nans = 0
     if last_only:
-        for _ in range(num_iters - 1):
-            with torch.no_grad():
+        with torch.no_grad():
+            for _ in range(num_iters - 1):
                 states_guess, isnan = step(states_guess)
                 total_nans += isnan
-        states_guess = step(states_guess)
+        states_guess, isnan = step(states_guess)
     elif while_loop:
         # currently not tracking nans
         err = 100
