@@ -274,7 +274,6 @@ def main():
     print(memory_usage)
     del prnn_model
     clear_memory()
-    """
     cfg2 = cfg
     cfg2.parallel = True
     cfg2.num_iters = num_iters

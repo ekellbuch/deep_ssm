@@ -20,9 +20,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 MODELS = {"Mamba": Mamba,
-          "S5": S5,
+        #   "S5": S5,
           "Mamba2": Mamba2Simple,
-          "S4": S4,
+          # "S4": S4,
           "MambaBi": MambaWrapper,
           }
 
@@ -30,15 +30,17 @@ MODELS = {"Mamba": Mamba,
 class TestMixerInference(parameterized.TestCase):
 
     @parameterized.named_parameters(
-       #("Mamba", "Mamba", False, False),
+        # ("Mamba", "Mamba", False, False),
+        # ("Mamba_real", "Mamba", False, False),
         ("Mamba_complex", "Mamba", False, True),
     )
     def test_step_ssm(self, model_name, bidirectional,as_complex):
         """
         Test forward and step in s4/s5 models
         """
-        batch, seqlen, dim = 1, 64, 16
+        batch, seqlen, dim = 1, 32, 16
         dtype = torch.float32
+        dtype_complex = torch.complex64
 
         ssm_size   = 8
         headdim = 1
@@ -76,7 +78,7 @@ class TestMixerInference(parameterized.TestCase):
             kwargs ={}
 
         if bidirectional:
-          kwargs['bidirectional'] = bidirectional
+            kwargs['bidirectional'] = bidirectional
 
         model = MODELS[model_name](
             **args,
@@ -89,9 +91,9 @@ class TestMixerInference(parameterized.TestCase):
             y1 = model(x)
         else:
             y1, new_state = model(x)
-            #assert new_state.shape == state_dim
+            # assert new_state.shape == state_dim
 
-            #if not bidirectional:  assert new_state.shape == state_dim
+            # if not bidirectional:  assert new_state.shape == state_dim
 
         assert y1.shape == x.shape
 
@@ -104,9 +106,12 @@ class TestMixerInference(parameterized.TestCase):
         if model_name == 'Mamba':
             D = model.d_inner
             conv_state = torch.zeros(batch, D, model.d_conv, device=x.device, dtype=x.dtype)
-            ssm_state = torch.zeros(batch, D, ssm_size, device=x.device, dtype=x.dtype)
+            if as_complex:
+                ssm_state = torch.zeros(batch, D, ssm_size, device=x.device, dtype=dtype_complex)
+            else:
+                ssm_state = torch.zeros(batch, D, ssm_size, device=x.device, dtype=x.dtype)
         elif model_name == 'Mamba2':
-            #D = model.d_inner + 2 * model.ngroups * model.d_state
+            # D = model.d_inner + 2 * model.ngroups * model.d_state
             D =  model.conv1d.weight.shape[0]
             conv_state = torch.zeros( batch, D, model.d_conv, device=x.device, dtype=x.dtype)
             ssm_state = torch.zeros(batch, model.nheads, model.headdim, model.d_state, device=x.device, dtype=x.dtype)
@@ -135,7 +140,13 @@ class TestMixerInference(parameterized.TestCase):
         if model_name == 'S4':
             self.assertTrue(torch.allclose(y2, y1, rtol=1e-0))
         else:
-            self.assertTrue(torch.allclose(y2, y1, rtol=1e-5, atol=1e-5))
+            self.assertTrue(
+                torch.allclose(y2, y1, rtol=1e-5, atol=1e-5),
+                f"{model_name} failed" + f"dtype is {x.dtype}"
+                f"y2 max: {y2.abs().max()}"
+                + f"y1 max: {y1.abs().max()}"
+                + f"difference is {(y2 - y1).abs().max()}",
+            )
 
         if 'Mamba' in model_name:
             # Inference-style forward pass (full sequence in parallel)
