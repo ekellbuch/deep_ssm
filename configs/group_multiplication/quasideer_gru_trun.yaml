@@ -55,7 +55,7 @@ callbacks:
     truncation_epochs: [2, 3]
     truncation_values: [2, 1]
     fixed_epochs: 10
-
+    max_iters_trunc: 20
 
 trainer_cfg:
   fast_dev_run: false
