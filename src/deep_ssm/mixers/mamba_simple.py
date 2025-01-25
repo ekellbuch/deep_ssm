@@ -9,6 +9,8 @@ from typing import Optional
 
 from einops import rearrange, repeat
 
+import pdb
+
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 except:
@@ -49,7 +51,8 @@ class Mamba(nn.Module):
         layer_idx=None,
         device=None,
         dtype=None,
-        d_out=None
+        d_out=None,
+        as_complex=False,
     ):
         """
         The Mamba class defines a neural network layer that combines elements of state-space models (SSMs),
@@ -117,6 +120,8 @@ class Mamba(nn.Module):
 
         dtype: torch.dtype, optional
             The data type of the model's parameters (e.g., torch.float32, torch.float16).
+
+        as_complex: A is complex, B is complex, and C is complex.
         """
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -128,8 +133,12 @@ class Mamba(nn.Module):
         self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
+        self.as_complex = as_complex
 
-        # projects block input from D to 2*D (two branches)
+        if self.as_complex:
+            self.d_state = self.d_state // 2  # parameter match real model
+
+        # projects block input from D to 2*D (two branches)
         self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
 
         self.conv1d = nn.Conv1d(
@@ -145,12 +154,14 @@ class Mamba(nn.Module):
         self.activation = "silu"
         self.act = nn.SiLU()
 
-        # projects x to input-dependent delta, B, C
+        # projects x to input-dependent delta, B, C
         self.x_proj = nn.Linear(
-            self.d_inner, self.dt_rank + self.d_state * 2, bias=False, **factory_kwargs
+            self.d_inner,
+            self.dt_rank + self.d_state * 2 * (1 if not self.as_complex else 2),
+            bias=False, **factory_kwargs
         )
 
-        # projects delta from dt_rank to d_inner
+        # projects delta from dt_rank to d_inner
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
@@ -187,11 +198,17 @@ class Mamba(nn.Module):
         self.A_log = nn.Parameter(A_log)
         self.A_log._no_weight_decay = True
 
+        if self.as_complex:
+            # S4 initialization:
+            A_imag = math.pi * torch.arange(self.d_state).repeat(self.d_inner, 1)
+            self.A_imag = nn.Parameter(A_imag)
+            self.A_imag._no_weight_decay = True
+
         # 5.3: initialize D, the skip connection
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
-        # projects block output from ED back to D
+        # projects block output from ED back to D
         if d_out is None:
             d_out = self.d_model
         self.out_proj = nn.Linear(self.d_inner, d_out, bias=bias, **factory_kwargs)
@@ -247,7 +264,10 @@ class Mamba(nn.Module):
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
         # Compute the matrix `A` by applying an exponential function to the stored `A_log` parameter
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        if self.as_complex:
+            A = - torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+        else:
+            A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         # Fast path for execution: use a fused kernel if available and no inference parameters are provided
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
@@ -298,15 +318,20 @@ class Mamba(nn.Module):
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
 
             # Split the projection result into three components: `dt`, `B`, and `C`
-            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+            d_split = self.d_state * (1 if not self.as_complex else 2)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, d_split, d_split], dim=-1)
 
             # Apply the `dt_proj` to `dt` and reshape it for further processing
             dt = self.dt_proj.weight @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
 
             # Reshape `B` and `C` to their expected shapes
-            B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-            C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            if not A.is_complex():
+                B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+                C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            else:
+                B = rearrange(B, "(b l) (dstate two) -> b dstate (l two)", l=seqlen, two=2).contiguous()
+                C = rearrange(C, "(b l) (dstate two) -> b dstate (l two)", l=seqlen, two=2).contiguous()
 
             # Perform the selective scan operation using the computed parameters
             assert self.activation in ["silu", "swish"]
@@ -360,6 +385,8 @@ class Mamba(nn.Module):
             conv_state:  B, 2D, d_conv
             ssm_state: B, 2D, D
 
+        Notes:
+            the conv state is the preceeding x's it has seen (up to the length of the conv)
         """
         dtype = hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
@@ -384,19 +411,39 @@ class Mamba(nn.Module):
             )
 
         x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
-        dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        #d_split = self.d_state * (1 if not self.as_complex else 2)
+        d_split = self.d_state * (1 if not self.as_complex else 2)
+        dt, B, C = torch.split(x_db, [self.dt_rank, d_split, d_split], dim=-1)
         # Don't add dt_bias here
         dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        if self.as_complex:
+            A = -torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+            B = rearrange(B, "(b l) (dstate two) -> b dstate (l two)", l=1, two=2).clone().contiguous()
+            C = rearrange(C, "(b l) (dstate two) -> b dstate (l two)", l=1, two=2).clone().contiguous()
+            B = torch.view_as_complex(B)
+            C = torch.view_as_complex(C)
+        else:
+            A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         # SSM step
         if selective_state_update is None:
+            # pdb.set_trace()
+            # print(f"type of hidden state is {ssm_state.dtype}")
+            # print(f"dt dtype is {dt.dtype}")
+            # print(f"A dtype is {A.dtype}")
             # Discretize A and B
             dt = F.softplus(dt + self.dt_proj.bias.to(dtype=dt.dtype))
             dA = torch.exp(torch.einsum("bd,dn->bdn", dt, A))
+            # print(f"dA dtype is {dA.dtype}")
             dB = torch.einsum("bd,bn->bdn", dt, B)
             ssm_state.copy_(ssm_state * dA + rearrange(x, "b d -> b d 1") * dB)
-            y = torch.einsum("bdn,bn->bd", ssm_state.to(dtype), C)
+            # y = torch.einsum("bdn,bn->bd", ssm_state.to(dtype), C) # old
+            # print(f"C dtype is {C.dtype}")
+            # print(f"ssm_state dtype is {ssm_state.dtype}")
+            y = torch.einsum("bdn,bn->bd", ssm_state, C.to(ssm_state.dtype))
+            if y.is_complex():
+                y = y.real * 2
             y = y + self.D.to(dtype) * x
             y = y * self.act(z)  # (B D)
         else:
