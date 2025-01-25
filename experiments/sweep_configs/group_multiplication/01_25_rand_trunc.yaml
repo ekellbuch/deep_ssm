@@ -12,6 +12,10 @@ parameters:
       - 1
       - 2
       - 3
+  callbacks.trun_iters.fixed_epochs:
+    values:
+      - 10
+      - 40
   
 program: run_group_multiplication.py
 project: group_multiplication_trun
