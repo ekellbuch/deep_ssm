@@ -20,10 +20,10 @@ model_cfg:
   type: "state_tracking_mamba"
   configs:
     embed_size: 128
-    d_state: 16
+    d_state: 32
     d_conv: 4
-    expand_factor: 2
-    num_layers: 5
+    expand_factor: 1
+    num_layers: 6
     neg_pos_eigenvalues: false
 
 module_cfg:

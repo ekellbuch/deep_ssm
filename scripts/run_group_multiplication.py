@@ -42,6 +42,7 @@ def train(args):
         experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_positiveEigvals_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
         # experiment_name = args.experiment_name
 
+    # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
       logger = None
