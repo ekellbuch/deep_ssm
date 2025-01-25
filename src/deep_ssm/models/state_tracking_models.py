@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
+from deep_ssm.mixers.mamba_simple import Mamba
 from deep_ssm.mixers.prnn import pRNN
 from deep_ssm.mixers.linear_rnn import RNNModel
 from deep_ssm.mixers.lru import LRUModel
@@ -103,19 +104,29 @@ class LRUDecoder(nn.Module):
 
 
 class MambaDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1, neg_pos_eigenvalues=False):
+    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1, neg_pos_eigenvalues=False, as_complex=False):
         super(MambaDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.model = MixerModel(
-            d_model=embed_size,
-            d_state=d_state,
-            d_conv=d_conv,
-            expand_factor=expand_factor,
-            n_layer=num_layers,
-            mamba_bi_new=True,
-            neg_pos_eigenvalues=neg_pos_eigenvalues
-        )
+        if as_complex:
+            assert num_layers==1, "Complex Mamba only supports 1 layer"
+            self.model = Mamba(
+                d_model=embed_size,
+                d_state=d_state,
+                d_conv=d_conv,
+                expand=expand_factor,
+                as_complex=as_complex
+            )
+        else:
+            self.model = MixerModel(
+                d_model=embed_size,
+                d_state=d_state,
+                d_conv=d_conv,
+                expand_factor=expand_factor,
+                n_layer=num_layers,
+                mamba_bi_new=True,
+                neg_pos_eigenvalues=neg_pos_eigenvalues
+            )
         self.linear = nn.Linear(embed_size, vocab_size)
 
     def forward(self, x):
