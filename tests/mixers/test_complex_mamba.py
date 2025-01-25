@@ -47,6 +47,8 @@ class TestMixerInference(parameterized.TestCase):
         x = torch.randn(batch, seqlen, dim).to(dtype).to(device)
 
         if 'Mamba' in model_name:
+            if as_complex:
+                ssm_size = ssm_size //2
             args ={"d_model": dim,
                     "layer_idx": 0,
                     "expand": 1,
