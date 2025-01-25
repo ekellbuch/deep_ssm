@@ -131,8 +131,8 @@ class Mamba(nn.Module):
         self.layer_idx = layer_idx
         self.as_complex = as_complex
 
-        # if self.as_complex:
-        #    self.d_state = self.d_state // 2  # parameter match real model
+        if self.as_complex:
+            self.d_state = self.d_state // 2  # parameter match real model
 
         # projects block input from D to 2*D (two branches)
         self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
@@ -152,7 +152,9 @@ class Mamba(nn.Module):
 
         # projects x to input-dependent delta, B, C
         self.x_proj = nn.Linear(
-            self.d_inner, self.dt_rank + self.d_state * 2, bias=False, **factory_kwargs
+            self.d_inner,
+            self.dt_rank + self.d_state * 2 * (1 if not self.as_complex else 2),
+            bias=False, **factory_kwargs
         )
 
         # projects delta from dt_rank to d_inner
@@ -196,6 +198,7 @@ class Mamba(nn.Module):
             # S4 initialization:
             A_imag = math.pi * torch.arange(self.d_state).repeat(self.d_inner, 1)
             self.A_imag = nn.Parameter(A_imag)
+            self.A_imag._no_weight_decay = True
 
         # 5.3: initialize D, the skip connection
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
@@ -258,7 +261,7 @@ class Mamba(nn.Module):
 
         # Compute the matrix `A` by applying an exponential function to the stored `A_log` parameter
         if self.as_complex:
-            A = -torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+            A = - torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
         else:
             A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
@@ -311,15 +314,20 @@ class Mamba(nn.Module):
             x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
 
             # Split the projection result into three components: `dt`, `B`, and `C`
-            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+            d_split = self.d_state * (1 if not self.as_complex else 2)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, d_split, d_split], dim=-1)
 
             # Apply the `dt_proj` to `dt` and reshape it for further processing
             dt = self.dt_proj.weight @ dt.t()
             dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
 
             # Reshape `B` and `C` to their expected shapes
-            B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-            C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            if not A.is_complex():
+                B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+                C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            else:
+                B = rearrange(B, "(b l) (dstate two) -> b dstate (l two)", l=seqlen, two=2).contiguous()
+                C = rearrange(C, "(b l) (dstate two) -> b dstate (l two)", l=seqlen, two=2).contiguous()
 
             # Perform the selective scan operation using the computed parameters
             assert self.activation in ["silu", "swish"]
@@ -386,12 +394,18 @@ class Mamba(nn.Module):
             )
 
         x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
-        dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        #d_split = self.d_state * (1 if not self.as_complex else 2)
+        d_split = self.d_state * (1 if not self.as_complex else 2)
+        dt, B, C = torch.split(x_db, [self.dt_rank, d_split, d_split], dim=-1)
         # Don't add dt_bias here
         dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
 
         if self.as_complex:
             A = -torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+            B = rearrange(B, "(b l) (dstate two) -> b dstate (l two)", l=1, two=2).clone().contiguous()
+            C = rearrange(C, "(b l) (dstate two) -> b dstate (l two)", l=1, two=2).clone().contiguous()
+            B = torch.view_as_complex(B)
+            C = torch.view_as_complex(C)
         else:
             A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
@@ -410,8 +424,9 @@ class Mamba(nn.Module):
             # y = torch.einsum("bdn,bn->bd", ssm_state.to(dtype), C) # old
             # print(f"C dtype is {C.dtype}")
             # print(f"ssm_state dtype is {ssm_state.dtype}")
-            y = torch.einsum("bdn,bn->bd", ssm_state, C.to(ssm_state.dtype)).real
-            # pdb.set_trace()
+            y = torch.einsum("bdn,bn->bd", ssm_state, C.to(ssm_state.dtype))
+            if y.is_complex():
+                y = y.real * 2
             y = y + self.D.to(dtype) * x
             y = y * self.act(z)  # (B D)
         else:

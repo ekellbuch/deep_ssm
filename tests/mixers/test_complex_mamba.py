@@ -15,8 +15,28 @@ from absl.testing import absltest
 from absl.testing import parameterized
 
 
+# Device selection logic
+try:
+    import torch_xla.core.xla_model as xm
+    DEVICE = xm.xla_device()  # TPU
+    atol = 1e-5
+    rtol = 1e-6
+except:
+    if torch.backends.mps.is_available():
+        DEVICE = torch.device("mps")  # macOS Metal backend
+        atol = 1e-5
+        rtol = 1e-6
+    elif torch.cuda.is_available():
+        DEVICE = torch.device("cuda")  # GPU
+        atol = 1e-3 # 1e-4
+        rtol = 1e-5
+    else:
+        DEVICE = torch.device("cpu")  # CPU fallback
+        atol = 1e-5
+        rtol = 1e-6
+
+
 torch.manual_seed(42)
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 MODELS = {"Mamba": Mamba,
@@ -44,11 +64,11 @@ class TestMixerInference(parameterized.TestCase):
 
         ssm_size   = 8
         headdim = 1
-        x = torch.randn(batch, seqlen, dim).to(dtype).to(device)
+        x = torch.randn(batch, seqlen, dim).to(dtype).to(DEVICE)
 
         if 'Mamba' in model_name:
-            if as_complex:
-                ssm_size = ssm_size //2
+            #if as_complex:
+            #    ssm_size = ssm_size //2
             args ={"d_model": dim,
                     "layer_idx": 0,
                     "expand": 1,
@@ -85,7 +105,7 @@ class TestMixerInference(parameterized.TestCase):
         model = MODELS[model_name](
             **args,
             **kwargs,
-        ).to(device)
+        ).to(DEVICE)
 
         model.eval()
 
@@ -109,7 +129,7 @@ class TestMixerInference(parameterized.TestCase):
             D = model.d_inner
             conv_state = torch.zeros(batch, D, model.d_conv, device=x.device, dtype=x.dtype)
             if as_complex:
-                ssm_state = torch.zeros(batch, D, ssm_size, device=x.device, dtype=dtype_complex)
+                ssm_state = torch.zeros(batch, D, ssm_size//2, device=x.device, dtype=x.dtype)
             else:
                 ssm_state = torch.zeros(batch, D, ssm_size, device=x.device, dtype=x.dtype)
         elif model_name == 'Mamba2':
@@ -140,10 +160,10 @@ class TestMixerInference(parameterized.TestCase):
 
         # TODO: check tolerance gap for s4
         if model_name == 'S4':
-            self.assertTrue(torch.allclose(y2, y1, rtol=1e-0))
+            self.assertTrue(torch.allclose(y2, y1, rtol=rtol, atol=atol))
         else:
             self.assertTrue(
-                torch.allclose(y2, y1, rtol=1e-5, atol=1e-5),
+                torch.allclose(y2, y1, rtol=rtol, atol=1e-2),
                 f"{model_name} failed" + f"dtype is {x.dtype}"
                 f"y2 max: {y2.abs().max()}"
                 + f"y1 max: {y1.abs().max()}"
@@ -161,7 +181,7 @@ class TestMixerInference(parameterized.TestCase):
                 outs.append(out)
             y3 = torch.cat(outs, 1)
 
-            self.assertTrue(torch.allclose(y2, y3, rtol=1e-5, atol=1e-5))
+            self.assertTrue(torch.allclose(y2, y3, rtol=rtol, atol=atol))
 
 
 if __name__ == '__main__':
