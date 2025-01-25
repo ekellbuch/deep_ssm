@@ -21,6 +21,7 @@ data_cfg:
   batchSize: 512
   num_workers: 0
   datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
+  seed: 0
 
 model_cfg:
   type: "state_tracking_prnn"
