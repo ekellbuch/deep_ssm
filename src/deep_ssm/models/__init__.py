@@ -12,5 +12,6 @@ all_models = {
   "state_tracking_prnn": state_tracking_models.pRNNDecoder,
   "state_tracking_mamba": state_tracking_models.MambaDecoder,
   "state_tracking_linear": state_tracking_models.LinearRNNDecoder,
+  "state_tracking_lru": state_tracking_models.LRUDecoder,
   "icl_reg_model": pRNNRegressor,
 }

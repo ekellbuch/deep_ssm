@@ -3,6 +3,7 @@ import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.prnn import pRNN
 from deep_ssm.mixers.linear_rnn import RNNModel
+from deep_ssm.mixers.lru import LRUModel
 import torch.nn.functional as F
 
 
@@ -43,6 +44,7 @@ class LinearRNNDecoder(nn.Module):
     implements a deep linear RNN decoder (the linear layers are connected via non-linearities)
     we match the size of the IDS4 matrices from Merrill
     the point is to demonstrate Picard iterations take more layers/iterations than Newton iterations
+    currently not training as well as we'd like: should we try HiPPO initialization (in discretized form)?
     Args:
         vocab size: size of the vocabulary
         embed_size: size of the embedding, ends up being d_model in SSM notation
@@ -59,6 +61,40 @@ class LinearRNNDecoder(nn.Module):
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
         self.model = RNNModel(d_input=embed_size, d_output=vocab_size, d_model=embed_size, n_layers=num_layers, d_state=hidden_size)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x = self.model(x)
+        return x
+
+class LRUDecoder(nn.Module):
+    """
+    implements an LRU decoder
+    Args:
+        vocab size: size of the vocabulary
+        embed_size: size of the embedding, ends up being d_model in SSM notation
+        hidden_size: size of the hidden state, ends up being d_state in SSM notation
+    """
+
+    def __init__(
+        self,
+        vocab_size,
+        embed_size,
+        hidden_size,
+        num_layers=1,
+    ):
+        super(LRUDecoder, self).__init__()
+
+        self.embedding = nn.Embedding(vocab_size, embed_size)
+        self.model = LRUModel(
+            embed_size,
+            vocab_size,
+            embed_size,
+            num_layers,
+            hidden_size=hidden_size,
+            r_min=0.0, # see tab 9 of LRU paper for r values used for LRA. We start with list ops as intuitively most similar flavor to state tracking
+            r_max=0.99
+        )
 
     def forward(self, x):
         x = self.embedding(x)

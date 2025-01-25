@@ -1,8 +1,13 @@
 import os
+import pdb
 
 
-#os.environ['HF_HOME'] = '/scratch/users/hdlee/tmp'
-#os.environ["HF_DATASETS_CACHE"] = '/scratch/users/hdlee/tmp'
+try:
+    os.environ["HF_HOME"] = "/scratch/users/hdlee/tmp"
+    os.environ["HF_DATASETS_CACHE"] = "/scratch/users/hdlee/tmp"
+except:
+    pass
+
 
 import hydra
 import lightning as L
@@ -31,9 +36,9 @@ def train(args):
 
     # Get hydra output directory
     try:
-      output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+        output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     except:
-      output_dir = None
+        output_dir = None
 
     try:
         experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_k={args.data_cfg.k}_{args.model_cfg.configs.method}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.num_iters}iters_quasi={args.model_cfg.configs.quasi}_quasik={args.model_cfg.configs.k}_clip={args.model_cfg.configs.clip}_reparam={args.model_cfg.configs.reparameterize}_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
@@ -47,41 +52,47 @@ def train(args):
     # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
     # setup logger:
     if args.trainer_cfg.fast_dev_run:
-      logger = None
-      wandb.init(mode='disabled')
+        logger = None
+        wandb.init(mode='disabled')
     else:
-      if args.trainer_cfg.logger == "wandb":
-        if args.trainer_cfg.accelerator == "ddp":
-          kwargs = {"group": "DDP"}
-        else:
-          kwargs = dict()
+        if args.trainer_cfg.logger == "wandb":
+            if args.trainer_cfg.accelerator == "ddp":
+                kwargs = {"group": "DDP"}
+            else:
+                kwargs = dict()
 
-        logger = WandbLogger(name=experiment_name,
+            logger = WandbLogger(name=experiment_name,
                              project=args.project_name, **kwargs,
                              save_dir=output_dir)
 
-        args_as_dict = OmegaConf.to_container(args)
-        logger.log_hyperparams(args_as_dict)
-      elif args.trainer_cfg.logger == "tensorboard":
-        logger = TensorBoardLogger(args.project_name,
+            args_as_dict = OmegaConf.to_container(args)
+            logger.log_hyperparams(args_as_dict)
+        elif args.trainer_cfg.logger == "tensorboard":
+            logger = TensorBoardLogger(args.project_name,
                                    name=experiment_name,
                                    )
-      else:
-        logger = None
+        else:
+            logger = None
 
     # get dataset:
     datamodule = GroupMultiplicationDataModule(args.data_cfg)
     vocab_size = datamodule.n_vocab
 
     # get module and model:
-    modelito = all_models[args.model_cfg.type](vocab_size=vocab_size, 
-                                               **args.model_cfg.configs)
+    # pdb.set_trace()
+    # print("model_cfg:", args.model_cfg)
+    # print("model_cfg.type:", args.model_cfg.type)
+    # print("model_cfg.configs:", args.model_cfg.configs)
+    modelito = all_models[args.model_cfg.type](
+        vocab_size=vocab_size, **args.model_cfg.configs
+    )
+    # pdb.set_trace()
 
     if args.model_cfg.get("resume_ckpt_path", None):
-      # Do not resume training simply load checkpoints
-      weights = torch.load(args.model_cfg.resume_ckpt_path)['state_dict']
-      weights = {k.replace('model.', ''): v for k, v in weights.items()}
-      modelito.load_state_dict(weights)
+        # Do not resume training simply load checkpoints
+        weights = torch.load(args.model_cfg.resume_ckpt_path)['state_dict']
+        weights = {k.replace('model.', ''): v for k, v in weights.items()}
+        modelito.load_state_dict(weights)
 
     model = all_modules[args.module_cfg.type](args, modelito)
     wandb.watch(modelito, log='all')
@@ -93,31 +104,31 @@ def train(args):
     # set callbacks
     local_callbacks = []
     if args.callbacks:
-      if args.callbacks.get("lr_monitor", None):
-        local_callbacks.append(LearningRateMonitor(**args.callbacks.lr_monitor))
-      if args.callbacks.get("grad_norm") and args.callbacks.grad_norm.get("type", None):
-        local_callbacks.append(all_callbacks[args.callbacks.grad_norm.type])
-      if args.callbacks.get("early_stopping", None):
-        local_callbacks.append(EarlyStopping(**args.callbacks.early_stopping))
-      if args.callbacks.get("masking_scheduler", None):
-        local_callbacks.append(all_callbacks["masking_scheduler"](**args.callbacks.masking_scheduler))
-        trainer_config["reload_dataloaders_every_n_epochs"] = 1
-      if args.callbacks.get("checkpoint_cfg", None):
-        local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
-      if args.callbacks.get("eigen_track", None):
-        local_callbacks.append(all_callbacks["eigen_track"])
-      if args.callbacks.get("trun_iters", None):
-        local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
+        if args.callbacks.get("lr_monitor", None):
+            local_callbacks.append(LearningRateMonitor(**args.callbacks.lr_monitor))
+        if args.callbacks.get("grad_norm") and args.callbacks.grad_norm.get("type", None):
+            local_callbacks.append(all_callbacks[args.callbacks.grad_norm.type])
+        if args.callbacks.get("early_stopping", None):
+            local_callbacks.append(EarlyStopping(**args.callbacks.early_stopping))
+        if args.callbacks.get("masking_scheduler", None):
+            local_callbacks.append(all_callbacks["masking_scheduler"](**args.callbacks.masking_scheduler))
+            trainer_config["reload_dataloaders_every_n_epochs"] = 1
+        if args.callbacks.get("checkpoint_cfg", None):
+            local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
+        if args.callbacks.get("eigen_track", None):
+            local_callbacks.append(all_callbacks["eigen_track"])
+        if args.callbacks.get("trun_iters", None):
+            local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks, deterministic=True, gradient_clip_val=1.0)
     # trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
-      trainer.fit(model=model, datamodule=datamodule)
-      ckpt_path = "best" if not args.trainer_cfg.get("fast_dev_run", False) else None
+        trainer.fit(model=model, datamodule=datamodule)
+        ckpt_path = "best" if not args.trainer_cfg.get("fast_dev_run", False) else None
     else:
-      ckpt_path = args.eval_cfg.get("ckpt_path", None)
+        ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
     # Test model
     test_acc = trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
@@ -135,10 +146,10 @@ def train(args):
         pass
     # End logging
     if args.trainer_cfg.logger == "wandb" and not (logger is None):
-      wandb.run.summary["output_dir"] = output_dir
-      wandb.run.summary["total_params"] = sum(p.numel() for p in model.parameters())
+        wandb.run.summary["output_dir"] = output_dir
+        wandb.run.summary["total_params"] = sum(p.numel() for p in model.parameters())
 
-      wandb.finish()
+        wandb.finish()
 
     # Goodbye
 
