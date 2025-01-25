@@ -1,6 +1,7 @@
 """
-MinRNN mixer
-Using quasi-DEER!
+parallel RNN mixer
+
+Includes the code for quasi deer (see quasi_deer_torch). 
 """
 
 import torch
@@ -24,6 +25,7 @@ import wandb
 import pdb
 
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
+from deep_ssm.mixers.min_gru import CausalConv1d
 
 
 def _batch_along_time(x):
@@ -46,6 +48,8 @@ def deer_torch(
         clip=False,
         while_loop=False,
         derivative_fn=None, # full derivative for DEER speedups
+        clip_post=False,
+        deer_norm=False, # whether to use RMS norm between quasi-deer iterations
 ):
     """
     Wrapper function holding both deer and quasi-DEER
@@ -54,7 +58,8 @@ def deer_torch(
     - Currently needs wandb.init(), but you can use wandb.init(mode='disabled') to disable logging
     """
     if diagonal_derivative:
-        return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop)
+        return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop,
+                                clip_post=clip_post, deer_norm=deer_norm)
     else:
         return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop, derivative_fn=derivative_fn, clip=clip)
 
@@ -71,11 +76,11 @@ def deer_outer_loop(step, states_guess, num_iters=10, while_loop=False, last_onl
     """
     total_nans = 0
     if last_only:
-        for _ in range(num_iters - 1):
-            with torch.no_grad():
+        with torch.no_grad():
+            for _ in range(num_iters - 1):
                 states_guess, isnan = step(states_guess)
                 total_nans += isnan
-        states_guess = step(states_guess)
+        states_guess, isnan = step(states_guess)
     elif while_loop:
         # currently not tracking nans
         err = 100
@@ -215,6 +220,8 @@ def quasi_deer_torch(
     clip=False, # instead of scaling the diagonal Jacobian, clip the entries if there are less than / bigger than 1
     last_only=False,  # only differentiate through the last state
     while_loop=False, # run to convergence, using a while loop
+    clip_post=False,
+    deer_norm=False, # whether to use RMS norm between quasi-deer iterations
 ):
     """
     quasi-ELK in torch!
@@ -284,10 +291,22 @@ def quasi_deer_torch(
         )  # (B, D, T)
 
         # parallel asscociative scan
+        #breakpoint()
+        #print("A", A.min().item(),A.max().item())
+        #print("b", b.min().item(),b.max().item())
         new_states = scan(A, b)[..., :T]  # (B, D, T)
+
+        if clip_post:
+            new_states.clamp_(min=-1, max=1)
+
+        if deer_norm:
+            new_states = torch.nn.functional.rms_norm(new_states, new_states.shape)
+
         isnan = torch.isnan(new_states).any()
         if not torch.is_complex(new_states):
             new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
+        #print("new_state",new_states.min().item(),new_states.max().item())
+
         return new_states, isnan
 
     return deer_outer_loop(step, states_guess, num_iters=num_iters, while_loop=while_loop, last_only=last_only)
@@ -515,42 +534,42 @@ class AugmentedGRUCell(nn.GRUCell):
         # Reset gate
         ract = input @ w_ir.t() + b_ir + hidden @ w_hr.t() + b_hr   # shape (B, hidden_size)
         r = torch.sigmoid(ract)                                # (B, hidden_size)
-    
+
         # Update gate
         zact = input @ w_iz.t() + b_iz + hidden @ w_hz.t() + b_hz   # (B, hidden_size)
         z = torch.sigmoid(zact)                                # (B, hidden_size)
-    
+
         # Candidate hidden
         rcomp = hidden @ w_hn.t() + b_hn                       # (B, hidden_size)
         n_act = input @ w_in.t() + b_in + r * rcomp                # (B, hidden_size)
         n = torch.tanh(n_act)                                  # (B, hidden_size)
-    
+
         # h_t = z * hidden + (1 - z) * n
-    
+
         # ---------------------------------------------------------------------
         # 2) Gate derivatives (elementwise)
         # ---------------------------------------------------------------------
         r_grad = r * (1 - r)      # d(r)/d(ract)
         z_grad = z * (1 - z)      # d(z)/d(zact)
         n_grad = 1 - n * n        # d(n)/d(n_act)
-    
+
         # ---------------------------------------------------------------------
         # 3) Build the partial derivatives for r, z, n wrt hidden
         #    We'll do a batch dimension B, so we do batched matrix multiplications.
         # ---------------------------------------------------------------------
-    
+
         B, hidden_size = hidden.shape
-    
+
         # Expand W matrices to shape (B, hidden_size, hidden_size) for batched matmul
         w_hrB = w_hr.unsqueeze(0).expand(B, -1, -1)  # (B, hidden_size, hidden_size)
         w_hzB = w_hz.unsqueeze(0).expand(B, -1, -1)
         w_hnB = w_hn.unsqueeze(0).expand(B, -1, -1)
-    
+
         # diag_embed(vec) => shape (B, hidden_size, hidden_size) with vec on diagonal
         # we can use torch.diag_embed(vec) for each batch row
         Dr = torch.bmm(torch.diag_embed(r_grad), w_hrB)  # D_r = diag(r') * W_hr
         Dz = torch.bmm(torch.diag_embed(z_grad), w_hzB)  # D_z = diag(z') * W_hz
-    
+
         # Next, partial of (r * rcomp) w.r.t. hidden => product rule:
         # rcomp = hidden @ w_hn^T + b_hn => partial rcomp wrt hidden = w_hn
         # => partial (r_j * rcomp_j) wrt hidden = diag(rcomp) Dr + diag(r) w_hn
@@ -558,16 +577,16 @@ class AugmentedGRUCell(nn.GRUCell):
         # We'll define it as J_a below:
         rcomp_diag = torch.diag_embed(rcomp)      # (B, hidden_size, hidden_size)
         r_diag = torch.diag_embed(r)             # (B, hidden_size, hidden_size)
-    
+
         # J_a = partial (r * rcomp) / partial hidden
         #      = rcomp_diag @ Dr + r_diag @ w_hnB
         J_a = torch.bmm(rcomp_diag, Dr) + torch.bmm(r_diag, w_hnB)
-    
+
         # partial n wrt hidden => partial n wrt n_act times partial n_act wrt hidden
         # n_grad = 1 - n^2 => diag(n_grad)
         # => J_n = diag(n_grad) @ J_a
         J_n = torch.bmm(torch.diag_embed(n_grad), J_a)
-    
+
         # ---------------------------------------------------------------------
         # 4) Combine everything for h_t = z*h_{t-1} + (1-z)*n
         # ---------------------------------------------------------------------
@@ -579,15 +598,15 @@ class AugmentedGRUCell(nn.GRUCell):
         #   = - diag(n) Dz + diag(1-z) J_n
         #
         # Summation of these pieces is the full Jacobian.
-    
+
         hidden_diag = torch.diag_embed(hidden)  # (B, hidden_size, hidden_size)
         z_diag = torch.diag_embed(z)
         n_diag = torch.diag_embed(n)
         one_minus_z_diag = torch.diag_embed(1 - z)
-    
+
         part1 = z_diag + torch.bmm(hidden_diag, Dz)     # z * h_{t-1} part
         part2 = torch.bmm(-n_diag, Dz) + torch.bmm(one_minus_z_diag, J_n)
-    
+
         jacobian = part1 + part2  # (B, hidden_size, hidden_size)
 
         return jacobian.squeeze(-1)
@@ -596,6 +615,7 @@ class LearnableDiagonal(torch.nn.Module):
     """
     Note that you could go even simpler and have the diagonal not be input and hidden dependent but just a learnable parameter
     I think this would be more like LTI (S5), instead of LTV (S6).
+    We may have made this too complicated. What if we just use a linear layer?
     """
     def __init__(self, input_size, hidden_size):
         super().__init__()
@@ -604,8 +624,8 @@ class LearnableDiagonal(torch.nn.Module):
 
         # Linear layers for input and state transformations
         self.input_linear = nn.Linear(input_size, hidden_size)
-        self.state_linear = nn.Linear(hidden_size, hidden_size)
-        self.ffn = FeedForward(hidden_size, hidden_size)
+        # self.state_linear = nn.Linear(hidden_size, hidden_size)
+        # self.ffn = FeedForward(hidden_size, hidden_size)
 
     def forward(self, input, state):
         """
@@ -617,8 +637,9 @@ class LearnableDiagonal(torch.nn.Module):
             Diagonal parameters (batch_size, size), values bounded between -1 and 1
         """
         # Linear readout from input and state
-        linear_out = self.input_linear(input) + self.state_linear(state)
-        nonlinear_out = self.ffn(linear_out) # add more nonlinearity
+        # linear_out = self.input_linear(input) + self.state_linear(state)
+        # nonlinear_out = self.ffn(linear_out) # add more nonlinearity
+        nonlinear_out = self.input_linear(input)
 
         # Apply tanh to bound values between -1 and 1
         return torch.tanh(nonlinear_out)
@@ -657,7 +678,7 @@ class ReparameterizedCell(nn.Module):
         super().__init__()
         self.original_cell = original_cell
         hidden_size = self.original_cell.hidden_size
-        
+
         self.A = nn.Parameter(torch.zeros(hidden_size, hidden_size, dtype=torch.complex64))
 
         # # Store P and P_inv as buffers (non-trainable parameters)
@@ -680,7 +701,7 @@ class ReparameterizedCell(nn.Module):
         # Exponential map to get an orthogonal matrix
         P = torch.linalg.matrix_exp(A_skew)
         P_inv = torch.linalg.inv(P)
-        
+
         # Transform the hidden state to S-space:
         states = torch.einsum('ik,...k->...i', P, zs.to(dtype=P.dtype)).real
         states = self.original_cell(us, states).to(dtype=P.dtype)
@@ -705,7 +726,7 @@ class ReparameterizedCell(nn.Module):
         # Exponential map to get an orthogonal matrix
         P = torch.linalg.matrix_exp(A_skew)
         P_inv = torch.linalg.inv(P)
-        
+
         states = torch.einsum('ik,...k->...i', P, zs.to(dtype=P.dtype))
 
         # Compute the Jacobian diagonal in the S-space
@@ -726,7 +747,7 @@ class ReparameterizedCell(nn.Module):
         # # diag_jacobian = diag_jacobian / mag
         # print(diag_jacobian.abs().max())
 
-        return diag_jacobian_z
+        return diag_jacobian
 
 
 def reparameterize_cell(model_cell, input_size, hidden_size, x0=None, h0=None):
@@ -745,7 +766,7 @@ def reparameterize_cell(model_cell, input_size, hidden_size, x0=None, h0=None):
     """
     # Compute the Jacobian numerically around x0, h0
     # if x0 is None:
-    #     x0 = torch.zeros(1, input_size, requires_grad=True)  # Correct input size 
+    #     x0 = torch.zeros(1, input_size, requires_grad=True)  # Correct input size
     # if h0 is None:
     #     h0 = torch.zeros(1, hidden_size, requires_grad=True)  # Correct hidden size
 
@@ -762,7 +783,7 @@ def reparameterize_cell(model_cell, input_size, hidden_size, x0=None, h0=None):
     # eigenvalues, P = torch.linalg.eig(J_f)
     # # P_inv = torch.linalg.inv(P.cpu()).to(device=J_f.device)
     # P = torch.eye(hidden_size)
-    
+
     # Return the reparameterized cell
     return ReparameterizedCell(model_cell)
 
@@ -793,6 +814,9 @@ class pRNN(nn.Module):
         reparameterize=False, # reparameterize a cell
         while_loop=False, # run to convergence
         quasi=True, # use quasi deer
+        use_conv=False, # use convolutions in each layer
+        clip_post=False,
+        deer_norm=False, # use rms norm betwen
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -804,6 +828,7 @@ class pRNN(nn.Module):
         self.bidirectional = bidirectional
         self.quasi = quasi
         self.checkpoint = checkpoint
+        self.clip_post= clip_post
         # turn off checkpointing if using deer
         if not self.quasi:
             self.checkpoint=False
@@ -819,6 +844,8 @@ class pRNN(nn.Module):
         self.learn_initial_states = learn_initial_states
         self.num_iters = num_iters  # number of iterations for quasi-DEER
         self.while_loop = while_loop
+        self.use_conv = use_conv
+        self.deer_norm = deer_norm # use layer norm between quasi-deer iterations
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -858,6 +885,17 @@ class pRNN(nn.Module):
             )
         else:
             self.fwd_state_fns = [None] * num_layers
+        if self.use_conv:
+            self.fwd_convs = nn.ModuleList(
+                [
+                    CausalConv1d(
+                        input_size if i == 0 else hidden_size * num_directions, 4
+                    )
+                    for i in range(num_layers)
+                ]
+            )
+        else:
+            self.fwd_convs = [None] * num_layers
 
         if bidirectional:
             self.reverse_cells = nn.ModuleList()
@@ -869,7 +907,6 @@ class pRNN(nn.Module):
                 if reparameterize:
                     cell = reparameterize_cell(cell, input_size_, hidden_size)
                 self.reverse_cells.append(cell)
-
 
             if self.learn_diags:
                 self.rev_diagonals = nn.ModuleList(
@@ -895,6 +932,17 @@ class pRNN(nn.Module):
                 )
             else:
                 self.rev_state_fns = [None] * num_layers
+            if self.use_conv:
+                self.rev_convs = nn.ModuleList(
+                    [
+                        CausalConv1d(
+                            input_size if i == 0 else hidden_size * num_directions, 4
+                        )
+                        for i in range(num_layers)
+                    ]
+                )
+            else:
+                self.rev_convs = [None] * num_layers
 
         self.dropout_layer = nn.Dropout(dropout) if dropout > 0 else None
 
@@ -969,13 +1017,14 @@ class pRNN(nn.Module):
                 output, 
                 h0,
                 self.forward_cells[layer],
-                self.fwd_diagonals[layer],
-                self.fwd_state_fns[layer]
+                self.fwd_diagonals[layer], 
+                self.fwd_state_fns[layer],
+                self.fwd_convs[layer],
             )
             if self.reparameterize:
                 # P = self.forward_cells[layer].P
                 forward_layer_output = torch.einsum('ik,...tk->...ti', P, forward_layer_output).real
-            
+
             if self.bidirectional:
                 if self.reparameterize:
                     A = self.reverse_cells[layer].A
@@ -992,11 +1041,13 @@ class pRNN(nn.Module):
                     self.reverse_cells[layer],
                     self.rev_diagonals[layer],
                     self.rev_state_fns[layer],
+                    self.rev_convs[layer],
                 )
                 reverse_layer_output = reverse_layer_output.flip(1)
                 if self.reparameterize:
                     # P = self.reverse_cells[layer].P
                     reverse_layer_output = torch.einsum('ik,...tk->...ti', P, reverse_layer_output).real
+
                 # concatenate outputs
                 layer_output = torch.cat(
                     [forward_layer_output, reverse_layer_output], dim=2
@@ -1011,14 +1062,14 @@ class pRNN(nn.Module):
             output = layer_output
             if self.dropout_layer and layer < self.num_layers - 1:
                 output = self.dropout_layer(output)
-        
+
         if not self.batch_first:
             output = output.transpose(0, 1)
 
         return output, h_n
 
     @checkpoint
-    def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None):
+    def _process_layer(self, input, h0, cell, diagonal_fn=None, state_fn=None, conv=None):
         """
         Function for working through each layer
         Args:
@@ -1030,6 +1081,10 @@ class pRNN(nn.Module):
         """
         batch_size, seq_len, _ = input.size()
         h0 = h0.unsqueeze(1).expand(-1, seq_len, -1)
+
+        # apply optional conv
+        if conv:
+            input = conv(input)
 
         if self.parallel:
             device = input.device
@@ -1063,7 +1118,9 @@ class pRNN(nn.Module):
                                 k=self.k,
                                 clip=self.clip,
                                 while_loop=self.while_loop,
-                                derivative_fn=derivative_fn) # (B, D, T)
+                                derivative_fn=derivative_fn,
+                                clip_post=self.clip_post,
+                                deer_norm=self.deer_norm) # (B, D, T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
             output = torch.empty_like(h0)

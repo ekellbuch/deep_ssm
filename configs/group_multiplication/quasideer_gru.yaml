@@ -14,7 +14,7 @@ data_cfg:
   max_samples: 1000000
   batchSize: 512
   num_workers: 0
-  datasetPath: "/scratch/groups/swl1/group_multiplication/data"
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
   seed: 0
 
 model_cfg:
@@ -52,7 +52,7 @@ trainer_cfg:
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
-  ckpt_path: #"/scratch/groups/swl1/group_multiplication/checkpoints/quasideer_gru_S5_32_gru_5_0/model.ckpt"
+  ckpt_path:  #"/scratch/groups/swl1/group_multiplication/checkpoints/quasideer_gru_S5_32_gru_5_0/model.ckpt"
 
 hydra:
   run:

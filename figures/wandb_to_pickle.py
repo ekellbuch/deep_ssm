@@ -2,6 +2,11 @@
 wandb_to_pickle.py
 
 helper file to save out wandb sweeps to pickle files
+
+Usage:
+
+name of sweep: user/project/sweep_id
+name of pickle file: a helpful name for the pickle file
 """
 
 from tqdm import tqdm
@@ -18,15 +23,17 @@ if __name__ == "__main__":
 
     api = wandb.Api()
     sweep = api.sweep(args.sweep)
-    data = []
+    dataframes = []
     for run in tqdm(sweep.runs):
-        run_data = run.history()
-        run_data["run_id"] = run.id
+        history = []
+        for row in run.scan_history():  # important to get all the run information out
+            history.append(row)
+        run_data = pd.DataFrame(history)
         for key, value in run.config.items():
-            run_data[key] = value
-        data.append(run_data)
+            run_data[key] = value  # Add configuration as columns
+        dataframes.append(run_data)
 
-    df = pd.concat(data, ignore_index=True)
+    df = pd.concat(dataframes, ignore_index=True)
     print(df.shape)
 
     df.to_pickle(f"{args.pickle}_{args.sweep[-8:]}.pkl")

@@ -1,6 +1,8 @@
 import os
-os.environ['HF_HOME'] = '/scratch/users/hdlee/tmp'
-os.environ["HF_DATASETS_CACHE"] = '/scratch/users/hdlee/tmp'
+
+
+#os.environ['HF_HOME'] = '/scratch/users/hdlee/tmp'
+#os.environ["HF_DATASETS_CACHE"] = '/scratch/users/hdlee/tmp'
 
 import hydra
 import lightning as L
