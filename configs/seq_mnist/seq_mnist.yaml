@@ -25,6 +25,7 @@ model_cfg:
   rt: False # randomized truncation
   use_mean: False # for the classifier, use the mean over hidden states or only the last one?
   conv: False # use a CausalConv(kernel size 4) before explicit layers
+  deer_norm: False # use rms norm between deer layers
 
 optimizer_cfg:
   lr: 0.001

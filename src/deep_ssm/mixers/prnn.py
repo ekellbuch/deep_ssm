@@ -49,6 +49,7 @@ def deer_torch(
         while_loop=False,
         derivative_fn=None, # full derivative for DEER speedups
         clip_post=False,
+        deer_norm=False, # whether to use RMS norm between quasi-deer iterations
 ):
     """
     Wrapper function holding both deer and quasi-DEER
@@ -58,7 +59,7 @@ def deer_torch(
     """
     if diagonal_derivative:
         return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop,
-                                clip_post=clip_post)
+                                clip_post=clip_post, deer_norm=deer_norm)
     else:
         return deer_helper(f, initial_state, states_guess, inputs, num_iters=num_iters, k=k, while_loop=while_loop, derivative_fn=derivative_fn, clip=clip)
 
@@ -220,6 +221,7 @@ def quasi_deer_torch(
     last_only=False,  # only differentiate through the last state
     while_loop=False, # run to convergence, using a while loop
     clip_post=False,
+    deer_norm=False, # whether to use RMS norm between quasi-deer iterations
 ):
     """
     quasi-ELK in torch!
@@ -296,6 +298,9 @@ def quasi_deer_torch(
 
         if clip_post:
             new_states.clamp_(min=-1, max=1)
+        
+        if deer_norm:
+            new_states = torch.nn.functional.rms_norm(new_states, new_states.shape)
 
         isnan = torch.isnan(new_states).any()
         if not torch.is_complex(new_states):
@@ -698,6 +703,7 @@ class pRNN(nn.Module):
         quasi=True, # use quasi deer
         use_conv=False, # use convolutions in each layer
         clip_post=False,
+        deer_norm=False, # use rms norm betwen
     ):
         super(pRNN, self).__init__()
         self.input_size = input_size
@@ -726,6 +732,7 @@ class pRNN(nn.Module):
         self.num_iters = num_iters  # number of iterations for quasi-DEER
         self.while_loop = while_loop
         self.use_conv = use_conv
+        self.deer_norm = deer_norm # use layer norm between quasi-deer iterations
 
         method_fn = {"minrnn": MinRNNCell, "gru": AugmentedGRUCell}
 
@@ -934,7 +941,8 @@ class pRNN(nn.Module):
                                 clip=self.clip,
                                 while_loop=self.while_loop,
                                 derivative_fn=derivative_fn,
-                                clip_post=self.clip_post) # (B, D, T)
+                                clip_post=self.clip_post,
+                                deer_norm=self.deer_norm) # (B, D, T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
             output = torch.empty_like(h0)

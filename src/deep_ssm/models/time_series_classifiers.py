@@ -17,6 +17,9 @@ class pRNNClassifier(nn.Module):
 
     Note: follows batch first convention
     Note: follows input_size, hidden_size pytorch convention (https://pytorch.org/docs/stable/generated/torch.nn.GRU.html)
+
+    Args:
+        deer_norm: whether to use RMS norm between quasi-deer iterations
     """
 
     def __init__(self,
@@ -40,7 +43,8 @@ class pRNNClassifier(nn.Module):
                  use_mean=False, # should the summary statistic be mean or last hidden state? last state performs better and is more stable
                  conv=False, # should we include a convolution?
                  num_classes=10,
-                 clip_post=False):
+                 clip_post=False,
+                 deer_norm=False): # should we use RMS norm between quasi-deer iterations?
         super(pRNNClassifier, self).__init__()
         if family=="prnn":
             self.rnn = pRNN(input_size,
@@ -60,7 +64,8 @@ class pRNNClassifier(nn.Module):
                             while_loop=while_loop,
                             quasi=quasi,
                             use_conv=conv,
-                            clip_post=clip_post)
+                            clip_post=clip_post,
+                            deer_norm=deer_norm)
         elif family=="min_gru":
             self.rnn = minGRUModel(input_size, hidden_size, num_layers=num_layers, conv=conv)
         else:

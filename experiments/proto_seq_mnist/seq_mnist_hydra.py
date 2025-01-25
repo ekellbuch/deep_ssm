@@ -95,6 +95,7 @@ def main(cfg: DictConfig):
         use_mean=cfg.model_cfg.use_mean,
         conv=cfg.model_cfg.conv,
         num_classes=10,
+        deer_norm=cfg.model_cfg.deer_norm,
     )
     model.to(device)
     model = torch.compile(model)
