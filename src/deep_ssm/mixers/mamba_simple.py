@@ -11,6 +11,7 @@ from einops import rearrange, repeat
 
 import pdb
 
+from deep_ssm.mixers.utils_mamba import selective_scan_ref 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 except:
@@ -340,20 +341,33 @@ class Mamba(nn.Module):
 
             # Perform the selective scan operation using the computed parameters
             assert self.activation in ["silu", "swish"]
-            y = selective_scan_fn(
-                x,
-                dt,
-                A,
-                B,
-                C,
-                self.D.float(),
-                z=z,
-                delta_bias=self.dt_proj.bias.float(),
-                delta_softplus=True,
-                return_last_state=ssm_state is not None,
-                neg_pos_eigenvalues=neg_pos_eigenvalues,
-            )
-
+            if neg_pos_eigenvalues:
+                y = selective_scan_ref(
+                    x,
+                    dt,
+                    A,
+                    B,
+                    C,
+                    self.D.float(),
+                    z=z,
+                    delta_bias=self.dt_proj.bias.float(),
+                    delta_softplus=True,
+                    return_last_state=ssm_state is not None,
+                    neg_pos_eigenvalues=neg_pos_eigenvalues,
+                )
+            else:
+                y = selective_scan_fn(
+                    x,
+                    dt,
+                    A,
+                    B,
+                    C,
+                    self.D.float(),
+                    z=z,
+                    delta_bias=self.dt_proj.bias.float(),
+                    delta_softplus=True,
+                    return_last_state=ssm_state is not None,
+                )
             # Update the state-space model (SSM) state if it's provided
             if ssm_state is not None:
                 y, last_state = y
