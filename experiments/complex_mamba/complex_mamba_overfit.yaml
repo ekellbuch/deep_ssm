@@ -1,0 +1,24 @@
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--config-name"
+  - "complex_mamba"
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  model_cfg.configs.num_layers:
+    values: [1, 6]
+  model_cfg.configs.as_complex:
+    values: [True, False]
+  model_cfg.configs.as_BC_complex_split:
+    values: [True, False]
+  model_cfg.configs.neg_pos_eigenvalues:
+    values: [True, False]
+
+
+program: ../../scripts/run_group_multiplication.py
+project: complex_mamba_group_multiplication
+
+# Run:
+# wandb sweep complex_mamba_overfit.yaml
