@@ -1,7 +1,7 @@
 Comment: >
   # This trains the baseline model (fast_dev_run is a debugging flag)
   python run_group_multiplication.py --config-name="quasideer_gru" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
-  python run_group_multiplication.py --config-name="quasideer_gru" trainer_cfg.max_epochs=1  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
+  python run_group_multiplication.py --config-name="quasideer_gru" trainer_cfg.max_epochs=4  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
 
 project_name: "group_multiplication"
 experiment_name: "quasideer_gru"
@@ -43,12 +43,16 @@ optimizer_cfg:
 callbacks:
   lr_monitor:
     logging_interval: "step"
+  checkpoint_cfg:
+    dirpath:
 
 trainer_cfg:
   fast_dev_run: false
   logger: "wandb"
   accelerator: "auto"
   max_epochs: 100
+  gradient_clip_val: 1.0
+  deterministic: true
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
@@ -57,3 +61,7 @@ eval_cfg:
 hydra:
   run:
     dir: "${oc.env:GROUP_SCRATCH}/${oc.env:USER}/outputs/${now:%y-%m-%d}/${now:%H-%M-%S}"
+
+
+trainer_fit_cfg:
+  ckpt_path:
