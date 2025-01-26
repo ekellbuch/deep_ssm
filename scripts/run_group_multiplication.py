@@ -125,7 +125,7 @@ def train(args):
             local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
-    print("Available metrics: ", trainer.callback_metrics)
+    print(f"Available metrics: ", trainer.callback_metrics)
     os.makedirs(args.callbacks.checkpoint_cfg.dirpath, exist_ok=True)
     print(
         f"Checkpoint directory exists and is writable. It is {args.callbacks.checkpoint_cfg.dirpath}"

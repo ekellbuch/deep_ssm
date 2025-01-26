@@ -2,7 +2,7 @@ Comment: >
   # This trains the baseline model (fast_dev_run is a debugging flag)
   python run_group_multiplication.py --config-name="complex_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.layer_dim=1
   python run_group_multiplication.py --config-name="complex_mamba" trainer_cfg.max_epochs=1  trainer_cfg.limit_train_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.limit_val_batches=1 
-  python run_group_multiplication.py --config-name="complex_mamba" trainer_cfg.max_epochs=100  trainer_cfg.limit_train_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.limit_val_batches=1 
+  python run_group_multiplication.py --config-name="complex_mamba" trainer_cfg.max_epochs=20  trainer_cfg.limit_train_batches=1 trainer_cfg.limit_test_batches=1 trainer_cfg.limit_val_batches=1 
 
 project_name: "group_multiplication"
 experiment_name: "complex_mamba"
@@ -61,7 +61,7 @@ callbacks:
   lr_monitor:
     logging_interval: "step"
   checkpoint_cfg:
-    dirpath: "/oak/stanford/groups/swl1/${oc.env:USER}/state_tracking/icml2025/checkpoints" # Specify the checkpoint save directory
+    dirpath: "${oc.env:OAK}/${oc.env:USER}/state_tracking/icml2025/checkpoints" # Specify the checkpoint save directory
     filename: "best_model-{epoch}-{val_loss:.4f}"  # Naming format for checkpoint files
     save_top_k: 1  # Save only the best checkpoint
     save_last: true
@@ -71,7 +71,7 @@ callbacks:
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
-  ckpt_path: "/oak/stanford/groups/swl1/${oc.env:USER}/state_tracking/icml2025/checkpoints"
+  ckpt_path: "{oc.env:OAK}/${oc.env:USER}/state_tracking/icml2025/checkpoints"
 
 
 hydra:
