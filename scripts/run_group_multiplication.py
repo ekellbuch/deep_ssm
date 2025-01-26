@@ -128,7 +128,7 @@ def train(args):
     print("Available metrics: ", trainer.callback_metrics)
     os.makedirs(args.callbacks.checkpoint_cfg.dirpath, exist_ok=True)
     print(
-        "Checkpoint directory exists and is writable. It is {args.callbacks.checkpoint_cfg.dirpath}"
+        f"Checkpoint directory exists and is writable. It is {args.callbacks.checkpoint_cfg.dirpath}"
     )
 
     trainer_fit_cfg =  args.get("trainer_fit_cfg", {})
