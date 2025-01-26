@@ -176,10 +176,7 @@ class S4Recurrence(nn.Module):
         super().__init__()
 
         if device is None:
-            if torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            else:
-                self.device = torch.device("cpu")
+            self.device = DEVICE
         else:
             self.device = device
 
@@ -284,10 +281,7 @@ class MambaRecurrence(nn.Module):
         super().__init__()
 
         if device is None:
-            if torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            else:
-                self.device = torch.device("cpu")
+            self.device = DEVICE
         else:
             self.device = device
         self.d_model = d_model
@@ -641,7 +635,7 @@ def run_sm_toy_experiment(
         - Training progress and validation RMSE at intervals.
     """
     torch.manual_seed(seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = DEVICE
 
     if not os.path.isdir("results/outputs_toy"):
         os.mkdir("results/outputs_toy")
