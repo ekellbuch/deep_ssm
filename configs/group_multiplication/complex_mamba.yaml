@@ -47,6 +47,8 @@ trainer_cfg:
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+  ckpt_path: "/oak/stanford/groups/swl1/hdlee/state_tracking/icml2025/checkpoints"
+
 
 hydra:
   run:
