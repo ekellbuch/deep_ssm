@@ -3,7 +3,7 @@ Comment: >
   python run_group_multiplication.py --config-name="quasideer_gru_trun" trainer_cfg.fast_dev_run=1 model_cfg.configs.num_layers=1
   python run_group_multiplication.py --config-name="quasideer_gru_trun" trainer_cfg.max_epochs=4  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
 
-  # Experiments: randomixed last 40 or last 10 truncations
+  # Experiments: randomized last 40 or last 10 truncations
   # Experiments: fixed truncation truncation
   python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=10
   python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=40
@@ -21,6 +21,7 @@ data_cfg:
   batchSize: 512
   num_workers: 0
   datasetPath: "${oc.env:DEEP_SSM_DATA}/group_multiplication/data"
+  seed: 0
 
 model_cfg:
   type: "state_tracking_prnn"

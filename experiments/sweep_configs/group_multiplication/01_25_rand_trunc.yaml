@@ -1,0 +1,22 @@
+# Created 1/25
+# Goal: See if random truncation (MC) has any effect on test-time performance
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  data_cfg.seed:
+    values:
+      - 1
+      - 2
+      - 3
+  callbacks.trun_iters.fixed_epochs:
+    values:
+      - 10
+      - 40
+  
+program: run_group_multiplication.py
+project: group_multiplication_trun
+name: quasideer_gru
