@@ -294,40 +294,41 @@ def selective_scan_ref(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta
     # Initialize the variable to store the last state if requested
     last_state = None
 
-    # # Loop over the time steps (L) of the input sequence
-    # for i in range(u.shape[2]):
+    if not neg_pos_eigenvalues:
+        # Loop over the time steps (L) of the input sequence
+        for i in range(u.shape[2]):
 
-    #     # Update the state `x` using the precomputed deltaA and deltaB_u
-    #     x = deltaA[:, :, i] * x + deltaB_u[:, :, i]
+            # Update the state `x` using the precomputed deltaA and deltaB_u
+            x = deltaA[:, :, i] * x + deltaB_u[:, :, i]
 
-    #     # Compute the output y at each time step using C and the state x
-    #     if not is_variable_C:
-    #         # Standard einsum for fixed-size C
-    #         y = torch.einsum('bdn,dn->bd', x, C)
-    #     else:
-    #         if C.dim() == 3:
-    #             # Variable-sized C with 3 dimensions
-    #             y = torch.einsum('bdn,bn->bd', x, C[:, :, i])
-    #         else:
-    #             # Variable-sized C with 4 dimensions
-    #             y = torch.einsum('bdn,bdn->bd', x, C[:, :, :, i])
+            # Compute the output y at each time step using C and the state x
+            if not is_variable_C:
+                # Standard einsum for fixed-size C
+                y = torch.einsum('bdn,dn->bd', x, C)
+            else:
+                if C.dim() == 3:
+                    # Variable-sized C with 3 dimensions
+                    y = torch.einsum('bdn,bn->bd', x, C[:, :, i])
+                else:
+                    # Variable-sized C with 4 dimensions
+                    y = torch.einsum('bdn,bdn->bd', x, C[:, :, :, i])
 
-    #     # Store the last state if it's the final time step
-    #     if i == u.shape[2] - 1:
-    #         last_state = x
-    #     # If y is a complex tensor, only take the real part and double it
-    #     if y.is_complex():
-    #         y = y.real * 2
+            # Store the last state if it's the final time step
+            if i == u.shape[2] - 1:
+                last_state = x
+            # If y is a complex tensor, only take the real part and double it
+            if y.is_complex():
+                y = y.real * 2
 
-    #     # Append the output y at this time step to the list ys
-    #     ys.append(y)
+            # Append the output y at this time step to the list ys
+            ys.append(y)
 
-    # # Stack the outputs from all time steps into a tensor of shape (B, D, L)
-    # y = torch.stack(ys, dim=2) # (batch dim L)
-
-    _, xs = associative_scan(binary_operator, (deltaA, deltaB_u), axis=2)
-    last_state = xs[:, :, -1]
-    y = torch.einsum('bdln,bnl->bdl', xs, C)
+        # Stack the outputs from all time steps into a tensor of shape (B, D, L)
+        y = torch.stack(ys, dim=2) # (batch dim L)
+    else:
+        _, xs = associative_scan(binary_operator, (deltaA, deltaB_u), axis=2)
+        last_state = xs[:, :, -1]
+        y = torch.einsum('bdln,bnl->bdl', xs, C)
 
     # If D is provided, apply an additional transformation to the output
     out = y if D is None else y + u * rearrange(D, "d -> d 1")
