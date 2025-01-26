@@ -44,7 +44,7 @@ callbacks:
   lr_monitor:
     logging_interval: "step"
   checkpoint_cfg:
-    dirpath:
+    dirpath: "/oak/stanford/groups/swl1/hdlee/state_tracking/icml2025/checkpoints"
 
 trainer_cfg:
   fast_dev_run: false
