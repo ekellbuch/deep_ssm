@@ -35,10 +35,6 @@ optimizer_cfg:
   configs:
     lr: 0.001  # lrStart
 
-callbacks:
-  lr_monitor:
-    logging_interval: "step"
-
 trainer_cfg:
   fast_dev_run: false
   logger: "wandb"
