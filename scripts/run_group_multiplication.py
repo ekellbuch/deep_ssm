@@ -27,6 +27,7 @@ torch.set_float32_matmul_precision('medium')  # Or 'high'
 @hydra.main(config_path="../configs/group_multiplication", config_name="quasideer_gru", version_base=None)
 def main(args: DictConfig) -> None:
     print(f"Loaded configuration: {args}")
+    print("Callbacks config: ", args.callbacks)
     train(args)
     return
 
@@ -67,7 +68,6 @@ def train(args):
                 wandb_configs['project'] = args.project_name
                 wandb_configs['save_dir'] = output_dir
             logger = WandbLogger(**wandb_configs, **kwargs)
-
 
             args_as_dict = OmegaConf.to_container(args)
             logger.log_hyperparams(args_as_dict)
@@ -117,6 +117,7 @@ def train(args):
             local_callbacks.append(all_callbacks["masking_scheduler"](**args.callbacks.masking_scheduler))
             trainer_config["reload_dataloaders_every_n_epochs"] = 1
         if args.callbacks.get("checkpoint_cfg", None):
+            print("Checkpoint callback added.")
             local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
         if args.callbacks.get("eigen_track", None):
             local_callbacks.append(all_callbacks["eigen_track"])
@@ -124,6 +125,10 @@ def train(args):
             local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
+    print("Available metrics: ", trainer.callback_metrics)
+    os.makedirs(args.callbacks.checkpoint_cfg.dirpath, exist_ok=True)
+    print("Checkpoint directory exists and is writable.")
+
 
     trainer_fit_cfg =  args.get("trainer_fit_cfg", {})
     # Train model
