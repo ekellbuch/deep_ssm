@@ -7,7 +7,7 @@
 #SBATCH -p gpu,swl1,owners,stat  # partition
 #SBATCH --mail-type=FAIL            # Mail events (NONE, BEGIN, END, FAIL, ALL)
 #SBATCH --mail-user=ekb@stanford.edu
-#SBATCH --array=1-27
+#SBATCH --array=1-16
 #SBATCH --mem=32G
 
 # Check how many jobs i can submit:
@@ -25,9 +25,10 @@
 echo "SLURM_ARRAY_TASK_ID: $SLURM_ARRAY_TASK_ID"
 # Example array of jobs
 N_CONFIGS_PER_AGENT=1
-export SWEEP_ID=1bpnw7i1
+export SWEEP_ID=eq9nunie
 export WANDB_ENTITY=ekellbuch
-export WANDB_PROJECT=speech_bci_lr
+export WANDB_PROJECT=complex_mamba_group_multiplication
+
 # Nice print statements (optional)
 echo SLURM_ARRAY_JOB_ID $SLURM_ARRAY_JOB_ID
 echo SLURM_ARRAY_TASK_ID $SLURM_ARRAY_TASK_ID
@@ -46,8 +47,6 @@ ml load cuda/12.4.0  # could be 11.7.1
 eval "$(conda shell.bash hook)"
 conda activate deep_ssm
 # Technically should not need to specify entity and project, but I've found that I hit bugs otherwise
-#wandb agent --count <N_CONFIGS_PER_AGENT> <WANDB_ENTITY>/<WANDB_PROJECT>/"$SWEEP_ID"
-cd ../..
 wandb agent --count $N_CONFIGS_PER_AGENT "$WANDB_ENTITY/$WANDB_PROJECT/$SWEEP_ID"
 echo "Ran $SLURM_ARRAY_TASK_ID$"
 deactivate
