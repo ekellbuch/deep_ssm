@@ -905,11 +905,11 @@ def run_sm_A5_experiment(
                     continuous_output=True,
                 ).to(device)
 
-                if torch.cuda.is_available():
-                    try:
-                        model = torch.compile(model)
-                    except:
-                        print("did not compile model")
+                #if torch.cuda.is_available():
+                #    try:
+                #        model = torch.compile(model)
+                #    except:
+                #        print("did not compile model")
 
                 train_dataset = A5Dataset(length, train=True, seed=seed + 1)
                 train_dataset_length_2 = A5Dataset(2, train=True, seed=seed + 2)
