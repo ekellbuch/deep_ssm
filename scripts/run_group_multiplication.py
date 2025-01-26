@@ -127,8 +127,9 @@ def train(args):
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
     print("Available metrics: ", trainer.callback_metrics)
     os.makedirs(args.callbacks.checkpoint_cfg.dirpath, exist_ok=True)
-    print("Checkpoint directory exists and is writable.")
-
+    print(
+        "Checkpoint directory exists and is writable. It is {args.callbacks.checkpoint_cfg.dirpath}"
+    )
 
     trainer_fit_cfg =  args.get("trainer_fit_cfg", {})
     # Train model
