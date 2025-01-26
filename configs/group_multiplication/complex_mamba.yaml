@@ -48,7 +48,7 @@ callbacks:
     dirpath: "/oak/stanford/groups/swl1/hdlee/state_tracking/icml2025/checkpoints" # Specify the checkpoint save directory
     filename: "best_model-{epoch}-{val_loss:.4f}"  # Naming format for checkpoint files
     save_top_k: 1  # Save only the best checkpoint
-    monitor: "val_loss"  # Metric to monitor for saving checkpoints
+    monitor: "avg_validation_loss"  # Metric to monitor for saving checkpoints
     mode: "min"  # Minimize the monitored metric (use "max" for metrics like accuracy)
     save_weights_only: false  # Save the entire model (set to true if you only need weights)
 
