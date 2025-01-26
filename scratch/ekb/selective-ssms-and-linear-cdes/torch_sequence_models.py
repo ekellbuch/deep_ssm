@@ -277,6 +277,8 @@ class MambaRecurrence(nn.Module):
         dt_scale=1.0,
         dt_init_floor=1e-4,
         device=None,
+        as_complex=False,
+        as_BC_complex_split=False,
     ):
         super().__init__()
 
@@ -287,13 +289,18 @@ class MambaRecurrence(nn.Module):
         self.d_model = d_model
         self.d_state = d_state
         self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
+        self.as_complex = as_complex
+        self.as_BC_complex_split = as_BC_complex_split
 
+        # projects x to input-dependent delta, B, C
         self.x_proj = nn.Linear(
             self.d_model,
-            self.dt_rank + self.d_state * 2,
+            self.dt_rank + self.d_state * 2  * (1 if not (self.as_complex & self.as_BC_complex_split) else 2),
             bias=False,
             device=self.device,
         )
+
+        # projects delta from dt_rank to d_inner
         self.dt_proj = nn.Linear(
             self.dt_rank, self.d_model, bias=True, device=self.device
         )
@@ -330,6 +337,12 @@ class MambaRecurrence(nn.Module):
         A_log = torch.log(A)  # Keep A_log in fp32
         self.A_log = nn.Parameter(A_log)
 
+        if self.as_complex:
+            # S4 initialization:
+            A_imag = math.pi * torch.arange(self.d_state).repeat(self.d_model, 1)
+            self.A_imag = nn.Parameter(A_imag)
+            self.A_imag._no_weight_decay = True
+
         # D "skip" parameter
         self.D = nn.Parameter(
             torch.ones(self.d_model, device=self.device)
@@ -342,16 +355,32 @@ class MambaRecurrence(nn.Module):
         Returns: same shape as hidden_states
         """
         batch, seqlen, dim = hidden_states.shape
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        if self.as_complex:
+            A = - torch.exp(self.A_log.float()) + 1j* self.A_imag # (d_inner, d_state)
+        else:
+            A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         x = rearrange(hidden_states, "b l d -> b d l")
         x_dbl = self.x_proj(rearrange(x, "b d l -> (b l) d"))  # (bl d)
-        dt, B, C = torch.split(
-            x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1
-        )
+        if not self.as_complex:
+            dt, B, C = torch.split(
+                x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1
+            )
+        else:
+            d_split = self.d_state * 2
+            # match mamba_inner_fn split for complex
+            dt = x_dbl[:, :self.dt_rank]
+            B = x_dbl[:, self.dt_rank:self.dt_rank + d_split]  # (bl d)
+            C = x_dbl[:, -d_split:]  # Extract C from the projection (bl d)
+
         dt = self.dt_proj.weight @ dt.t()
         dt = rearrange(dt, "d (b l) -> b d l", l=seqlen)
-        B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
-        C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+        if not A.is_complex():
+            B = rearrange(B, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+            C = rearrange(C, "(b l) dstate -> b dstate l", l=seqlen).contiguous()
+        else:
+            B = rearrange(B, "(b l) (dstate two) -> b dstate (l two)", l=seqlen, two=2).contiguous()
+            C = rearrange(C, "(b l) (dstate two) -> b dstate (l two)", l=seqlen, two=2).contiguous()
+
         y = selective_scan_fn(
             x,
             dt,
@@ -366,6 +395,69 @@ class MambaRecurrence(nn.Module):
         )
         return rearrange(y, "b d l -> b l d")
 
+
+class MambaRecurrenceAComplex(MambaRecurrence):
+    """
+    MambaRecurrence subclass where `as_complex` is always set to True.
+    This class is specifically for handling complex-valued operations.
+    """
+    def __init__(
+        self,
+        d_model,
+        d_state=16,
+        dt_rank="auto",
+        dt_min=0.001,
+        dt_max=0.1,
+        dt_init="random",
+        dt_scale=1.0,
+        dt_init_floor=1e-4,
+        device=None,
+        as_BC_complex_split=False,  # Retain option to split B and C if needed
+    ):
+        super().__init__(
+            d_model=d_model,
+            d_state=d_state,
+            dt_rank=dt_rank,
+            dt_min=dt_min,
+            dt_max=dt_max,
+            dt_init=dt_init,
+            dt_scale=dt_scale,
+            dt_init_floor=dt_init_floor,
+            device=device,
+            as_complex=True,  # Force as_complex to True
+            as_BC_complex_split=as_BC_complex_split,
+        )
+
+class MambaRecurrenceABCComplex(MambaRecurrence):
+    """
+    MambaRecurrence subclass where `as_complex` is always set to True.
+    This class is specifically for handling complex-valued operations.
+    """
+    def __init__(
+        self,
+        d_model,
+        d_state=16,
+        dt_rank="auto",
+        dt_min=0.001,
+        dt_max=0.1,
+        dt_init="random",
+        dt_scale=1.0,
+        dt_init_floor=1e-4,
+        device=None,
+    ):
+        super().__init__(
+            d_model=d_model,
+            d_state=d_state,
+            dt_rank=dt_rank,
+            dt_min=dt_min,
+            dt_max=dt_max,
+            dt_init=dt_init,
+            dt_scale=dt_scale,
+            dt_init_floor=dt_init_floor,
+            device=device,
+            as_complex=True,  # Force as_complex to True
+            as_BC_complex_split=True,
+        )
 
 class RNN(nn.Module):
     """
@@ -454,6 +546,10 @@ class SequenceModel(nn.Module):
 
         if model_name == "Mamba":
             sequence_layer = MambaRecurrence
+        elif model_name == "MambaAComplex":
+            sequence_layer = MambaRecurrenceAComplex
+        elif model_name == "MambaABCComplex":
+            sequence_layer = MambaRecurrenceABCComplex
         elif model_name == "S4":
             sequence_layer = S4Recurrence
         elif model_name == "RNN":

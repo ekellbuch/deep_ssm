@@ -69,7 +69,7 @@ def parse_arguments():
         "-n",
         "--name",
         type=str,
-        choices=["Transformer", "Mamba", "RNN", "S4"],
+        choices=["Transformer", "Mamba", "RNN", "S4", "MambaAComplex","MambaABCComplex"],
     )
     parser.add_argument(
         "-l",
