@@ -1,10 +1,9 @@
 import os
 import pdb
-
-
 try:
-    os.environ["HF_HOME"] = "/scratch/users/hdlee/tmp"
-    os.environ["HF_DATASETS_CACHE"] = "/scratch/users/hdlee/tmp"
+    hf_home = os.environ.get("SCRATCH")
+    os.environ["HF_HOME"] = f"{hf_home}/tmp"
+    os.environ["HF_DATASETS_CACHE"] = f"{hf_home}/tmp"
 except:
     pass
 
@@ -46,8 +45,8 @@ def train(args):
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.seed}'
     except:
         # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.model_cfg.configs.neg_pos_eigenvalues}negpos_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
-        experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_positiveEigvals_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
-        # experiment_name = args.experiment_name
+        # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_positiveEigvals_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
+        experiment_name = args.experiment_name
 
     # experiment_name = f'{args.experiment_name}_{args.data_cfg.group}_{args.data_cfg.k}_{args.model_cfg.configs.num_layers}layers_{args.trainer_cfg.max_epochs}epochs_{args.seed}seed'
     # setup logger:
@@ -61,9 +60,14 @@ def train(args):
             else:
                 kwargs = dict()
 
-            logger = WandbLogger(name=experiment_name,
-                             project=args.project_name, **kwargs,
-                             save_dir=output_dir)
+            wandb_configs = args.get("wandb_cfg", {})
+            if len(wandb_configs)==0:
+                wandb_configs = {}
+                wandb_configs['name'] = experiment_name
+                wandb_configs['project'] = args.project_name
+                wandb_configs['save_dir'] = output_dir
+            logger = WandbLogger(**wandb_configs, **kwargs)
+
 
             args_as_dict = OmegaConf.to_container(args)
             logger.log_hyperparams(args_as_dict)
@@ -86,7 +90,6 @@ def train(args):
     modelito = all_models[args.model_cfg.type](
         vocab_size=vocab_size, **args.model_cfg.configs
     )
-    # pdb.set_trace()
 
     if args.model_cfg.get("resume_ckpt_path", None):
         # Do not resume training simply load checkpoints
@@ -120,12 +123,12 @@ def train(args):
         if args.callbacks.get("trun_iters", None):
             local_callbacks.append(all_callbacks["trun_iters"](**args.callbacks.trun_iters))
 
-    trainer = L.Trainer(**trainer_config, callbacks=local_callbacks, deterministic=True, gradient_clip_val=1.0)
-    # trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
+    trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
+    trainer_fit_cfg =  args.get("trainer_fit_cfg", {})
     # Train model
     if not args.eval_cfg.get("eval_only", 0):
-        trainer.fit(model=model, datamodule=datamodule)
+        trainer.fit(model=model, datamodule=datamodule, **trainer_fit_cfg)
         ckpt_path = "best" if not args.trainer_cfg.get("fast_dev_run", False) else None
     else:
         ckpt_path = args.eval_cfg.get("ckpt_path", None)

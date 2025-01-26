@@ -107,3 +107,24 @@ To run in wandb:
 ```
 wandb sweep path-to-yaml
 ```
+
+
+To run and resume experiments: 
+export directory where checkpoints will be saved
+```
+export GROUP_SCRATCH="/Users/ekb/Projects/deepseq/deep_ssm/scripts/tmp"
+export SCRATCH="/Users/ekb/Projects/deepseq/deep_ssm/scripts/tmp"
+```
+Let's say you run the job:
+```
+python run_group_multiplication.py --config-name="quasideer_gru" trainer_cfg.max_epochs=4  +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
+```
+This produced the output:
+https://wandb.ai/ekellbuch/group_multiplication/runs/zhdf7mem
+
+Let's say how do we want to resume such a run:
+```
+
+```
+
+
