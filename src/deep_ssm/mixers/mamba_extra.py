@@ -42,7 +42,9 @@ def create_block(
   bidirectional=False,
   mamba_bi_new=False,
   bidirectional_strategy=None,
-  d_out=None
+  d_out=None,
+  as_complex = False,
+  as_BC_complex_split = False,
 ):
   if mamba_bi_new:
     model = MambaWrapper
@@ -58,6 +60,8 @@ def create_block(
                       bidirectional=bidirectional,
                       bidirectional_strategy=bidirectional_strategy,
                       d_out=d_out,
+                      as_complex=as_complex,
+                      as_BC_complex_split=as_BC_complex_split,
                       )
 
   norm_cls = partial(
@@ -181,6 +185,8 @@ class MixerModel(nn.Module):
         neg_pos_eigenvalues=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
+        as_complex=False,
+        as_BC_complex_split = False,
     ):
         super().__init__()
 
@@ -218,7 +224,9 @@ class MixerModel(nn.Module):
                     fused_add_norm=fused_add_norm,
                     rms_norm=rms_norm,
                     bidirectional_strategy=bidirectional_strategy,
-                    d_out=d_outputs[i]
+                    d_out=d_outputs[i],
+                    as_complex=as_complex,
+                    as_BC_complex_split=as_BC_complex_split,
                 )
                 for i in range(n_layer)
             ]

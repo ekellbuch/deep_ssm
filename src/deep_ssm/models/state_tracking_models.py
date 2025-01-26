@@ -104,29 +104,29 @@ class LRUDecoder(nn.Module):
 
 
 class MambaDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, d_state=16, d_conv=4, expand_factor=2, num_layers=1, neg_pos_eigenvalues=False, as_complex=False):
+    def __init__(self, vocab_size,
+                 embed_size,
+                 d_state=16,
+                 d_conv=4,
+                 expand_factor=2,
+                 num_layers=1,
+                 neg_pos_eigenvalues=False,
+                 as_complex=False,
+                 as_BC_complex_split=False):
         super(MambaDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        if as_complex:
-            assert num_layers==1, "Complex Mamba only supports 1 layer"
-            self.model = Mamba(
-                d_model=embed_size,
-                d_state=d_state,
-                d_conv=d_conv,
-                expand=expand_factor,
-                as_complex=as_complex
-            )
-        else:
-            self.model = MixerModel(
-                d_model=embed_size,
-                d_state=d_state,
-                d_conv=d_conv,
-                expand_factor=expand_factor,
-                n_layer=num_layers,
-                mamba_bi_new=True,
-                neg_pos_eigenvalues=neg_pos_eigenvalues
-            )
+        self.model = MixerModel(
+            d_model=embed_size,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand_factor=expand_factor,
+            n_layer=num_layers,
+            mamba_bi_new=True,
+            neg_pos_eigenvalues=neg_pos_eigenvalues,
+            as_complex=as_complex,
+            as_BC_complex_split=as_BC_complex_split,
+        )
         self.linear = nn.Linear(embed_size, vocab_size)
 
     def forward(self, x):

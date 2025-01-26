@@ -17,9 +17,6 @@ except:
     from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
     from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
 
-# from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
-# from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
-
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except:
@@ -53,6 +50,7 @@ class Mamba(nn.Module):
         dtype=None,
         d_out=None,
         as_complex=False,
+        as_BC_complex_split=False,
     ):
         """
         The Mamba class defines a neural network layer that combines elements of state-space models (SSMs),
@@ -134,9 +132,10 @@ class Mamba(nn.Module):
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
         self.as_complex = as_complex
+        self.as_BC_complex_split = as_BC_complex_split
 
-        if self.as_complex:
-            self.d_state = self.d_state // 2  # parameter match real model
+        #if self.as_complex and self.as_BC_complex_split:
+        #    self.d_state = self.d_state // 2  # parameter match real model
 
         # projects block input from D to 2*D (two branches)
         self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
@@ -157,7 +156,7 @@ class Mamba(nn.Module):
         # projects x to input-dependent delta, B, C
         self.x_proj = nn.Linear(
             self.d_inner,
-            self.dt_rank + self.d_state * 2 * (1 if not self.as_complex else 2),
+            self.dt_rank + self.d_state * 2 * (1 if not (self.as_complex & self.as_BC_complex_split) else 2),
             bias=False, **factory_kwargs
         )
 
@@ -319,7 +318,13 @@ class Mamba(nn.Module):
 
             # Split the projection result into three components: `dt`, `B`, and `C`
             d_split = self.d_state * (1 if not self.as_complex else 2)
-            dt, B, C = torch.split(x_dbl, [self.dt_rank, d_split, d_split], dim=-1)
+            if not self.as_complex:
+                dt, B, C = torch.split(x_dbl, [self.dt_rank, d_split, d_split], dim=-1)
+            else:
+                # match mamba_inner_fn split for complex
+                dt = x_dbl[:, :self.dt_rank]
+                B = x_dbl[:, self.dt_rank:self.dt_rank + d_split]  # (bl d)
+                C = x_dbl[:, -d_split:]  # Extract C from the projection (bl d)
 
             # Apply the `dt_proj` to `dt` and reshape it for further processing
             dt = self.dt_proj.weight @ dt.t()
@@ -335,19 +340,6 @@ class Mamba(nn.Module):
 
             # Perform the selective scan operation using the computed parameters
             assert self.activation in ["silu", "swish"]
-            # y = selective_scan_fn(
-            #     x,
-            #     dt,
-            #     A,
-            #     B,
-            #     C,
-            #     self.D.float(),
-            #     z=z,
-            #     delta_bias=self.dt_proj.bias.float(),
-            #     delta_softplus=True,
-            #     return_last_state=ssm_state is not None,
-            #     neg_pos_eigenvalues=neg_pos_eigenvalues,
-            # )
             y = selective_scan_fn(
                 x,
                 dt,
@@ -359,6 +351,7 @@ class Mamba(nn.Module):
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
                 return_last_state=ssm_state is not None,
+                neg_pos_eigenvalues=neg_pos_eigenvalues,
             )
 
             # Update the state-space model (SSM) state if it's provided

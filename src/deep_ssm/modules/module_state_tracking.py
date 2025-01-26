@@ -140,4 +140,77 @@ class StateTrackingDecoder(L.LightningModule):
       optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
     else:
       raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
-    return optimizer
+
+    # Check if scheduler is not defined
+    if not self.args.get("scheduler_cfg", None):
+        return optimizer
+
+    # Define Warm-Up Scheduler
+    warmup_epochs = self.args.scheduler_cfg.get("warmup_epochs", 0)
+    num_steps_per_epoch = self.trainer.estimated_stepping_batches * warmup_epochs
+
+    def warmup_lambda(epoch):
+      # Warm-up function: linearly increase LR for first 'warmup_epochs' epochs
+      if epoch < warmup_epochs:
+        return float(epoch) / float(warmup_epochs)
+      else:
+        return 1.0  # After warm-up, learning rate stays constant
+
+    # Warm-Up Scheduler
+    if warmup_epochs > 0:
+      warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+          optimizer,
+          start_factor=0.01,
+          end_factor=1.0,
+          total_iters=num_steps_per_epoch)
+
+    if self.args.scheduler_cfg.type == "linear":
+      scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        **self.args.scheduler_cfg.configs
+      )
+    elif self.args.scheduler_cfg.type == "stepLR":
+      scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
+    elif self.args.scheduler_cfg.type == "cosine_annealing":
+      cosine_params = self.args.scheduler_cfg.configs
+      cosine_params['T_max'] = num_steps_per_epoch * cosine_params['T_max']
+      scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        **cosine_params,
+      )
+    elif self.args.scheduler_cfg.type == 'reduce_on_plateau':
+      scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
+    elif self.args.scheduler_cfg.type == 'cosine_annealing_warm_restarts':
+      scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
+    elif self.args.scheduler_cfg.type == 'cyclic_lr':
+      scheduler = torch.optim.lr_scheduler.CyclicLR(
+        optimizer,
+        **self.args.scheduler_cfg.configs,
+      )
+    else:
+        raise NotImplementedError(f"Scheduler {self.args.scheduler_cfg.type} not implemented")
+    # Copy all scheduler except 'configs' and 'type'
+    scheduler_cfg_copy = {k: v for k, v in self.args.scheduler_cfg.items() if k not in ['configs', 'type']}
+
+    # Add warmup_scheduler to the scheduler_cfg_copy
+    if warmup_epochs > 0:
+      # Chained scheduler, where warmup runs first, then the main scheduler
+      chained_scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+        schedulers=[warmup_scheduler, scheduler],
+      )
+      scheduler_cfg_copy['scheduler'] = chained_scheduler
+    else:
+      scheduler_cfg_copy['scheduler'] = scheduler
+    #lr_scheduler_config = { "scheduler" : scheduler}#, "optimizer": optimizer}
+    #lr_scheduler_config.update(scheduler_cfg_copy)
+
+    return [optimizer], [scheduler_cfg_copy]
