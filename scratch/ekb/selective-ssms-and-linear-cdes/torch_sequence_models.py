@@ -17,7 +17,7 @@ References:
 import math
 import os
 from itertools import cycle
-
+import wandb
 import numpy as np
 import pandas as pd
 import torch
@@ -760,6 +760,7 @@ def run_sm_A5_experiment(
     num_epochs=400,
     seed=1234,
     output_dir="results/outputs_A5",
+    use_wandb=True,
 ):
     """
     Runs experiments on the A5 dataset using different sequence models.
@@ -814,6 +815,12 @@ def run_sm_A5_experiment(
                     continuous_output=True,
                 ).to(device)
 
+                if torch.cuda.is_available():
+                    try:
+                        model = torch.compile(model)
+                    except:
+                        print("did not compile model")
+
                 train_dataset = A5Dataset(length, train=True, seed=seed + 1)
                 train_dataset_length_2 = A5Dataset(2, train=True, seed=seed + 2)
                 val_dataset = A5Dataset(length, train=False, seed=seed + 1)
@@ -841,6 +848,21 @@ def run_sm_A5_experiment(
 
                 cycled_train_dataloader_length_2 = cycle(train_dataloader_length_2)
 
+                if use_wandb:
+                    wandb.init(project="A5_experiments",
+                               config={"model_name": model_name,
+                                        "length": length,
+                                        "depth": depth,
+                                       "input_dim": input_dim,
+                                       "output_dim": output_dim,
+                                       "hidden_dim": hidden_dim,
+                                       "state_dim": state_dim,
+                                       "batch_size": batch_size,
+                                       "learning_rate": learning_rate,
+                                        "seed": seed,
+                                        "num_epochs": num_epochs,
+                                       "output_dir": output_dir,
+                                       })
                 for _ in tqdm(range(num_epochs), desc="Training Epochs", unit="epoch"):
                     for (X, y), (X_2, y_2) in zip(
                         train_dataloader, cycled_train_dataloader_length_2
@@ -869,6 +891,12 @@ def run_sm_A5_experiment(
                         )
                         loss_2.backward()
                         optimizer.step()
+                        # Log metrics to WandB
+                        if use_wandb:
+                            wandb.log({
+                                "train_loss": loss.item(),
+                                "train_loss_2": loss_2.item(),
+                            }, step=step)
 
                         if step % 10000 == 0:
                             model.eval()
@@ -892,6 +920,13 @@ def run_sm_A5_experiment(
                             )
                             all_acc.append(total_acc / total_num)
                             steps.append(step)
+                            # Log validation metrics to WandB
+                            if use_wandb:
+                                wandb.log({
+                                    "val_loss": running_loss / 10000,
+                                    "val_accuracy": total_acc / total_num,
+                                }, step=step)
+
                             if all_acc[-1] > 0.90:
                                 early_stop = True
                                 break
@@ -914,10 +949,20 @@ def run_sm_A5_experiment(
                     all_acc,
                 )
 
+                # Log final metrics to WandB
+                if use_wandb:
+                    wandb.log({
+                        "final_val_accuracy": all_acc[-1] if len(all_acc) > 0 else 0,
+                        "final_steps": steps[-1] if len(steps) > 0 else 0,
+                    })
                 if early_stop:
                     break
                 else:
                     depths_to_remove.append(depth)
 
+                if use_wandb:
+                    wandb.finish()
+
             for depth in depths_to_remove:
                 depth_recurrence.remove(depth)
+
