@@ -147,9 +147,12 @@ if __name__ == "__main__":
     if args.name:
         config["model_names"] = [args.name]
     if args.depth:
-        config["depth_nonlinears"] = [[args.depth, args.nonlinear]]
+        if experiment == "toy":
+            config["depth_nonlinears"] = [[args.depth, args.nonlinear]]
+        else:
+            config["depths"] = [args.depth]
     if args.length:
         config["lengths"] = [args.length]
     if args.input_dim:
         config["input_dims"] = [args.input_dim]
-    run_fn(**config, seed=seed)
+    run_fn(**config, seed=seed, output_dir=f"results2/outputs_{experiment}")

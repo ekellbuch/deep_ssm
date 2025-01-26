@@ -23,8 +23,29 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
-from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
 
+deep_ssm_data_path = os.environ["DEEP_SSM_DATA"]
+try:
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+except:
+    from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+
+from tqdm import tqdm
+
+try:
+    import torch_xla.core.xla_model as xm
+    DEVICE = xm.xla_device()  # TPU
+except:
+    if torch.backends.mps.is_available():
+        DEVICE = torch.device("mps")  # macOS Metal backend
+        compile_backend="aot_eager"
+        compile_backend="eager"
+    elif torch.cuda.is_available():
+        DEVICE = torch.device("cuda")  # GPU
+        compile_backend = None
+    else:
+        DEVICE = torch.device("cpu")  # CPU fallback
+        compile_backend = None
 
 class Embedding(nn.Module):
     """
@@ -551,7 +572,7 @@ class A5Dataset(torch.utils.data.Dataset):
 
     def __init__(self, length, train=True, train_split=0.8, seed=None):
         super().__init__()
-        df = pd.read_csv(f"data_dir/illusion/A5={length}.csv")
+        df = pd.read_csv(f"{deep_ssm_data_path}/group_multiplication/data/A5={length}.csv")
         input_array = df["input"].str.split(" ", expand=True).astype(int).to_numpy()
         target_array = df["target"].str.split(" ", expand=True).astype(int).to_numpy()
 
@@ -738,6 +759,7 @@ def run_sm_A5_experiment(
     learning_rate,
     num_epochs=400,
     seed=1234,
+    output_dir="results/outputs_A5",
 ):
     """
     Runs experiments on the A5 dataset using different sequence models.
@@ -764,10 +786,10 @@ def run_sm_A5_experiment(
     """
     torch.manual_seed(seed)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = DEVICE
 
-    if not os.path.isdir("results/outputs_A5"):
-        os.mkdir("results/outputs_A5")
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
 
     for model_name in model_names:
         depth_recurrence = depths.copy()
@@ -819,7 +841,7 @@ def run_sm_A5_experiment(
 
                 cycled_train_dataloader_length_2 = cycle(train_dataloader_length_2)
 
-                for _ in range(num_epochs):
+                for _ in tqdm(range(num_epochs), desc="Training Epochs", unit="epoch"):
                     for (X, y), (X_2, y_2) in zip(
                         train_dataloader, cycled_train_dataloader_length_2
                     ):
@@ -884,11 +906,11 @@ def run_sm_A5_experiment(
                 steps = np.array(steps)
                 all_acc = np.array(all_acc)
                 np.save(
-                    f"results/outputs_A5/{model_name}_{length}_{depth}_{learning_rate}_{hidden_dim}_steps_run_{seed}.npy",
+                    f"{output_dir}/{model_name}_{length}_{depth}_{learning_rate}_{hidden_dim}_steps_run_{seed}.npy",
                     steps,
                 )
                 np.save(
-                    f"results/outputs_A5/{model_name}_{length}_{depth}_{learning_rate}_{hidden_dim}_acc_run_{seed}.npy",
+                    f"{output_dir}/{model_name}_{length}_{depth}_{learning_rate}_{hidden_dim}_acc_run_{seed}.npy",
                     all_acc,
                 )
 
