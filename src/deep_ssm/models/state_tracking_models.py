@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+from keras.src.backend.jax.random import dropout
+
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.mamba_simple import Mamba
 from deep_ssm.mixers.prnn import pRNN
@@ -24,14 +26,32 @@ class GRUDecoder(nn.Module):
 
 
 class pRNNDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size, num_layers=1, num_iters=2, bidirectional=False,
-                 method='gru', parallel=True, k=0.0, clip=False, quasi=True, reparameterize=False):
+    def __init__(self, vocab_size,embed_size, hidden_size, num_layers=1, num_iters=2, bidirectional=False,
+                 method='gru',
+                 parallel=True,
+                 k=0.0,
+                 clip=False,
+                 quasi=True,
+                 reparameterize=False,
+                 deer_norm=False,
+                 dropout=0):
         super(pRNNDecoder, self).__init__()
 
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.model= pRNN(embed_size, hidden_size, num_layers=num_layers, 
-                         batch_first=True, bidirectional=bidirectional, num_iters=num_iters, 
-                         method=method, parallel=parallel, k=k, clip=clip, quasi=quasi, reparameterize=reparameterize)
+        self.model= pRNN(embed_size,
+                         hidden_size,
+                         num_layers=num_layers,
+                         batch_first=True,
+                         bidirectional=bidirectional,
+                         num_iters=num_iters,
+                         method=method,
+                         parallel=parallel,
+                         k=k,
+                         clip=clip,
+                         quasi=quasi,
+                         reparameterize=reparameterize,
+                         deer_norm=deer_norm,
+                         dropout=dropout)
         self.linear = nn.Linear(hidden_size, vocab_size)
 
     def forward(self, x):
