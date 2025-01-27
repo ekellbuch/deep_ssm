@@ -1,0 +1,23 @@
+command:
+  - ${env}
+  - python
+  - ${program}
+  - "--config-name"
+  - "quasideer_gru_trun"
+  - ${args_no_hyphens}
+method: grid
+parameters:
+  model_cfg.configs.num_iters:
+    values: [6, 10]
+  callbacks.trun_iters.fixed_epochs:
+    values:[0, 10, 40]
+  callbacks.trun_iters.max_iters_trunc:
+    values: [6, 10]
+
+
+
+program: ../../scripts/run_group_multiplication.py
+project: group_multiplication_trun
+
+# Run:
+# wandb sweep randomized_trun.yaml
