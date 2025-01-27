@@ -5,6 +5,8 @@ Comment: >
 
   # Experiments: randomized last 40 or last 10 truncations
   # Experiments: fixed truncation truncation
+  python run_group_multiplication.py --config-name="quasideer_gru_trun" +trainer_cfg.limit_train_batches=1 +trainer_cfg.limit_test_batches=1 +trainer_cfg.limit_val_batches=1 
+
   python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=10
   python run_group_multiplication.py --config-name="quasideer_gru_trun" callbacks.trun_iters.fixed_epochs=40
   
@@ -13,6 +15,8 @@ project_name: "group_multiplication_trun"
 experiment_name: "quasideer_gru"
 
 seed: 0
+
+common:
 
 data_cfg:
   group: "S5"
@@ -53,10 +57,24 @@ callbacks:
   trun_iters:
     truncation_method: "random_sample" # random_sample or fixed_values
     truncation_schedule: "random_interval" # random_interval or fixed_epochs
-    truncation_epochs: [2, 3]
-    truncation_values: [2, 1]
-    fixed_epochs: 10
-    max_iters_trunc: 20
+    truncation_epochs: [2, 3]  # used if truncation_schedule is fixed_epochs
+    truncation_values: [2, 1]  # used if truncation_method is fixed_values
+    fixed_epochs: 10  # first fixed_epochs epochs uses model_cfg.configs.num_iters
+    max_iters_trunc: 6
+  checkpoint_cfg:
+    dirpath: "${oc.env:OAK}/${oc.env:USER}/state_tracking/icml2025/checkpoints" # Specify the checkpoint save directory
+    filename: "best_model-{epoch}-{val_loss:.4f}"  # Naming format for checkpoint files
+    save_top_k: 1  # Save only the best checkpoint
+    save_last: true
+    monitor: "avg_validation_loss"  # Metric to monitor for saving checkpoints
+    mode: "min"  # Minimize the monitored metric (use "max" for metrics like accuracy)
+    save_weights_only: false  # Save the entire model (set to true if you only need weights)
+  early_stopping:
+    monitor: "avg_validation_loss"
+    min_delta: 1e-4
+    patience: 10
+    verbose: false
+    mode: "min"
 
 trainer_cfg:
   fast_dev_run: false

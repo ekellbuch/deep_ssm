@@ -91,6 +91,7 @@ class TruncatedIterations(Callback):
         max_num_iters = pl_module.model.model.num_iters
         # Determine if we are in the fixed or dynamic phase
         if epoch < self.fixed_epochs:
+            pl_module.log("num_iters_trunc", max_num_iters)
             return
 
 
@@ -108,8 +109,8 @@ class TruncatedIterations(Callback):
 
         elif self.truncation_schedule == "random_interval":
                 # flip a coin to see if we truncate on this interval
-                truncate_now = torch.randint(0, 1, (1,)).item()
-                new_num_deer_iters = torch.randint(1, self.max_iters_trunc, (1,)).item()
+                truncate_now = True
+                new_num_deer_iters = torch.randint(1, self.max_iters_trunc +1, (1,)).item()
         else:
                 truncate_now = False
 
