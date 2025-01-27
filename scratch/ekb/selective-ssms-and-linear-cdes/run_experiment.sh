@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 #SBATCH --job-name='slurm_ekb'
 #SBATCH --output=slurm_ekb-%j.out
-#SBATCH --time=05:00:00  #=<TOTAL_TIME_PER_JOB>
+#SBATCH --time=20:00:00  #=<TOTAL_TIME_PER_JOB>
 #SBATCH -G 1   # number of gpus
 #SBATCH --cpus-per-gpu 16  # number of cpus
 #SBATCH -p swl1,owners,stat # partition
@@ -27,9 +27,9 @@ eval "$(conda shell.bash hook)"
 conda activate deep_ssm
 
 # code to run
-python run_experiment.py -m SequenceModel -n Mamba -l 16 -e A5 -d 4
-python run_experiment.py -m SequenceModel -n MambaAComplex -l 16 -e A5 -d 4
-python run_experiment.py -m SequenceModel -n MambaABCComplex -l 16 -e A5 -d 4
+#python run_experiment.py -m SequenceModel -n Mamba -l 16 -e A5 -d 4
+python run_experiment.py -m SequenceModel -n MambaAComplex -l 10 -e A5 -d 3
+#python run_experiment.py -m SequenceModel -n MambaABCComplex -l 12 -e A5 -d 4
 
 echo "Ran $SLURM_ARRAY_JOB_ID$"
 

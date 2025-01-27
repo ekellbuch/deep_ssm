@@ -7,7 +7,7 @@
 #SBATCH -p gpu,swl1,owners,stat  # partition
 #SBATCH --mail-type=FAIL            # Mail events (NONE, BEGIN, END, FAIL, ALL)
 #SBATCH --mail-user=ekb@stanford.edu
-#SBATCH --array=1-16
+#SBATCH --array=1-4
 #SBATCH --mem=32G
 
 # Check how many jobs i can submit:
@@ -25,8 +25,8 @@
 echo "SLURM_ARRAY_TASK_ID: $SLURM_ARRAY_TASK_ID"
 # Example array of jobs
 N_CONFIGS_PER_AGENT=1
-export SWEEP_ID=eq9nunie
-export WANDB_ENTITY=ekellbuch
+export SWEEP_ID=nzm6ix5h
+export WANDB_ENTITY=hazy-research
 export WANDB_PROJECT=complex_mamba_group_multiplication
 
 # Nice print statements (optional)
