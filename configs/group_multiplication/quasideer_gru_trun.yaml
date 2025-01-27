@@ -41,6 +41,9 @@ model_cfg:
     clip: false
     quasi: true
     reparameterize: false
+    dropout: 0.0
+    deer_norm: False
+
 
 module_cfg:
   type: "state_tracking"

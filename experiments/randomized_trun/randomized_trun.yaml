@@ -8,13 +8,13 @@ command:
 method: grid
 parameters:
   model_cfg.configs.num_iters:
-    values: [6, 10]
+    values: [6]
+  model_cfg.configs.deer_norm:
+    values: [True, False]
+  model_cfg.configs.dropout:
+    values: [0.0, 0.1]
   callbacks.trun_iters.fixed_epochs:
-    values:[0, 10, 40]
-  callbacks.trun_iters.max_iters_trunc:
-    values: [6, 10]
-
-
+    values: [0, 10, 40]
 
 program: ../../scripts/run_group_multiplication.py
 project: group_multiplication_trun
