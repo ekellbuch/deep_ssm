@@ -39,6 +39,7 @@ class pRNNClassifier(nn.Module):
                  learn_initial_states=False,
                  while_loop=False,
                  quasi=True,
+                 picard=False,
                  family="prnn", # alternatively, "min_gru"
                  use_mean=False, # should the summary statistic be mean or last hidden state? last state performs better and is more stable
                  conv=False, # should we include a convolution?
@@ -63,6 +64,7 @@ class pRNNClassifier(nn.Module):
                             learn_initial_states=learn_initial_states,
                             while_loop=while_loop,
                             quasi=quasi,
+                            picard=picard,
                             use_conv=conv,
                             clip_post=clip_post,
                             deer_norm=deer_norm)
@@ -72,6 +74,7 @@ class pRNNClassifier(nn.Module):
             raise ValueError(f"Unknown family: {family}")
         self.classifier = nn.Linear(hidden_size, num_classes)
         self.use_mean = use_mean
+        self.rnn = torch.compile(self.rnn)
 
     def forward(self, x):
         """

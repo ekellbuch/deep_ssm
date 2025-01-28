@@ -50,6 +50,7 @@ def deer_torch(
         derivative_fn=None, # full derivative for DEER speedups
         clip_post=False,
         deer_norm=False, # whether to use RMS norm between quasi-deer iterations
+        picard=False, # whether to use picard iterations
 ):
     """
     Wrapper function holding both deer and quasi-DEER
@@ -57,7 +58,9 @@ def deer_torch(
     Notes:
     - Currently needs wandb.init(), but you can use wandb.init(mode='disabled') to disable logging
     """
-    if diagonal_derivative:
+    if picard:
+        return picard_torch(f, initial_state, states_guess, inputs, num_iters=num_iters, while_loop=while_loop, clip_post=clip_post, deer_norm=deer_norm)
+    elif diagonal_derivative:
         return quasi_deer_torch(f, diagonal_derivative, initial_state, states_guess, inputs, num_iters=num_iters, k=k, clip=clip, while_loop=while_loop,
                                 clip_post=clip_post, deer_norm=deer_norm)
     else:
@@ -173,7 +176,7 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
         # unbatch:
         t_ = As.shape[0] // B
         As = As.view(B, t_, D, D)   # B x T-1 x  D x D
-        #As = As.permute(0, 2, 3, 1) # B x D x D x T-1
+        # As = As.permute(0, 2, 3, 1) # B x D x D x T-1
 
         if k > 0:
             As.mul_(1.0 - k)
@@ -207,6 +210,105 @@ def deer_helper(f, initial_state, states_guess, inputs, num_iters=10, k=0.0, whi
         return new_states, isnan
 
     return deer_outer_loop(deer_step_parallel, states_guess, num_iters=num_iters, while_loop=while_loop)
+
+
+def picard_torch(
+    f,
+    initial_state,  # (B,D)
+    states_guess,  # (B,D, T)
+    inputs,  # (B, d_input, T)
+    num_iters=10,  # controls number of fpiterations
+    last_only=False,  # only differentiate through the last state
+    while_loop=False,  # run to convergence, using a while loop
+    clip_post=False,
+    deer_norm=False,  # whether to use RMS norm between fp iterations
+):
+    """
+    picard iterations!
+    Args:
+      f: a forward fxn that takes in an input and a state, and outputs the next state. (following torch.nn.GRUCell convention)
+          In the context of a GRU, f is a GRU cell
+          In pytorch setting, f should be able to handle the batch dimension
+      initial_state: (B,D)
+      states_guess, (B, D, T)
+      inputs, (B, d_input, T)
+      num_iters: number of iterations to run
+      k: int, k=0 is quasi-DEER, k is between 0 and 1, nonzero k is quasi-slim-ELK
+    Notes:
+    - The initial_state is the fixed starting point.
+    The structure looks like the following.
+    Let h0 be the initial_state (fixed), h[1:T-1] be the states, and e[0:T-2] be the inputs
+    Then our graph looks like
+    h0 -----> h1 ---> h2 ---> ..... h_{T-1} ----> h_{T}
+              ^       ^       ^          ^          ^
+              |       |                   |          |
+              e0      e1       ..... e_{T-2}      e_{T-1}
+    Use the pytorch scan from: https://github.com/proger/accelerated-scan
+    This scan expects inputs in the form (B,D,T)
+    Note that the RNN standard (for inputs) in pytorch is (T,B,d_input)
+    This scan also requires powers of 2, so padding for now...
+
+    Currently requires wandb.init, but you can use wandb.init(mode='disabled') to disable logging
+    """
+    B = states_guess.shape[0]
+    D = states_guess.shape[1]
+    T = states_guess.shape[-1]
+    padded_T = int(2 ** np.ceil(np.log2(T)))  # must be a power of 2
+    device = states_guess.device
+
+    def step(states):
+        """
+        states: B,D,T
+        """
+        # Evaluate f and its Jacobian in parallel across timesteps 1,..,T-1
+        B, D, T = states.shape
+        # inputs and states are (B,D,T-1), the first interacton is f(e1, h1)
+        fs = f(_batch_along_time(inputs[..., 1:]), _batch_along_time(states[..., :-1]))
+        fs = _unbatch_to_time(fs, B)  # (B,D,T-1)
+
+        # Compute the As and bs from fs and Jfs
+        # inputs and states are (B,D,T-1)
+        As = torch.ones((B, D, T - 1), device=device) # picard iterations uses diagonal
+        bs = fs - As * states[..., :-1]  # (B, D, T-1)
+
+        # initial_state is h0
+        b0 = f(inputs[..., 0], initial_state)  # h1 = f(e0, h0), (B,D)
+        A0 = torch.zeros_like(As[..., 0])  # (B,D)
+        A = torch.cat(
+            [A0.unsqueeze(-1), As, torch.zeros([B, D, padded_T - T], device=device)],
+            dim=-1,
+        )  # (B, D, T)
+        b = torch.cat(
+            [b0.unsqueeze(-1), bs, torch.zeros([B, D, padded_T - T], device=device)],
+            dim=-1,
+        )  # (B, D, T)
+
+        # parallel asscociative scan
+        # breakpoint()
+        # print("A", A.min().item(),A.max().item())
+        # print("b", b.min().item(),b.max().item())
+        new_states = scan(A, b)[..., :T]  # (B, D, T)
+
+        if clip_post:
+            new_states.clamp_(min=-1, max=1)
+
+        if deer_norm:
+            new_states = torch.nn.functional.rms_norm(new_states, new_states.shape)
+
+        isnan = torch.isnan(new_states).any()
+        if not torch.is_complex(new_states):
+            new_states.nan_to_num()  # zero out nans, in place modification to be more memory efficient
+        # print("new_state",new_states.min().item(),new_states.max().item())
+
+        return new_states, isnan
+
+    return deer_outer_loop(
+        step,
+        states_guess,
+        num_iters=num_iters,
+        while_loop=while_loop,
+        last_only=last_only,
+    )
 
 
 def quasi_deer_torch(
@@ -701,6 +803,7 @@ class pRNN(nn.Module):
         reparameterize=False, # reparameterize a cell
         while_loop=False, # run to convergence
         quasi=True, # use quasi deer
+        picard=False, # use picard
         use_conv=False, # use convolutions in each layer
         clip_post=False,
         deer_norm=False, # use rms norm betwen
@@ -714,6 +817,7 @@ class pRNN(nn.Module):
         self.dropout = dropout
         self.bidirectional = bidirectional
         self.quasi = quasi
+        self.picard = picard
         self.checkpoint = checkpoint
         self.clip_post= clip_post
         # turn off checkpointing if using deer
@@ -942,7 +1046,8 @@ class pRNN(nn.Module):
                                 while_loop=self.while_loop,
                                 derivative_fn=derivative_fn,
                                 clip_post=self.clip_post,
-                                deer_norm=self.deer_norm) # (B, D, T)
+                                deer_norm=self.deer_norm,
+                                picard=self.picard) # (B, D, T)
             return output.transpose(1, 2)  # (batch_size, seq_len, hidden_size)
         else:
             output = torch.empty_like(h0)

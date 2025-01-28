@@ -91,6 +91,7 @@ def main(cfg: DictConfig):
         learn_initial_states=cfg.model_cfg.learn_initial_states,
         while_loop=while_loop,
         quasi=cfg.model_cfg.quasi,
+        picard=cfg.model_cfg.picard,
         family=cfg.model_cfg.family,
         use_mean=cfg.model_cfg.use_mean,
         conv=cfg.model_cfg.conv,
@@ -98,7 +99,7 @@ def main(cfg: DictConfig):
         deer_norm=cfg.model_cfg.deer_norm,
     )
     model.to(device)
-    model = torch.compile(model)
+    # model = torch.compile(model)
     num_params = sum(p.numel() for p in model.rnn.parameters())
     for p in model.parameters():
         print(p.shape)
@@ -216,15 +217,19 @@ def main(cfg: DictConfig):
     test_acc, test_loss = eval_loop(model, test_loader, device, criterion)
     print(f"Test Accuracy: {round(100 * test_acc.item(), 2)}%, Test Loss: {test_loss:.4f}")
 
-    # Evaluate in sequential mode also
-    model.rnn.parallel = False
-    seq_test_acc, seq_test_loss = eval_loop(model, test_loader, device, criterion)
+    # # Evaluate in sequential mode also
+    # model.rnn.parallel = False
+    # seq_test_acc, seq_test_loss = eval_loop(model, test_loader, device, criterion)
 
     # Log Test Metrics to Wandb
-    logger.log_metrics({"test_accuracy": test_acc.item(),
-                        "test_loss": test_loss,
-                        "seq_test_accuracy": seq_test_acc.item(),
-                        "seq_test_loss": seq_test_loss})
+    logger.log_metrics(
+        {
+            "test_accuracy": test_acc.item(),
+            "test_loss": test_loss,
+            # "seq_test_accuracy": seq_test_acc.item(),
+            # "seq_test_loss": seq_test_loss,
+        }
+    )
 
 def eval_loop(model, test_loader, device, criterion):
     test_loss = 0.0

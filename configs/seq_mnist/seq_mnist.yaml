@@ -20,6 +20,7 @@ model_cfg:
   method: "gru"
   while_loop: False
   quasi: True
+  picard: False
   family: "prnn" # alternative is min_gru
   num_layers: 1
   rt: False # randomized truncation
