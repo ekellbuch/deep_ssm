@@ -7,9 +7,11 @@ Run the following commands to install the required packages:
 ./setup_env.sh
 ```
 Note: if working on sherlock make sure to download the correct modules before running the above command.
-
+Also note that the pip install of pytorch is required on sherlock
+Make sure to load cudnn before cuda as cudnn will load cuda/12.2
+If it doesn't work, try to run each line of setup_env.sh individually
 ```
-ml python/3.9.0 && ml gcc/10.1.0 && ml cudnn/8.9.0.131  && ml load cuda/12.4.1
+ml gcc/10.1.0 && ml cudnn/8.9.0.131  && ml load cuda/12.4.0
 ```
 ## Baselines:
 
@@ -39,5 +41,3 @@ python run.py --config-name="baseline_gru"
 ```
 python run.py --config-name="baseline_mamba"
 ```
-
-
