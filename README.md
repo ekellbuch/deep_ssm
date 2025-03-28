@@ -26,6 +26,7 @@ python -m example --grayscale
 gsutil cp gs://cfan/interspeech24/brain2text_competition_data.pkl .
 export DEEP_SSM_DATA=/path/to/data
 
+Note: The current baseline_* files require that the data is located in $DEEP_SSM_DATA/SpeechBCI/competitionData/
 Note: on sherlock the data is already available in the following directory:
 export DEEP_SSM_DATA=/scratch/groups/swl1
 

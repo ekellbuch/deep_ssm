@@ -12,7 +12,7 @@ seed: 0
 data_cfg:
   batchSize: 64
   num_workers: 0
-  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc"
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/brain2text_competition_data.pkl"
   train_split: 1    # % of training data assigned to train_loader 1=100%
   # transformations:
   whiteNoiseSD: 0.8
