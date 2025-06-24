@@ -1,5 +1,7 @@
 # Deep sequence models
 
+[![Run Tests](https://github.com/ekellbuch/deep_ssm/actions/workflows/pytests.yml/badge.svg)](https://github.com/ekellbuch/deep_ssm/actions/workflows/pytests.yml)
+
 ## Installation:
 
 Run the following commands to install the required packages:

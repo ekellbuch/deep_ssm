@@ -172,10 +172,13 @@ class ComplexLinearScanBTC(Function):
 
         # Handle case where gates is constant (None in in_dims)
         if in_dims == (None, 0):
-            outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates.unsqueeze(0), tokens)
-            outputs_g = outputs_g.squeeze(0)
-            outputs_k = outputs_k.squeeze(0)
-            out_dims = (None, 0)
+            # gates: (T, C) - constant for all batches
+            # tokens: (B, T, C) - vectorized over batch dimension
+            batch_size = tokens.shape[0]
+            gates_expanded = gates.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+            outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates_expanded, tokens)
+            # Return with correct out_dims - both outputs are batched
+            out_dims = (0, 0)
         else:
             raise NotImplementedError("Only (None, 0) is implemented")
 
@@ -432,10 +435,14 @@ class ScanBTC(torch.autograd.Function):
 
         # Handle case where gates is constant (None in in_dims)
         if in_dims == (None, 0):
-            outputs = ComplexLinearScanBTC.apply(gates, tokens.squeeze(1))
+            # gates: (T, C) - constant for all batches  
+            # tokens: (B, T, C) - vectorized over batch dimension
+            batch_size = tokens.shape[0]
+            gates_expanded = gates.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+            outputs = ScanBTC.apply(gates_expanded, tokens)
 
-
-            out_dims = (None, None)
+            # Both outputs are batched
+            out_dims = (0, 0)
         else:
             raise NotImplementedError("Only (None, 0) is implemented")
 
@@ -617,8 +624,9 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     gates, tokens = create_inputs(batch, dim, seq_len, complexity, only_real)
 
     if in_dims[0] is None:
-        # gates has shape (T, C) and is constant over batch dimension
-        gates = gates[0].detach().requires_grad_()
+        # For (None, 0) case: gates should be (T, C), tokens should be (B, T, C)
+        gates = gates[0].detach().contiguous().requires_grad_()
+        out_dims = (0, 0)
 
     # Let's define a function:
     func_ = lambda x: x.abs().sum((-1,-2)).mean()
@@ -636,7 +644,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     # Now compare the vmap forward pass:
     gates.grad = None
     tokens.grad = None
-    vmap_forward = torch.vmap(torch_associative_scanBTC, in_dims=in_dims, out_dims=in_dims)
+    vmap_forward = torch.vmap(torch_associative_scanBTC, in_dims=in_dims, out_dims=out_dims)
     outputs_vmap_g, outputs_vmap_token = vmap_forward(gates, tokens)
     loss = func_(outputs_vmap_token)
     loss.backward()
@@ -652,7 +660,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     # Vmap ComplexLinearScanBTC:
     gates.grad = None
     tokens.grad = None
-    vmap_forward2 = torch.vmap(ComplexLinearScanBTC.apply, in_dims=in_dims, out_dims=in_dims)
+    vmap_forward2 = torch.vmap(ComplexLinearScanBTC.apply, in_dims=in_dims, out_dims=out_dims)
     outputs2_vmap_g, outputs2_vmap_token = vmap_forward2(gates, tokens)
     loss = func_(outputs2_vmap_token)
     loss.backward()
@@ -670,7 +678,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     # Vmap triton scan_BTC_complex:
     gates.grad = None
     tokens.grad = None
-    vmap_forward3 = torch.vmap(scan_BTC_complex, in_dims=in_dims, out_dims=in_dims)
+    vmap_forward3 = torch.vmap(scan_BTC_complex, in_dims=in_dims, out_dims=out_dims)
     outputs3_vmap_g, outputs3_vmap_token = vmap_forward3(gates, tokens)
     loss = func_(outputs3_vmap_token)
     loss.backward()

@@ -112,7 +112,7 @@ def binary_operator(
 
 class ComplexLinearScanBCT(Function):
     @staticmethod
-    def forward(ctx, gates, tokens):
+    def forward(gates, tokens):
         """
         Forward pass for the complex linear scan.
         x_t = g_t * x_{t-1} + b_t
@@ -124,13 +124,14 @@ class ComplexLinearScanBCT(Function):
         """
         seq_len = tokens.shape[-1]
         outputs = torch.zeros_like(tokens, dtype=torch.cfloat)
-
+        outputs_gates = torch.zeros_like(gates, dtype=torch.cfloat)
         # Initialize (a_prefix, b_prefix) variables
         a_prefix = gates[..., 0]
         b_prefix = tokens[..., 0]
 
         # initialize x_0 = a_0 * x_0 + b_prefix,  but we assume x_0 = 0
         outputs[..., 0] = tokens[..., 0]
+        outputs_gates[..., 0] = gates[..., 0]
 
         for t in range(1, seq_len):
             #outputs[..., t] = gates[..., t] * outputs[..., t-1] + tokens[..., t]
@@ -139,12 +140,13 @@ class ComplexLinearScanBCT(Function):
             a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (gates[..., t], tokens[..., t]))
             # x_t = a_prefix * x_0 + b_prefix
             outputs[..., t] = b_prefix
-        ctx.save_for_backward(gates, tokens, outputs)
-        return outputs
+            outputs_gates[..., t] = a_prefix
+
+        return outputs_gates, outputs
 
         
     @staticmethod
-    def backward(ctx, grad_outputs):
+    def backward(ctx, grad_gates, grad_outputs):
         """
         Backward pass for the complex linear scan.
         Args:
@@ -160,7 +162,7 @@ class ComplexLinearScanBCT(Function):
         grad_tokens = torch.zeros_like(tokens, dtype=torch.cfloat)
 
         # Gradient of the loss with respect to the last output
-        padded_shifted_gates = torch.cat([gates, torch.ones_like(gates[:, :, :1])], dim=-1)[:, :, 1:].contiguous().conj()
+        padded_shifted_gates = torch.cat([gates, torch.ones_like(gates[..., :1])], dim=-1)[..., 1:].contiguous().conj()
 
         padded_shifted_gates_rev = torch.flip(padded_shifted_gates, dims=[-1])
         grad_outputs_rev = torch.flip(grad_outputs, dims=[-1])
@@ -181,6 +183,7 @@ class ComplexLinearScanBCT(Function):
         grad_gates = grad_tokens * padded_outputs.conj()
         return grad_gates, grad_tokens
 
+    @staticmethod
     def vmap(info, in_dims, gates, tokens):
         """
         A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
@@ -196,12 +199,25 @@ class ComplexLinearScanBCT(Function):
 
         # Handle case where gates is constant (None in in_dims)
         if in_dims == (None, 0):
-            outputs = ComplexLinearScanBCT.apply(gates, tokens.squeeze(1))
-            out_dims = (None, None)
+            # gates: (T, C) - constant for all batches
+            # tokens: (B, T, C) - vectorized over batch dimension
+            batch_size = tokens.shape[0]
+            gates_expanded = gates.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+            outputs_g, outputs_k = ComplexLinearScanBCT.apply(gates_expanded, tokens)
+            out_dims = (0, 0)
         else:
             raise NotImplementedError("Only (None, 0) is implemented")
 
-        return outputs, out_dims
+        return (outputs_g, outputs_k), out_dims
+    
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        # Define the context setup required for functorch transforms
+        gates, tokens = inputs
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
+        return ctx  # Return context
+
 # -------------------------------------------------------------------------------------------------
 @triton.jit
 def complex_mul(a_real, a_imag, b_real, b_imag):
@@ -439,12 +455,17 @@ class ScanBCT(torch.autograd.Function):
 
         # Handle case where gates is constant (None in in_dims)
         if in_dims == (None, 0):
-            outputs = ComplexLinearScanBCT.apply(gates, tokens.squeeze(1))
-            out_dims = (None, None)
+            # gates: (C, T) - constant across batch
+            # tokens: (B, C, T) - vectorized over batch dimension
+            B = tokens.shape[0]
+            # Expand gates to match batch dimension
+            gates_expanded = gates.unsqueeze(0).expand(B, -1, -1).contiguous()
+            outputs_g, outputs_k = ScanBCT.apply(gates_expanded, tokens)
+            out_dims = (0, 0)  # Both outputs vectorized over batch dimension
         else:
             raise NotImplementedError("Only (None, 0) is implemented")
 
-        return outputs, out_dims
+        return (outputs_g, outputs_k), out_dims
 
     @staticmethod
     def setup_context(ctx, inputs, outputs):
@@ -539,10 +560,10 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tokens.grad = None  # Reset gradients
     gates.grad = None
 
-    outputs = ComplexLinearScanBCT.apply(gates, tokens)
+    outputs_g, outputs_t = ComplexLinearScanBCT.apply(gates, tokens)
 
     # Compute a loss
-    loss = outputs.abs().sum()
+    loss = outputs_t.abs().sum()
     loss.backward()
 
     seq2_gates_grad = gates.grad.clone()
@@ -563,7 +584,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     tri_tokens_grad = tokens.grad.clone()
 
     # Check forward pass match
-    assert torch.allclose(out_token, outputs, atol=1e-5), print(f"Forward pass mismatch vanilla {out_token} and custom {outputs}" )
+    assert torch.allclose(out_token, outputs_t, atol=1e-5), print(f"Forward pass mismatch vanilla {out_token} and custom {outputs}" )
     assert torch.allclose(out_token, new_t, atol=1e-5),  print(f"Forward pass mismatch vanilla {out_token} and triton {new_t}" )
 
     # Check backward pass match
@@ -573,6 +594,15 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len):
     assert torch.allclose(seq_gates_grad, tri_gates_grad, atol=1e-5), print(f"Backward pass mismatch gates  vanilla {seq_gates_grad} and triton {tri_gates_grad}" )
 
 in_dims_pairs = [(None, 0)]#, (0, 1), (1, 0), (1, 1)]
+
+def test_single_scan_vmap():
+    only_real = True
+    complexity = "v1"
+    batch = 4
+    dim = 1
+    seq_len = 4
+    in_dims = (None, 0)  # vmap over dimension that gets vectorized for each input
+    test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims)
 
 
 @pytest.mark.parametrize("only_real", only_reals)
@@ -593,8 +623,9 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     gates, tokens = create_inputs(batch, dim, seq_len, complexity, only_real)
 
     if in_dims[0] is None:
-        # gates has shape (T, C) and is constant over batch dimension
+        # gates has shape (C, T) and is constant over batch dimension
         gates = gates[0].detach().requires_grad_()
+        out_dims = (0, 0)
 
     # Let's define a function:
     func_ = lambda x: x.abs().sum((-1,-2)).mean()
@@ -612,7 +643,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     # Now compare the vmap forward pass:
     gates.grad = None
     tokens.grad = None
-    vmap_forward = torch.vmap(torch_associative_scanBCT, in_dims=in_dims, out_dims=in_dims)
+    vmap_forward = torch.vmap(torch_associative_scanBCT, in_dims=in_dims, out_dims=out_dims)
     outputs_vmap_g, outputs_vmap_token = vmap_forward(gates, tokens)
     loss = func_(outputs_vmap_token)
     loss.backward()
@@ -628,7 +659,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     # Vmap ComplexLinearScanBTC:
     gates.grad = None
     tokens.grad = None
-    vmap_forward2 = torch.vmap(ComplexLinearScanBCT.apply, in_dims=in_dims, out_dims=in_dims)
+    vmap_forward2 = torch.vmap(ComplexLinearScanBCT.apply, in_dims=in_dims, out_dims=out_dims)
     outputs2_vmap_g, outputs2_vmap_token = vmap_forward2(gates, tokens)
     loss = func_(outputs2_vmap_token)
     loss.backward()
@@ -646,7 +677,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims):
     # Vmap triton scan_BTC_complex:
     gates.grad = None
     tokens.grad = None
-    vmap_forward3 = torch.vmap(scan_BCT_complex, in_dims=in_dims, out_dims=in_dims)
+    vmap_forward3 = torch.vmap(scan_BCT_complex, in_dims=in_dims, out_dims=out_dims)
     outputs3_vmap_g, outputs3_vmap_token = vmap_forward3(gates, tokens)
     loss = func_(outputs3_vmap_token)
     loss.backward()

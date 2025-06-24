@@ -1,0 +1,74 @@
+name: Run Tests
+
+on:
+  pull_request:
+  push:
+    branches: [add_s5]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Cache micromamba packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/micromamba
+          ~/micromamba/pkgs
+        key: micromamba-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+        restore-keys: |
+          micromamba-${{ runner.os }}-
+  
+    - name: Cache full micromamba environment
+      id: cache-env
+      uses: actions/cache@v4
+      with:
+        path: /home/runner/micromamba/envs/deep_ssm
+        key: micromamba-env-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+        restore-keys: |
+          micromamba-env-${{ runner.os }}-
+ 
+    - name: Set up Micromamba
+      uses: mamba-org/setup-micromamba@v1
+      with:
+        environment-file: environment.yaml
+        environment-name: deep_ssm
+        cache-environment: true
+
+    - name: Save full micromamba environment
+      if: steps.cache-env.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /home/runner/micromamba/envs/deep_ssm
+        key: micromamba-env-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+
+    - name: Verify Python and Conda environment
+      run: |
+        which python
+        python --version
+        micromamba info
+        micromamba list
+
+    - name: Install package in development mode
+      shell: micromamba
+      run: |
+        pip install -e .
+
+    - name: Run tests
+      shell: micromamba
+      run: |
+        pytest tests/ -v --cov=deep_ssm --cov-report=term-missing
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
