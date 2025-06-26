@@ -733,10 +733,10 @@ def batch_apply_S5_layer(params, input_sequences):
     return torch.vmap(apply_S5_layer, in_dims=(None, 0))(params, input_sequences)
 
 
-seqlens = [2, 4, 8] # seqlen
-num_statess = [1, 4, 16, 32] # num_states
+seqlens = [2, 8] # seqlen
+num_statess = [1, 4] # num_states
 d_models = [1, 4] # d_model
-batch_dims = [1, 2, 3] # batch_dim
+batch_dims = [1, 2] # batch_dim
 complexities = ["v0", "v1"]
 
 

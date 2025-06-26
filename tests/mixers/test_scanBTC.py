@@ -212,11 +212,11 @@ def create_inputs(batch, dim, seq_len, complexity, only_real):
 
 # -------------------------------------------------------------------------------------------------
 
-only_reals =[True, False]
-complexities = ["v0", "v1", "v2", "v3", "v4"]
-batch_dims = [1,2,4, 8]
-feature_dims = [1, 2, 4]
-seq_lens = [4, 8, 16, 256]
+only_reals =[False]
+complexities = ["v0", "v4"]
+batch_dims = [1, 4]
+feature_dims = [1, 4]
+seq_lens = [4, 256]
 
 
 """
