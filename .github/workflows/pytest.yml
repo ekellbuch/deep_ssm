@@ -8,9 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        env_file: [environment_cpu.yaml, environment_gpu.yaml]
+    env:
+      MICROMAMBA_PKGS_DIR: ~/micromamba/pkgs
 
     steps:
     - name: Checkout code
@@ -24,7 +23,7 @@ jobs:
         path: |
           ~/.cache/micromamba
           ~/micromamba/pkgs
-        key: micromamba-${{ runner.os }}-${{ hashFiles(matrix.env_file) }}
+        key: micromamba-${{ runner.os }}-${{ hashFiles('environment_cpu.yaml') }}
         restore-keys: |
           micromamba-${{ runner.os }}-
   
@@ -32,26 +31,28 @@ jobs:
       id: cache-env
       uses: actions/cache@v4
       with:
-        path: /home/runner/micromamba/envs/deep_ssm
-        key: micromamba-env-${{ runner.os }}-${{ hashFiles(matrix.env_file) }}
+        path: /home/runner/micromamba/envs/test-env
+        key: micromamba-env-${{ runner.os }}-${{ hashFiles('environment_cpu.yaml') }}
         restore-keys: |
           micromamba-env-${{ runner.os }}-
  
     - name: Set up Micromamba
       uses: mamba-org/setup-micromamba@v1
       with:
-        environment-file: ${{ matrix.env_file }}
-        environment-name: deep_ssm
+        environment-file: environment_cpu.yaml
+        environment-name: test-env
+        init-shell: bash
         cache-environment: true
 
     - name: Save full micromamba environment
       if: steps.cache-env.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
-        path: /home/runner/micromamba/envs/deep_ssm
-        key: micromamba-env-${{ runner.os }}-${{ hashFiles(matrix.env_file) }}
+        path: /home/runner/micromamba/envs/test-env
+        key: micromamba-env-${{ runner.os }}-${{ hashFiles('environment_cpu.yaml') }}
 
     - name: Verify Python and Conda environment
+      shell: micromamba-shell {0}
       run: |
         which python
         python --version
@@ -59,14 +60,15 @@ jobs:
         micromamba list
 
     - name: Install package in development mode
-      shell: micromamba
+      shell: micromamba-shell {0}
       run: |
-        micromamba run -n deep_ssm -- pip install -e src/
+        pip install -e src/
 
     - name: Run tests
-      shell: micromamba
+      id: pytest
+      shell: micromamba-shell {0}
       run: |
-        micromamba run -n deep_ssm -- pytest tests/ -v --cov=deep_ssm --cov-report=term-missing
+        pytest tests/ -v
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3

@@ -10,6 +10,10 @@ from deep_ssm.mixers.s5_fjax.jax_func import associative_scan, lecun_normal
 from deep_ssm.mixers.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps, make_DPLR_HiPPO, \
   trunc_standard_normal
 
+DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
+
+
 # Discretization functions
 def discretize_bilinear(Lambda: torch.Tensor,
                         B_tilde: torch.Tensor,
@@ -110,6 +114,7 @@ def apply_ssm(
   """
   # Cast to correct complex type
   cinput_sequence = input_sequence.type(Lambda_bars.dtype)
+  seq_length = input_sequence.shape[0]
 
   # compute Bu elements
   if B_bars.ndim == 3:
@@ -120,15 +125,16 @@ def apply_ssm(
     Bu_elements = torch.vmap(lambda u: B_bars @ u)(cinput_sequence)
 
   if Lambda_bars.ndim == 1:  # Repeat for associative_scan
-    #Lambda_bars = Lambda_bars.tile(input_sequence.shape[0], 1)
-    real_part = Lambda_bars.real.repeat(input_sequence.shape[0], 1)
-    imag_part = Lambda_bars.imag.repeat(input_sequence.shape[0], 1)
-    Lambda_bars = torch.complex(real_part, imag_part)
+    Lambda_bars_first = (Lambda_bars * prev_state).unsqueeze(0)              # [B, D]
+    Lambda_bars_rest = Lambda_bars.unsqueeze(0).expand(seq_length - 1, -1)  # [B, L-1, D]
+    Lambda_bars = torch.cat((Lambda_bars_first, Lambda_bars_rest), dim=0)
+  else:
+    Lambda_bars[0] = Lambda_bars[0] * prev_state
 
-  Lambda_bars[0] = Lambda_bars[0] * prev_state
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u
   _, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
 
+  
   if bidirectional:
     _, xs2 = associative_scan(
       binary_operator, (Lambda_bars, Bu_elements), reverse=True
@@ -139,15 +145,22 @@ def apply_ssm(
 
   # compute SSM output sequence y = C_tilde x{t+1}
   if conj_sym:
-    y = torch.vmap(lambda x: 2 * (C_tilde @ x).real)(xs)
+    y = torch.vmap(lambda x: 2 * pytorch_match_jax_complex_grad(C_tilde, x))(xs)
   else:
-    y = torch.vmap(lambda x: (C_tilde @ x).real)(xs)
+    y = torch.vmap(lambda x: pytorch_match_jax_complex_grad(C_tilde, x))(xs)
 
   if bidirectional:
     return y, xs[-1][:Lambda_bars.shape[-1]]
   else:
     return y, xs[-1]
 
+
+def pytorch_match_jax_complex_grad(C_tilde, x):
+    """Force PyTorch to compute complex @ gradients like JAX."""
+    # Split: (C_real + i*C_imag) @ (x_real + i*x_imag)
+    # Real part = C_real @ x_real - C_imag @ x_imag
+    real_part = torch.mv(C_tilde.real, x.real) - torch.mv(C_tilde.imag, x.imag)
+    return real_part
 
 Initialization = Literal["complex_normal", "lecun_normal", "truncate_standard_normal"]
 
@@ -377,9 +390,9 @@ class S5SSM(torch.nn.Module):
     x = Lambda_bar * prev_state + Bu
     # y_k = C_tilde x_k + D u_k
     if self.conj_sym:
-      y = 2*(C_tilde @ x).real + self.D * signal
+      y = 2* pytorch_match_jax_complex_grad(C_tilde, x) + self.D * signal
     else:
-      y = (C_tilde @ x).real + self.D * signal
+      y = pytorch_match_jax_complex_grad(C_tilde, x) + self.D * signal
     return y, x
 
 

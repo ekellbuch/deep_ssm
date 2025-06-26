@@ -43,12 +43,7 @@
 
 import torch
 from torch.autograd import Function
-import triton
-import triton.language as tl
-import os
 import pytest
-os.environ["TRITON_INTERPRET"]="1"
-os.environ["TRITON_LOG_LEVEL"] = "debug"
 from timeit import timeit
 from deep_ssm.mixers.scan_utils import scan_bct_complex
 

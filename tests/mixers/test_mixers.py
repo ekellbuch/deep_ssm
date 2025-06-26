@@ -42,7 +42,7 @@ class TestMixerInference(parameterized.TestCase):
         """
         Test forward and step in s4/s5 models
         """
-        batch, seqlen, dim = 1, 64, 16
+        batch, seqlen, dim = 2, 256, 16
         dtype = torch.float32
 
         ssm_size   = 8
@@ -154,6 +154,3 @@ class TestMixerInference(parameterized.TestCase):
 
             self.assertTrue(torch.allclose(y2, y3, rtol=1e-5, atol=1e-5))
 
-
-if __name__ == '__main__':
-  absltest.main()
