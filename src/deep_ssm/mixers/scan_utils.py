@@ -1,6 +1,10 @@
 import torch
 import triton
 import triton.language as tl
+import os
+
+os.environ["TRITON_INTERPRET"]="1"
+os.environ["TRITON_LOG_LEVEL"] = "debug"
 
 
 @triton.jit
