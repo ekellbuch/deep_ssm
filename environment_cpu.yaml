@@ -1,0 +1,29 @@
+name: deep_ssm
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch>=2.0.0
+  - torchvision
+  - torchaudio
+  - ninja
+  - pandas
+  - scikit-learn=1.5.1
+  - lightning=2.3.3
+  - wandb
+  - pip:
+    - datasets==2.4.0
+    - omegaconf==2.2.3
+    - ml-collections==0.1.1
+    - hydra-core==1.2.0
+    - transformers==4.42.4
+    - torchtyping
+    - edit-distance
+    - pyparsing
+    - pytest
+    - pytest-cov
+    - pytest-xdist
+    - absl-py

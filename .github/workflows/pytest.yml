@@ -8,6 +8,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env_file: [environment_cpu.yaml, environment_gpu.yaml]
 
     steps:
     - name: Checkout code
@@ -21,7 +24,7 @@ jobs:
         path: |
           ~/.cache/micromamba
           ~/micromamba/pkgs
-        key: micromamba-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+        key: micromamba-${{ runner.os }}-${{ hashFiles(matrix.env_file) }}
         restore-keys: |
           micromamba-${{ runner.os }}-
   
@@ -30,14 +33,14 @@ jobs:
       uses: actions/cache@v4
       with:
         path: /home/runner/micromamba/envs/deep_ssm
-        key: micromamba-env-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+        key: micromamba-env-${{ runner.os }}-${{ hashFiles(matrix.env_file) }}
         restore-keys: |
           micromamba-env-${{ runner.os }}-
  
     - name: Set up Micromamba
       uses: mamba-org/setup-micromamba@v1
       with:
-        environment-file: environment.yaml
+        environment-file: ${{ matrix.env_file }}
         environment-name: deep_ssm
         cache-environment: true
 
@@ -46,7 +49,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: /home/runner/micromamba/envs/deep_ssm
-        key: micromamba-env-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+        key: micromamba-env-${{ runner.os }}-${{ hashFiles(matrix.env_file) }}
 
     - name: Verify Python and Conda environment
       run: |
@@ -58,12 +61,12 @@ jobs:
     - name: Install package in development mode
       shell: micromamba
       run: |
-        pip install -e .
+        micromamba run -n deep_ssm -- pip install -e src/
 
     - name: Run tests
       shell: micromamba
       run: |
-        pytest tests/ -v --cov=deep_ssm --cov-report=term-missing
+        micromamba run -n deep_ssm -- pytest tests/ -v --cov=deep_ssm --cov-report=term-missing
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
