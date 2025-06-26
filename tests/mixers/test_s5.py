@@ -690,9 +690,8 @@ def apply_ssm(
   #new_gates, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
   
   # passes 
-  new_gates, xs = torch_associative_scanBTC(Lambda_bars, Bu_elements)
-  # new_gates2, xs2 = torch_associative_scanBTC(Lambda_bars, Bu_elements)
-  #_, xs = scan_tri_complex(Lambda_bars, Bu_elements)
+  #new_gates, xs = torch_associative_scanBTC(Lambda_bars, Bu_elements)
+  _, xs = scan_tri_complex(Lambda_bars, Bu_elements)
 
   if bidirectional:
     raise NotImplementedError("Bidirectional SSM not implemented")

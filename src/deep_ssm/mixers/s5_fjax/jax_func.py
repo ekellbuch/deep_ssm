@@ -1,6 +1,59 @@
+"""
+Compare scan implementations:
+* scan_ref: reference implementation
+* scan_warp: warp implementation
+* scan_triton: triton implementation
+* scan_bct_complex: bct implementation for complex numbers (B, C, T)
+* scan_btc_complex: btc implementation for complex numbers (T, C)
+
+TODO: test with compile time
+"""
 import torch
 import numpy as np
 from torch.utils._pytree import tree_flatten, tree_unflatten
+
+
+# device can be cpu, cuda, mps
+DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
+try:
+    from deep_ssm.mixers.scan_utils import scan_bct_complex
+    from deep_ssm.mixers.scan_utils import scan_btc_complex
+    include_scan_bct_complex = True
+    include_scan_btc_complex = True
+except:
+    include_scan_bct_complex = False
+    include_scan_btc_complex = False
+
+try:
+    from accelerated_scan.ref import scan as scan_ref
+    # Compile the scan_ref function for better performance
+    include_scan_ref = True
+except:
+    scan_ref = None
+    include_scan_ref = False
+
+try:
+    from accelerated_scan.warp import scan as scan_warp
+    include_scan_warp = True
+except:
+    scan_warp = None
+    include_scan_warp = False
+
+try:
+    from accelerated_scan.triton import scan as scan_triton
+    include_scan_triton = True
+except:
+    scan_triton = None
+    include_scan_triton = False
+
+if not(DEVICE == "cuda"):
+    include_scan_warp = False
+    include_scan_triton = False
+    include_scan_bct_complex = False
+    include_scan_btc_complex = False
+
+
 from typing import (
     overload,
     Callable,
@@ -152,35 +205,121 @@ def associative_scan(operator: Callable, elems, axis: int = 0, reverse: bool = F
     return tree_unflatten(scans, tree)
 
 
-def test_associative_scan(shape=(1, 24, 24)):
+def test_associative_scan(shape=(1, 32, 32), axis=-1, is_complex=False):
     import jax.lax
     import jax
 
-    x = np.random.randn(*shape)
-    jx = jax.numpy.array(x)
-    tx = torch.tensor(x, dtype=torch.float32)
+    if axis == -1:
+        axis = len(shape) - 1
+    if is_complex:
+        x = np.ones(shape=shape)  + np.ones(shape=shape) * 1j
+        dtype = torch.complex64
+        dtype_jax = jax.numpy.complex64
+    else:
+        x = np.ones(shape=shape)
+        dtype = torch.float32
+        dtype_jax = jax.numpy.float32
+    jx = jax.numpy.array(x, dtype=dtype_jax)
+    tx = torch.tensor(x, dtype=dtype)
 
     def nested_func(a, b):
         a_i, b_i = a
         a_j, b_j = b
         return a_j * a_i, a_j * b_i + b_j
 
-    jy1, jy2 = jax.lax.associative_scan(nested_func, (jx, jx))
-    ty1, ty2 = associative_scan(nested_func, (tx, tx))
-    assert (
-        np.isclose(ty1.numpy(), np.array(jy1)).all()
-        and np.isclose(ty2.numpy(), np.array(jy2)).all()
-    ), "Expected jax & pytorch impl to be close"
+    jy1, jy2 = jax.lax.associative_scan(nested_func, (jx, jx), axis=axis)
+    ty1, ty2 = associative_scan(nested_func, (tx, tx), axis=axis)
+    if is_complex:
+        assert (
+            np.isclose(ty1.real.numpy(), np.array(jy1).real).all()
+            and np.isclose(ty1.imag.numpy(), np.array(jy1).imag).all()
+            and np.isclose(ty2.real.numpy(), np.array(jy2).real).all()
+            and np.isclose(ty2.imag.numpy(), np.array(jy2).imag).all()
+        ), "Expected jax & pytorch impl to be close"
+    else:      
+        assert (
+            np.isclose(ty1.numpy(), np.array(jy1)).all()
+            and np.isclose(ty2.numpy(), np.array(jy2)).all()
+        ), "Expected jax & pytorch impl to be close"
 
-    jy1, jy2 = jax.lax.associative_scan(nested_func, (jx, jx), reverse=True)
-    ty1, ty2 = associative_scan(nested_func, (tx, tx), reverse=True)
-    assert (
-        np.isclose(ty1.numpy(), np.array(jy1)).all()
-        and np.isclose(ty2.numpy(), np.array(jy2)).all()
-    ), "Expected jax & pytorch reverse impl to be close"
+    jy1r, jy2r = jax.lax.associative_scan(nested_func, (jx, jx), reverse=True, axis=axis)
+    ty1r, ty2r = associative_scan(nested_func, (tx, tx), reverse=True, axis=axis)
+    if is_complex:
+        assert (
+            np.isclose(ty1r.real.numpy(), np.array(jy1r).real).all()
+            and np.isclose(ty1r.imag.numpy(), np.array(jy1r).imag).all()
+            and np.isclose(ty2r.real.numpy(), np.array(jy2r).real).all()
+            and np.isclose(ty2r.imag.numpy(), np.array(jy2r).imag).all()
+        ), "Expected jax & pytorch reverse impl to be close"
+    else:
+        assert (
+        np.isclose(ty1r.numpy(), np.array(jy1r)).all()
+        and np.isclose(ty2r.numpy(), np.array(jy2r)).all()
+        ), "Expected jax & pytorch reverse impl to be close"
 
     print("Associative scan working as expected!")
 
+    if include_scan_ref and not is_complex:
+        # scan1_ref operates on the last dimension (sequence length)
+        # We need to ensure the last dimension has a power-of-2 length
+        last_dim_length = tx.shape[-1]
+        
+        # Check if sequence length is a power of 2 and > 1 for scan1_ref
+        if last_dim_length > 1 and (last_dim_length & (last_dim_length - 1) == 0):
+
+            # jax.lax.associative_scan operates on dim=0 by default
+            # whereas scan1_ref operates on dim=-1
+            # so we need to transpose the tensors to match the expected input dimensions
+            if axis != -1 or axis != 2:
+                tx = tx.transpose(2, axis)
+                ty2 = ty2.transpose(2, axis)
+            
+            # level_ is the level of the recurrence relation
+            # it is the minimum of the log2 of the sequence length and 1
+            # this is because the recurrence relation is only defined for level 1
+            scan1_y2 = scan_ref(tx, tx)            
+            # Check if scan1_y1 and scan1_y2 are close to ty1 and ty2
+            close_y2 = np.isclose(ty2.numpy(), scan1_y2.numpy(), rtol=1e-5, atol=1e-5)
+
+            assert close_y2.all(), "Expected scan1_ref y2 & pytorch impl to be close"
+
+            # Also reverse the scan:
+            scan1_y2r = scan_ref(tx, tx, reverse=True)
+            close_y2r = np.isclose(ty2r.numpy(), scan1_y2r.numpy(), rtol=1e-5, atol=1e-5)
+            assert close_y2r.all(), "Expected scan1_ref y2r & pytorch impl to be close"
+
+    if include_scan_warp and not is_complex:
+        scan1_y2 = scan_warp(tx, tx)
+        close_y2 = np.isclose(ty2.numpy(), scan1_y2.numpy(), rtol=1e-5, atol=1e-5)
+        assert close_y2.all(), "Expected scan_warp y2 & pytorch impl to be close"
+
+        # Also reverse the scan:
+        scan1_y2r = scan_warp(tx, tx, reverse=True)
+        close_y2r = np.isclose(ty2r.numpy(), scan1_y2r.numpy(), rtol=1e-5, atol=1e-5)
+        assert close_y2r.all(), "Expected scan_warp y2r & pytorch impl to be close"
+
+    if include_scan_triton and not is_complex:
+        scan1_y2 = scan_triton(tx, tx)
+        close_y2 = np.isclose(ty2.numpy(), scan1_y2.numpy(), rtol=1e-5, atol=1e-5)
+        assert close_y2.all(), "Expected scan_triton y2 & pytorch impl to be close"
+
+        # Also reverse the scan:
+        scan1_y2r = scan_triton(tx, tx, reverse=True)
+        close_y2r = np.isclose(ty2r.numpy(), scan1_y2r.numpy(), rtol=1e-5, atol=1e-5)
+        assert close_y2r.all(), "Expected scan_triton y2r & pytorch impl to be close"
+
+    if include_scan_bct_complex and is_complex:
+        gates, tokens = scan_bct_complex(tx, tx)
+        close_gates = (
+            np.isclose(gates.real.numpy(), ty1.real.numpy(), rtol=1e-5, atol=1e-5)
+            and np.isclose(gates.imag.numpy(), ty1.imag.numpy(), rtol=1e-5, atol=1e-5)
+        )
+        close_tokens = (
+            np.isclose(tokens.real.numpy(), ty2.real.numpy(), rtol=1e-5, atol=1e-5)
+            and np.isclose(tokens.imag.numpy(), ty2.imag.numpy(), rtol=1e-5, atol=1e-5)
+        )
+        assert close_gates.all(), "Expected scan_bct_complex gates & pytorch impl to be close"
+        assert close_tokens.all(), "Expected scan_bct_complex tokens & pytorch impl to be close"
 
 def _interleave(a, b, axis: int):
     # https://stackoverflow.com/questions/60869537/how-can-i-interleave-5-pytorch-tensors
@@ -452,24 +591,32 @@ def test_variance_scaling():
     print("Variance scaling working as expected!")
 
 
-def time_jax_associative_scan(nested_func, jx, repeats=100):
+def time_jax_associative_scan(nested_func, jx, repeats=100, axis=-1):
     import jax
     start_time = time.time()
     for _ in range(repeats):
-        jax.lax.associative_scan(nested_func, (jx, jx))
+        jax.lax.associative_scan(nested_func, (jx, jx), axis=axis)
     end_time = time.time()
     return (end_time - start_time) / repeats
 
 
-def time_torch_associative_scan(nested_func, tx, repeats=100):
+def time_torch_associative_scan(nested_func, tx, repeats=100, axis=2):
     start_time = time.time()
     for _ in range(repeats):
-        associative_scan(nested_func, (tx, tx))
+        associative_scan(nested_func, (tx, tx), axis=axis)
     end_time = time.time()
     return (end_time - start_time) / repeats
 
 
-def compare_associative_scan_timing(shape=(1, 24, 24), repeats=100):
+def time_accelerated_scan_associative_scan(fn, tx, repeats=100):
+    start_time = time.time()
+    for _ in range(repeats):
+        fn(tx, tx)
+    end_time = time.time()
+    return (end_time - start_time) / repeats
+
+
+def compare_associative_scan_timing(shape=(1, 32, 32), repeats=100):
     import jax
     x = np.random.randn(*shape)
     jx = jax.numpy.array(x)
@@ -485,7 +632,15 @@ def compare_associative_scan_timing(shape=(1, 24, 24), repeats=100):
 
     print(f"JAX associative_scan average time: {jax_time:.6f} seconds")
     print(f"PyTorch associative_scan average time: {torch_time:.6f} seconds")
-
+    if include_scan_ref:
+        scan_ref_time = time_accelerated_scan_associative_scan(scan_ref, tx, repeats)
+        print(f"scan_ref average time: {scan_ref_time:.6f} seconds")
+    if include_scan_warp:
+        scan_warp_time = time_accelerated_scan_associative_scan(scan_warp, tx, repeats)
+        print(f"scan_warp average time: {scan_warp_time:.6f} seconds")
+    if include_scan_triton:
+        scan_triton_time = time_accelerated_scan_associative_scan(scan_triton, tx, repeats)
+        print(f"scan_triton average time: {scan_triton_time:.6f} seconds")
 
 if __name__ == "__main__":
     test_variance_scaling()
@@ -493,5 +648,6 @@ if __name__ == "__main__":
     test_associative_scan()
     test_associative_scan(shape=(2, 256, 24))
     test_associative_scan(shape=(360, 96))
+    test_associative_scan(is_complex=True)
     import time
-    compare_associative_scan_timing(shape=(2,256,24), repeats=5)
+    compare_associative_scan_timing(shape=(2,256,32), repeats=5)
