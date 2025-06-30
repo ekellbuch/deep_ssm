@@ -17,8 +17,8 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
 try:
-    from deep_ssm.mixers.scan_utils import scan_bct_complex
-    from deep_ssm.mixers.scan_utils import scan_btc_complex
+    from deep_ssm.mixers.scan_utils import scan_bct_complex, torch_associative_scanBCT
+    from deep_ssm.mixers.scan_utils import scan_btc_complex, torch_associative_scanBTC
     include_scan_bct_complex = True
     include_scan_btc_complex = True
 except:
@@ -50,8 +50,8 @@ except:
 if not(DEVICE == "cuda"):
     include_scan_warp = False
     include_scan_triton = False
-    include_scan_bct_complex = False
-    include_scan_btc_complex = False
+    #include_scan_bct_complex = False
+    #include_scan_btc_complex = False
 
 
 from typing import (
@@ -311,15 +311,53 @@ def test_associative_scan(shape=(1, 32, 32), axis=-1, is_complex=False):
     if include_scan_bct_complex and is_complex:
         gates, tokens = scan_bct_complex(tx, tx)
         close_gates = (
-            np.isclose(gates.real.numpy(), ty1.real.numpy(), rtol=1e-5, atol=1e-5)
-            and np.isclose(gates.imag.numpy(), ty1.imag.numpy(), rtol=1e-5, atol=1e-5)
+            np.isclose(gates.real.numpy(), ty1.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(gates.imag.numpy(), ty1.imag.numpy(), rtol=1e-5, atol=1e-5).all()
         )
         close_tokens = (
-            np.isclose(tokens.real.numpy(), ty2.real.numpy(), rtol=1e-5, atol=1e-5)
-            and np.isclose(tokens.imag.numpy(), ty2.imag.numpy(), rtol=1e-5, atol=1e-5)
+            np.isclose(tokens.real.numpy(), ty2.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(tokens.imag.numpy(), ty2.imag.numpy(), rtol=1e-5, atol=1e-5).all()
         )
-        assert close_gates.all(), "Expected scan_bct_complex gates & pytorch impl to be close"
-        assert close_tokens.all(), "Expected scan_bct_complex tokens & pytorch impl to be close"
+        assert close_gates, "Expected scan_bct_complex gates & pytorch impl to be close"
+        assert close_tokens, "Expected scan_bct_complex tokens & pytorch impl to be close"
+
+        # add reverse:
+        gates_r, tokens_r = scan_bct_complex(tx, tx, reverse=True)
+        close_gates_r = (
+            np.isclose(gates_r.real.numpy(), ty1r.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(gates_r.imag.numpy(), ty1r.imag.numpy(), rtol=1e-5, atol=1e-5).all()
+        )
+        close_tokens_r = (
+            np.isclose(tokens_r.real.numpy(), ty2r.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(tokens_r.imag.numpy(), ty2r.imag.numpy(), rtol=1e-5, atol=1e-5).all()
+        )
+        assert close_gates_r, "Expected scan_bct_complex gates_r & pytorch impl to be close"
+        assert close_tokens_r, "Expected scan_bct_complex tokens_r & pytorch impl to be close"
+
+        gates, tokens = torch_associative_scanBCT(tx, tx)
+        close_gates = (
+            np.isclose(gates.real.numpy(), ty1.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(gates.imag.numpy(), ty1.imag.numpy(), rtol=1e-5, atol=1e-5).all()
+        )
+        close_tokens = (
+            np.isclose(tokens.real.numpy(), ty2.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(tokens.imag.numpy(), ty2.imag.numpy(), rtol=1e-5, atol=1e-5).all()
+        )
+        assert close_gates, "Expected torch_associative_scanBCT gates & pytorch impl to be close"
+        assert close_tokens, "Expected torch_associative_scanBCT tokens & pytorch impl to be close"
+
+        # add reverse:
+        gates_r, tokens_r = torch_associative_scanBCT(tx, tx, reverse=True)
+        close_gates_r = (
+            np.isclose(gates_r.real.numpy(), ty1r.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(gates_r.imag.numpy(), ty1r.imag.numpy(), rtol=1e-5, atol=1e-5).all()
+        )
+        close_tokens_r = (  
+            np.isclose(tokens_r.real.numpy(), ty2r.real.numpy(), rtol=1e-5, atol=1e-5).all()
+            and np.isclose(tokens_r.imag.numpy(), ty2r.imag.numpy(), rtol=1e-5, atol=1e-5).all()
+        )
+        assert close_gates_r, "Expected torch_associative_scanBCT gates_r & pytorch impl to be close"
+        assert close_tokens_r, "Expected torch_associative_scanBCT tokens_r & pytorch impl to be close"
 
 def _interleave(a, b, axis: int):
     # https://stackoverflow.com/questions/60869537/how-can-i-interleave-5-pytorch-tensors
