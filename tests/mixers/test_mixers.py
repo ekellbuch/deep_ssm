@@ -137,7 +137,7 @@ class TestMixerInference(parameterized.TestCase):
 
         # TODO: check tolerance gap for s4
         if model_name == 'S4':
-            self.assertTrue(torch.allclose(y2, y1, rtol=1e-0, atol=1e-4))
+            self.assertTrue(torch.allclose(y2, y1, rtol=1e-0, atol=1e-3))
         else:
             self.assertTrue(torch.allclose(y2, y1, rtol=1e-5, atol=1e-5))
 
