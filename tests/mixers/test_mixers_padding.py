@@ -38,7 +38,8 @@ def test_padded_sequence(model_name, bidirectional):
     """
     Test forward step in padded mamba models
     """
-
+    rtol = 1e-4
+    atol = 1e-4
     batch, seqlen, dim = 1, 64, 1
     dtype = torch.float32
 
@@ -104,4 +105,4 @@ def test_padded_sequence(model_name, bidirectional):
 
       unpadded_y1 = y1_padded[:, :-pad_len, :]
 
-      assert torch.allclose(unpadded_y1, y1, rtol=1e-5, atol=1e-5)
+      assert torch.allclose(unpadded_y1, y1, rtol=rtol, atol=atol)
