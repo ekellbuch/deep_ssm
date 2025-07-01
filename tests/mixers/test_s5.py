@@ -9,13 +9,6 @@ The S5 layer is implemented in JAX and PyTorch.
 
 The test compares the output of the S5 layer and the gradients computed by the backward pass.
 
-
-Discretization:
-
-The state matrix is diagonalized and discretized using the bilinear transform method.
-
-Bilinear transform equation: This is a first-order hold/exact approximation for diagonal A=
-
 """
 import pytest
 import torch
@@ -24,13 +17,15 @@ import jax.numpy as jnp
 from typing import Tuple
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
 from deep_ssm.mixers.s5_fjax.ssm_init import make_DPLR_HiPPO
+from deep_ssm.mixers.scan_utils import torch_associative_scanBTC, scan_btc_complex_autograd
+from deep_ssm.mixers.scan_utils import scan_btc_complex_autograd as scan_tc_complex
+
 try:
    import triton
    import triton.language as tl
    load_triton = True
 except:
    load_triton = False
-from torch.autograd import Function
 
 import os
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -62,6 +57,7 @@ def discretize_jax(Lambda, B_tilde, Delta):
     return Lambda_bar, B_bar
 
 
+@jax.vmap
 def binary_operator_jax(element_i, element_j):
     """ Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
     Args:
@@ -85,7 +81,7 @@ def apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence, conj_sym=False,
     Returns:
         ys (float32): the SSM outputs (S5 layer preactivations) (L, H) """
     # Prepare elements required to initialize parallel scan
-    Lambda_elements = jnp.repeat(Lambda_bar[None, ...], input_sequence.shape[0], axis=0)
+    Lambda_elements = Lambda_bar * jnp.ones((input_sequence.shape[0], Lambda_bar.shape[0]))
     Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
     elements = (Lambda_elements, Bu_elements) # (L, P), (L, P)
 
@@ -94,14 +90,21 @@ def apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence, conj_sym=False,
 
     if bidirectional:
        _, xs2 = parallel_scan(binary_operator_jax, elements, reverse=True) # (L, P)
-       xs = jnp.concatenate([xs, xs2], axis=0)
+       xs = jnp.concatenate([xs, xs2], axis=-1)
 
     # Compute SSM output sequence
     if conj_sym:
-        ys = jax.vmap(lambda x, u: 2 * (C_tilde @ x).real + D * u)(xs, input_sequence)
+        ys = jax.vmap(lambda x: 2 * (C_tilde @ x).real)(xs)
     else:
-        ys = jax.vmap(lambda x, u: (C_tilde @ x + D * u).real)(xs, input_sequence)
-    return ys, xs[-1]
+        ys = jax.vmap(lambda x: (C_tilde @ x).real)(xs) 
+    
+    Du = jax.vmap(lambda u: D * u)(input_sequence) # (L, H)
+    ys = ys + Du
+    if bidirectional:
+        xs = xs[-1][:Lambda_bar.shape[-1]]
+    else:
+        xs = xs[-1]
+    return ys, xs
 
 
 def apply_ssm_jax_naive(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
@@ -145,7 +148,7 @@ def apply_ssm_jax_naive(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bi
     return ys
 
 
-def apply_S5_layer_jax(params, input_sequence):
+def apply_S5_layer_jax(params, input_sequence, bidirectional=False):
     """ Computes LxH output sequence of an S5 layer given LxH input sequence.
     Args:
         params: tuple of the continuous time SSM parameters
@@ -154,45 +157,21 @@ def apply_S5_layer_jax(params, input_sequence):
         The S5 layer output sequence (L, H) """
     Lambda, B_tilde, C_tilde, D, log_Delta = params
     Lambda_bar, B_bar = discretize_jax(Lambda, B_tilde, jnp.exp(log_Delta))
-    preactivations, _ = apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence)
+    preactivations, _ = apply_ssm_jax(Lambda_bar, B_bar, C_tilde, D, input_sequence, bidirectional=bidirectional)
     return jax.nn.gelu(preactivations)
 
 
-def batch_apply_S5_layer_jax(params, input_sequences):
+def batch_apply_S5_layer_jax(params, input_sequences, bidirectional=False):
     """ Computes BxLxH output sequence of an S5 layer given BxLxH input sequence.
     Args:
         params: tuple of the continuous time SSM parameters
         input_sequences: batch of input feature sequences (B, L ,H)
     Returns:
         Batch of S5 layer output sequences (B, L, H) """
-    return jax.vmap(apply_S5_layer_jax, in_axes=(None, 0))(params, input_sequences)
+    return jax.vmap(lambda g, t: apply_S5_layer_jax(g, t, bidirectional=bidirectional), in_axes=(None, 0))(params, input_sequences)
 
 
 # ----------------- PyTorch functions ----------------- 
-@torch.jit.script
-def binary_operator(
-  q_i: Tuple[torch.Tensor, torch.Tensor], q_j: Tuple[torch.Tensor, torch.Tensor]
-):
-  """Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
-  Args:
-      q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
-      q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
-  Returns:
-      new element ( A_out, Bu_out )
-  """
-  A_i, b_i = q_i
-  A_j, b_j = q_j
-
-  # Ensure tensors are contiguous
-  #A_i = A_i.contiguous()
-  #A_j = A_j.contiguous()
-  #b_i = b_i.contiguous()
-  #b_j = b_j.contiguous()
-  # return A_j * A_i, A_j * b_i + b_j
-
-  #print('A_i', A_i.stride())
-  #print('A_j', A_j.stride())
-  return A_j * A_i , torch.addcmul(b_j, A_j, b_i)
 
 
 def discretize(Lambda: torch.Tensor,
@@ -217,49 +196,6 @@ def discretize(Lambda: torch.Tensor,
   B_bar = (1/ Lambda * (Lambda_bar - Identity))[..., None] * B_tilde
   return Lambda_bar, B_bar
 
-
-def torch_associative_scanBTC(gates, tokens):
-    """
-    PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
-    x_t = g_t * x_{t-1} + b_t
-
-    where g_t are the gates and b_t are the tokens.
-
-    Args:
-        gates: Complex tensor representing the gates of shape (batch_size, seq_len, dim).
-        tokens: Complex tensor representing the tokens of shape (batch_size, seq_len, dim).
-
-    Returns:
-        A tuple of tensors (scanned_gates, scanned_tokens) where:
-            scanned_gates: The cumulative product of gates.
-            scanned_tokens: The cumulative result of applying the recurrence relation.
-
-    """
-    seq_len = gates.shape[-2]
-
-    # Initialize outputs
-    scanned_gates = torch.zeros_like(gates)
-    scanned_tokens = torch.zeros_like(tokens)
-
-    # Set the initial values
-    scanned_gates[..., 0, :] = gates[..., 0, :]
-    scanned_tokens[..., 0, :] = tokens[..., 0, :]
-
-    # Temporary tensors for computation
-    current_gates = gates[..., 0, :]
-    current_tokens = tokens[..., 0, :]
-
-    for t in range(1, seq_len):
-        # Compute new values
-        current_gates = gates[..., t, :] * current_gates
-        current_tokens = gates[..., t, :] * current_tokens + tokens[..., t, :]
-
-        # Assign to output tensors
-        scanned_gates[..., t, :] = current_gates
-        scanned_tokens[..., t, :] = current_tokens
-
-    return scanned_gates, scanned_tokens
-
 # With this:
 def pytorch_match_jax_complex_grad(C_tilde, x):
     """Force PyTorch to compute complex @ gradients like JAX."""
@@ -267,386 +203,6 @@ def pytorch_match_jax_complex_grad(C_tilde, x):
     # Real part = C_real @ x_real - C_imag @ x_imag
     real_part = torch.mv(C_tilde.real, x.real) - torch.mv(C_tilde.imag, x.imag)
     return real_part
-
-
-if load_triton:
- 
-    @triton.jit
-    def complex_mul(a_real, a_imag, b_real, b_imag):
-        """Compute complex multiplication."""
-        return (a_real * b_real - a_imag * b_imag,
-                a_real * b_imag + a_imag * b_real)
-
-
-    @triton.jit
-    def first_order_op_complex(l_real, l_imag, l_gates_real, l_gates_imag,
-                            r_real, r_imag, r_gates_real, r_gates_imag):
-        """Compute the first-order operation directly with real/imag components.
-
-        A_i, Bu_i = (l_gates_real, l_real)
-        A_j, Bu_j = (r_gates_real, r_real)
-        return 
-            A_j * A_i
-            A_j * Bu_i + Bu_j
-        """
-        # Complex multiplication for the gate update
-        # f = A_j * A_i
-        f_real, f_imag = complex_mul(r_gates_real, r_gates_imag,l_gates_real, l_gates_imag)
-
-        # Complex multiplication and addition for state update
-        # mul =   A_j * Bu_i + Bu_j
-        mul_real, mul_imag = complex_mul(r_gates_real, r_gates_imag, l_real, l_imag)
-
-        mul_real = mul_real + r_real
-        mul_imag = mul_imag + r_imag
-
-        return mul_real, mul_imag, f_real, f_imag
-
-
-    @triton.jit
-    def forward_scan_complex(
-        gates_real,
-        gates_imag,
-        tokens_real,
-        tokens_imag,
-        output_gates_real,
-        output_gates_imag,
-        output_tokens_real,
-        output_tokens_imag,
-        SEQUENCE_LENGTH: tl.constexpr,
-        ):
-        """
-        Forward scan with direct complex number handling.
-        """
-        sequence_id = tl.num_programs(axis=1) * tl.program_id(axis=0) + tl.program_id(axis=1)
-        strides = 1*(tl.arange(0, SEQUENCE_LENGTH) + sequence_id * SEQUENCE_LENGTH)
-
-        # Load data
-        gates_r = tl.load(gates_real + strides)
-        gates_i = tl.load(gates_imag + strides)
-        tokens_r = tl.load(tokens_real + strides)
-        tokens_i = tl.load(tokens_imag + strides)
-
-        #print('\n fwd triton in gates_r, gates_i, tokens_r, tokens_i:')
-        #print(gates_r, gates_i,tokens_r, tokens_i)
-
-        # Perform scan operation
-        tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
-            (tokens_r, tokens_i, gates_r, gates_i),
-            axis=0,
-            combine_fn=first_order_op_complex
-        )
-        #print("\n fwd triton out gates_r_out, gates_i_out:, tokens_new_r, tokens_new_i, ")
-        print(gates_r_out, gates_i_out,tokens_new_r, tokens_new_i)
-
-        # Store results
-        tl.store(output_gates_real + strides, gates_r_out)
-        tl.store(output_gates_imag + strides, gates_i_out)
-        tl.store(output_tokens_real + strides, tokens_new_r)
-        tl.store(output_tokens_imag + strides, tokens_new_i)
-
-    @triton.jit
-    def backward_scan_complex(
-        gates_real,
-        gates_imag,
-        grad_real,
-        grad_imag,
-        d_gates_real,
-        d_gates_imag,
-        d_tokens_real,
-        d_tokens_imag,
-        SEQUENCE_LENGTH: tl.constexpr,
-        ):
-        """Backward scan with direct complex number handling."""
-        sequence_id = tl.num_programs(axis=1) * tl.program_id(axis=0) + tl.program_id(axis=1)
-        forward_strides = (tl.arange(0, SEQUENCE_LENGTH) + sequence_id * SEQUENCE_LENGTH)
-        reverse_strides = (tl.num_programs(axis=0) * tl.num_programs(axis=1) * SEQUENCE_LENGTH - 1) - forward_strides
-
-        # Load data in reverse order
-        gates_r = tl.load(gates_real + reverse_strides)
-        gates_i = tl.load(gates_imag + reverse_strides)
-        grad_r = tl.load(grad_real + reverse_strides)
-        grad_i = tl.load(grad_imag + reverse_strides)
-
-        print("\n bwd triton in gates_r, gates_i, grad_r, grad_i: )should be flipped)")
-        print(gates_r, gates_i, grad_r, grad_i)
-
-        # Perform backward scan
-        tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
-            (grad_r, grad_i, gates_r, gates_i),
-            axis=0,
-            combine_fn=first_order_op_complex
-        )
-        # Debug intermediate results
-        print("\nbwd triton out gates_r_out, gates_i_out, tokens_new_r, tokens_new_i")
-        print( gates_r_out, gates_i_out,tokens_new_r, tokens_new_i)
-
-        #print('d_tokens_real computed', tokens_new_r)
-        #print('d_gates_real computed', gates_r_out)
-        # Store results in reverse order
-        tl.store(d_tokens_real + reverse_strides, tokens_new_r)
-        tl.store(d_tokens_imag + reverse_strides, tokens_new_i)
-        tl.store(d_gates_real + reverse_strides, gates_r_out)
-        tl.store(d_gates_imag + reverse_strides, gates_i_out)
-
-
-class ScanBCT(torch.autograd.Function):
-    
-    @staticmethod
-    def forward(gates, tokens):
-        B, C, T = gates.shape
-        assert tokens.shape == (B, C, T), "Tokens must have the same shape as gates."
-        assert gates.is_contiguous(), "Gates tensor must be contiguous."
-        assert tokens.is_contiguous(), "Tokens tensor must be contiguous."
-
-        # Split into real and imaginary parts
-        gates_real, gates_imag = gates.real, gates.imag
-        tokens_real, tokens_imag = tokens.real, tokens.imag
-
-        # Allocate output tensors
-        gates_new = torch.zeros_like(gates, dtype=gates.dtype)
-        tokens_new = torch.zeros_like(tokens, dtype=tokens.dtype)
-
-        gates_new_real = gates_new.real
-        gates_new_imag = gates_new.imag
-        tokens_new_real = tokens_new.real
-        tokens_new_imag = tokens_new.imag
-
-        #print("\nfwd gates_real, gates_imag,tokens_real, tokens_imag, :")
-        #print(gates_real, gates_imag,tokens_real, tokens_imag)
-        # Forward pass
-        forward_scan_complex[(B, C)](
-            gates_real, gates_imag,
-            tokens_real, tokens_imag,
-            gates_new_real, gates_new_imag,
-            tokens_new_real, tokens_new_imag,
-            SEQUENCE_LENGTH=T,
-            enable_fp_fusion=False
-        )
-        #print("\n fwd from triton gates_new, tokens_new:")
-        #print(gates_new, tokens_new)
-        return gates_new, tokens_new
-
-    @staticmethod
-    def backward(ctx, grad_gates, grad_tokens):
-        # Given a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
-        # dL / dx_t = dL / dx_{t+1} * dx_{t+1}/dx_t = dL / dx_{t+1} * g*_{t+1}
-        # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
-        # grad_tokens: dL / db_t = dL / dx_t
-    
-        # Padded reverse scan
-        gates, tokens,  output_tokens = ctx.saved_tensors
-        B, C, T = tokens.shape
-
-        # Allocate output tensors
-        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype)
-        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype)
-        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype)
-        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype)
-
-        # Split into real and imaginary parts
-        gates = gates.conj()
-        gates_real, gates_imag = gates.real, gates.imag
-        grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
-
-        # Create shifted gates for backward pass
-        padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
-        padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[:, :, :1])], dim=-1)[:, :, 1:].contiguous()
-
-        #print('\n bwd to triton, padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag:')
-        #print(padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag)
-        # Backward scan
-        backward_scan_complex[(B, C)](
-            padded_shifted_gates_real, padded_shifted_gates_imag,
-            grad_tokens_real, grad_tokens_imag,
-            d_gates_real, d_gates_imag,
-            d_tokens_real, d_tokens_imag,
-            SEQUENCE_LENGTH=T,
-            enable_fp_fusion=False
-        )
-        #print('d_tokens_real computed', d_tokens_real)
-        #print('d_gates_real computed', d_gates_real)
-        # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
-    
-        print("bwd d_gates_real, d_gates_imag, d_tokens_real, d_tokens_imag:")
-        print(d_gates_real, d_gates_imag, d_tokens_real, d_tokens_imag)
-    
-        padded_outputs = torch.cat([torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1)[..., :-1]
-        d_gates =  torch.complex(d_tokens_real,d_tokens_imag) * padded_outputs.conj() 
-
-        # grad_tokens: dL / db_t = dL / dx_{t+1} * g*_{t+1}
-        d_tokens = torch.complex(d_tokens_real, d_tokens_imag) #output_tokens.conj()
-        
-        return d_gates, d_tokens
-
-    def vmap(info, in_dims, gates, tokens):
-        """
-        Vectorizes a given function over the dimensions specified in in_dims:
-        Args:
-            info: Additional information from the framework (ignored in this case).
-            in_dims: A tuple specifying which dimension to map over.
-            gates: Batched gates tensor (B, C, T).
-            tokens: Batched tokens tensor (B, C, T).
-        Returns:
-            Outputs of the scan operation, vectorized across the batch dimension.
-        """
-
-        # Unpack the mapping dimensions
-        gate_dim, token_dim = in_dims
-        if gate_dim == token_dim:
-            # Both gates and tokens are batched (B_vmap, C, T)
-            return torch.vmap(ScanBCT.apply, in_dims=(0, 0))(gates, tokens)
-        # Case when gates are shared (None) and mapping is over tokens
-        elif in_dims == (None, 0):
-            # gate_dims are broadcasted
-            #print(f'inside vmapgate_dims {gates.shape} token_dims {tokens.shape}')
-            outputs = ScanBCT.apply(gates, tokens.squeeze(1))
-            out_dims = (None, None)
-        else:
-            raise NotImplementedError("vmap over mismatched dimensions is not supported yet.")
-        return outputs, out_dims
-
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-
-
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-
-
-
-class ComplexLinearScanBTC(Function):
-    @staticmethod
-    def forward(gates, tokens):
-        """
-        Forward pass for the complex linear scan.
-        x_t = g_t * x_{t-1} + b_t
-        Args:
-            gates: Complex tensor of shape (batch, len, dim).
-            tokens: Complex tensor of shape (batch, len, dim).
-        Returns:
-            outputs: Complex tensor of shape (batch, len, dim).
-        """
-        seq_len = tokens.shape[-2]
-        outputs = torch.zeros_like(tokens, dtype=torch.cfloat)
-        outputs_gates = torch.zeros_like(gates, dtype=torch.cfloat)
-        # Initialize (a_prefix, b_prefix) variables
-        a_prefix = gates[..., 0, :]
-        b_prefix = tokens[..., 0, :]
-
-        # initialize x_0 = a_0 * x_0 + b_prefix,  but we assume x_0 = 0
-        outputs[..., 0, :] = tokens[..., 0, :]
-        outputs_gates[..., 0, :] = gates[..., 0, :]
-    
-        for t in range(1, seq_len):
-            #outputs[..., t] = gates[..., t] * outputs[..., t-1] + tokens[..., t]
-
-            # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (gates[..., t], tokens[..., t])
-            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (gates[..., t, :], tokens[..., t, :]))
-            # x_t = a_prefix * x_0 + b_prefix
-            outputs[..., t, :] = b_prefix
-            outputs_gates[..., t, :] = a_prefix
-        return outputs_gates, outputs
-
-        
-    @staticmethod
-    def backward(ctx, grads_gates, grad_outputs):
-        """
-        Backward pass for the complex linear scan.
-        Args:
-            grad_outputs: Complex tensor of shape (batch, dim, len).
-        Returns:
-            Gradients for tokens, gates, and contributions (all complex tensors).
-        """
-        gates, tokens, outputs = ctx.saved_tensors
-        seq_len = tokens.shape[-2]
-
-        # Initialize gradients
-        grad_tokens = torch.zeros_like(tokens, dtype=tokens.dtype)
-        grad_gates = torch.zeros_like(gates, dtype=gates.dtype)
-
-        # Gradient of the loss with respect to the last output
-        padded_shifted_gates = torch.cat([gates, torch.ones_like(gates[..., :1, :])], dim=-2)[..., 1:, :].contiguous().conj()
-
-        padded_shifted_gates_rev = torch.flip(padded_shifted_gates, dims=[-2])
-        grad_outputs_rev = torch.flip(grad_outputs, dims=[-2])
-
-        # Forward scan
-        grad_tokens[..., 0, :] = grad_outputs_rev[..., 0, :]
-        a_prefix = padded_shifted_gates_rev[..., 0, :]
-        b_prefix = grad_outputs_rev[..., 0, :]
-
-        for t in range(1, seq_len):
-            # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (shifted_gates[..., t], grads[..., t])
-            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (padded_shifted_gates_rev[..., t, :], grad_outputs_rev[..., t, :]))
-            grad_tokens[..., t, :] = b_prefix
-
-        padded_outputs = torch.cat([torch.zeros_like(outputs[..., :1, :]), outputs], dim=-2)[..., :-1, :]
-
-        grad_tokens = torch.flip(grad_tokens, dims=[-2])
-        grad_gates = grad_tokens * padded_outputs.conj()
-        return grad_gates, grad_tokens
-
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-
-    @staticmethod
-    def vmap(info, in_dims, gates, tokens):
-        """
-        A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
-        with vmap we slice over dimension and applies function to each slide:
-
-        Args:
-             info: Metadata or additional info for vmap (not used here).
-            in_dims: Tuple specifying the dimension to slice for each input.
-            gates: Input gates tensor of shape (B, T, C) if in_dims[0] is None.
-            tokens: Input tokens tensor of shape (B', B, T, C) if in_dims[1] is 0.
-        Returns:
-            outputs: Output tensor of shape (B', B, T, C).
-            out_dims: Tuple specifying the dimension to slice for each output.
-        """
-
-        # Handle case where gates is constant (None in in_dims)
-        if in_dims == (None, 0):
-            # gates: (T, C) - constant for all batches
-            # tokens: (B, T, C) - vectorized over batch dimension
-            batch_size = tokens.shape[0]
-            gates_expanded = gates.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
-            outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates_expanded, tokens)
-            # Return with correct out_dims - both outputs are batched
-            out_dims = (0, 0)
-        else:
-            raise NotImplementedError("Only (None, 0) is implemented")
-
-        return (outputs_g, outputs_k), out_dims
-
-
-def scan_tri_complex(gates, tokens):
-    """
-    Solve a first-order recurrence relation for complex numbers.
-    x_t = a_t x_{t-1} + b_t
-    where :math:`a_t` ("gates") and :math:`b_t` ("tokens") are sequences of vectors.
-
-    """
-    gates = gates.contiguous()
-    tokens = tokens.contiguous()
-    return ComplexLinearScanBTC.apply(gates, tokens)
-
 
 
 def apply_ssm(
@@ -675,6 +231,7 @@ def apply_ssm(
   """
 
   # Cast to correct complex type
+  Lambda_bars = Lambda_bars * torch.ones((input_sequence.shape[0], Lambda_bars.shape[0]), device=Lambda_bars.device)
   cinput_sequence = input_sequence.type(Lambda_bars.dtype)
   seq_len = input_sequence.shape[0]
   # compute Bu elements
@@ -683,33 +240,30 @@ def apply_ssm(
   #Lambda_elements = jnp.repeat(Lambda_bar[None, ...], input_sequence.shape[0], axis=0)
   if Lambda_bars.ndim == 1 :  # Repeat along L for associative_scan
     Lambda_bars = Lambda_bars.unsqueeze(0).expand(seq_len, -1) # (L, P)
-  else:
-      raise NotImplementedError("Lambda_bars must be 1D")
 
-  # fails backward pass: 
-  #new_gates, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
-  
-  # passes 
-  #new_gates, xs = torch_associative_scanBTC(Lambda_bars, Bu_elements)
-  _, xs = scan_tri_complex(Lambda_bars, Bu_elements)
+  _, xs = scan_tc_complex(Lambda_bars, Bu_elements)
 
   if bidirectional:
-    raise NotImplementedError("Bidirectional SSM not implemented")
-  # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!
+    _, xs2 = scan_tc_complex(Lambda_bars, Bu_elements, reverse=True)
+    xs = torch.cat([xs, xs2], dim=-1)
 
   # compute SSM output sequence y = C_tilde x{t+1}
   if conj_sym:
-    y = torch.vmap(lambda x, u: 2 * pytorch_match_jax_complex_grad(C_tilde, x).real + D * u)(xs, cinput_sequence)
+    y = torch.vmap(lambda x: 2 * pytorch_match_jax_complex_grad(C_tilde, x).real)(xs)
   else:
-    y = torch.vmap(lambda x, u: (pytorch_match_jax_complex_grad(C_tilde, x) + D * u).real)(xs, cinput_sequence)
+    y = torch.vmap(lambda x: (pytorch_match_jax_complex_grad(C_tilde, x)).real )(xs)
+  
+  Du = torch.vmap(lambda u: D * u)(cinput_sequence)
+  y = y + Du.real
 
   if bidirectional:
-    return y, xs[-1][:Lambda_bars.shape[-1]]
+    xs = xs[-1][:Lambda_bars.shape[-1]]
   else:
-    return y, xs[-1]
+    xs = xs[-1]
+  return y, xs
 
 
-def apply_S5_layer(params, input_sequence):
+def apply_S5_layer(params, input_sequence, bidirectional=False):
     """ Computes LxH output sequence of an S5 layer given LxH input sequence.
     Args:
         params: tuple of the continuous time SSM parameters
@@ -719,26 +273,18 @@ def apply_S5_layer(params, input_sequence):
     Lambda, B_tilde, C_tilde, D, log_Delta = params
     nonlin_ = torch.nn.GELU()
     Lambda_bar, B_bar = discretize(Lambda, B_tilde, torch.exp(log_Delta))
-    preactivations, _ = apply_ssm(Lambda_bar, B_bar, C_tilde, D, input_sequence)
+    preactivations, _ = apply_ssm(Lambda_bar, B_bar, C_tilde, D, input_sequence, bidirectional=bidirectional)
     return nonlin_(preactivations)
 
 
-def batch_apply_S5_layer(params, input_sequences):
+def batch_apply_S5_layer(params, input_sequences, bidirectional=False):
     """ Computes BxLxH output sequence of an S5 layer given BxLxH input sequence.
     Args:
         params: tuple of the continuous time SSM parameters
         input_sequences: batch of input feature sequences (B, L ,H)
     Returns:
         Batch of S5 layer output sequences (B, L, H) """
-    return torch.vmap(apply_S5_layer, in_dims=(None, 0))(params, input_sequences)
-
-
-seqlens = [2, 8] # seqlen
-num_statess = [1, 4] # num_states
-d_models = [1, 4] # d_model
-batch_dims = [1, 2] # batch_dim
-complexities = ["v0", "v1"]
-
+    return torch.vmap(lambda g, t: apply_S5_layer(g, t, bidirectional=bidirectional), in_dims=(None, 0))(params, input_sequences)
 
 def compare_parameters(params_torch, params_jax, atol=1e-3, rtol=1e-2):
     for ii, (param_torch, param_jax) in enumerate(zip(params_torch, params_jax)):
@@ -754,20 +300,19 @@ def func_compare_complex(var_torch, var_jax, atol=1e-6, rtol=1e-6, var_name="Var
     assert jnp.allclose(var_torch_re, var_jax_re, atol=atol, rtol=rtol), f"{var_name} do not match: PyTorch {var_torch_re}, JAX {var_jax_re}"
     assert jnp.allclose(var_torch_im, var_jax_im, atol=atol, rtol=rtol), f"{var_name} do not match: PyTorch {var_torch_im}, JAX {var_jax_im}"
 
-def torch_loss(x, Lre, Lim, other_params):
+def torch_loss(x, Lre, Lim, other_params, bidirectional=False):
         Lam = torch.complex(Lre, Lim)
         params = (Lam, *other_params)
-        y = batch_apply_S5_layer(params, x)      # (B,L,H) → real
+        y = batch_apply_S5_layer(params, x, bidirectional=bidirectional)      # (B,L,H) → real
         return y.real.mean()
 
-def jax_loss(x, Lre, Lim, other_params):
+def jax_loss(x, Lre, Lim, other_params, bidirectional=False):
     Lam = Lre + 1j * Lim
     params = (Lam, *other_params)
-    y = batch_apply_S5_layer_jax(params, x)
+    y = batch_apply_S5_layer_jax(params, x, bidirectional=bidirectional)
     return y.real.mean()
 
-
-def make_initial_params(P, H, dtype, device, complexity, dtype_complex):
+def make_initial_params(P, H, dtype, device, complexity, dtype_complex, bidirectional=False):
     if complexity == "v0":
         Lambda, P_term, B_tilde, V, B_orig = make_DPLR_HiPPO(P)
         V = torch.from_numpy(V).to(dtype_complex).to(device)
@@ -794,18 +339,33 @@ def make_initial_params(P, H, dtype, device, complexity, dtype_complex):
         Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.randn(P, dtype=dtype)).to(device)
         B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.randn(P, H, dtype=dtype)).to(device)
         C_tilde = torch.complex(torch.ones(H, P, dtype=dtype), torch.ones(H, P, dtype=dtype)).to(device)
-
     else:
         raise ValueError(f"Complexity {complexity} not supported")
-
+    
+    # Normalize to avoid overflow
+    Lambda = Lambda / (P*H)
+    B_tilde = B_tilde / (P*H)
+    C_tilde = C_tilde / (H*P)
+    
+    if bidirectional:
+        C_tilde = torch.cat([C_tilde, C_tilde], dim=-1)
     return Lambda, B_tilde, C_tilde
+
+
+seqlens = [4] # seqlen
+num_statess = [2] # num_states
+d_models = [2] # d_model
+batch_dims = [2] # batch_dim
+complexities = ["v0", "v1"]
+bidirectionals = [False,True]
 
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("num_states", num_statess)
 @pytest.mark.parametrize("d_model", d_models)
 @pytest.mark.parametrize("batch", batch_dims)
 @pytest.mark.parametrize("complexity", complexities)
-def test_match_output(seqlen, num_states,d_model, batch, complexity):
+@pytest.mark.parametrize("bidirectional", bidirectionals)
+def test_match_output(seqlen, num_states,d_model, batch, complexity, bidirectional):
     # Example input parameters
     P = num_states  # Number of states
     H = d_model  # Input and output feature dimensions
@@ -821,7 +381,7 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
     atol = 1e-2  # absolute tolerance
     rtol = 1e-2  # max relative difference
 
-    Lambda, B_tilde, C_tilde = make_initial_params(P, H, dtype, device, complexity, dtype_complex)
+    Lambda, B_tilde, C_tilde = make_initial_params(P, H, dtype, device, complexity, dtype_complex, bidirectional)
 
     #Lambda = torch.complex(torch.clip(Lambda.real, None, -1e-4), Lambda.imag)
     Lambda = Lambda / Lambda.abs().max()
@@ -857,19 +417,21 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
 
     # -----------------------------
     # compare apply ssm
-    torch_output, torch2 = apply_ssm(Lambda_bar_torch, B_bar_torch, C_tilde, D, input_sequences[0])
-    jax_output, jaz2 = apply_ssm_jax(Lambda_bar_jax, B_bar_jax, C_tilde_jax, D_jax, input_sequences_jax[0])
-    
+    """
+    jax_output, jaz2 = apply_ssm_jax(Lambda_bar_jax, B_bar_jax, C_tilde_jax, D_jax, input_sequences_jax[0], bidirectional=bidirectional)
+
+    torch_output, torch2 = apply_ssm(Lambda_bar_torch, B_bar_torch, C_tilde, D, input_sequences[0], bidirectional=bidirectional)
+
     assert jnp.allclose(to_jax(torch_output), jax_output, atol=1e-4), "Output does not match"
     assert jnp.allclose(to_jax(torch2), jaz2, atol=1e-4), "Output does not match"
 
     # Single sequence example
     for param in params:
         param.grad = None
-    
-    output_sequence_jax = batch_apply_S5_layer_jax(params_jax, input_sequences_jax)
+    """
+    output_sequence_jax = batch_apply_S5_layer_jax(params_jax, input_sequences_jax, bidirectional=bidirectional)
 
-    output_sequence = batch_apply_S5_layer(params, input_sequences)
+    output_sequence = batch_apply_S5_layer(params, input_sequences, bidirectional=bidirectional)
     #print("Single sequence output:")
     assert output_sequence.shape == (B, L, H)
     assert output_sequence.shape == output_sequence_jax.shape
@@ -893,13 +455,13 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
 
     # ------------------------------------------------------------------
     # 3. Forward pass – PyTorch
-    loss_pt = torch_loss(input_sequences, Lambda_re, Lambda_im, other_pt)
+    loss_pt = torch_loss(input_sequences, Lambda_re, Lambda_im, other_pt, bidirectional=bidirectional)
 
     # ------------------------------------------------------------------
     # 4. Forward pass – JAX
     Lre_jx = Lambda_jax.real
     Lim_jx = Lambda_jax.imag
-    loss_jx = jax_loss(input_sequences_jax, Lre_jx, Lim_jx, other_jx)
+    loss_jx = jax_loss(input_sequences_jax, Lre_jx, Lim_jx, other_jx, bidirectional=bidirectional)
 
     # ------------------------------------------------------------------
     # 5. Compare loss values
@@ -912,13 +474,12 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity):
     grad_Lim_pt = Lambda_im.grad.clone().detach()
 
     # 6.2. JAX
-    grads_jx = jax.grad(jax_loss, (1, 2))(input_sequences_jax, Lre_jx, Lim_jx, other_jx)
+    grads_jx = jax.grad(jax_loss, (1, 2))(input_sequences_jax, Lre_jx, Lim_jx, other_jx, bidirectional=bidirectional)
     grad_Lre_jx, grad_Lim_jx = grads_jx           # both real-valued DeviceArrays
 
     grad_L_ftorch = to_jax(grad_Lre_pt + 1j * grad_Lim_pt)
     # conjugate match
     grad_L_jax = grad_Lre_jx + 1j * grad_Lim_jx
-
 
     func_compare_complex(grad_L_ftorch, grad_L_jax, atol=atol, rtol=rtol, var_name="grad_L")
 
