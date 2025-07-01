@@ -1,3 +1,6 @@
+"""
+
+"""
 import torch
 import triton
 import triton.language as tl
@@ -5,6 +8,116 @@ import os
 
 os.environ["TRITON_INTERPRET"]="1"
 os.environ["TRITON_LOG_LEVEL"] = "debug"
+
+
+def torch_associative_scanBCT(gates, tokens, reverse=False):
+    """
+    PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens:
+
+        x_t = gates_t * x_{t-1} + tokens_t
+
+        x_0 = tokens_0
+
+    when reverse is True, we compute the scan in reverse order:
+
+        x_t = gates_t * x_{t+1} + tokens_t
+
+
+    Args:
+        gates: Complex tensor representing the gates of shape (batch_size, dim, seq_len).
+        tokens: Complex tensor representing the tokens of shape (batch_size, dim,seq_len).
+
+    Returns:
+        A tuple of tensors (scanned_gates, scanned_tokens) where:
+            scanned_gates: The cumulative product of gates.
+            scanned_tokens: The cumulative result of applying the recurrence relation.
+
+    """
+    seq_len = gates.shape[-1]
+
+    # Initialize outputs
+    scanned_gates = torch.zeros_like(gates)
+    scanned_tokens = torch.zeros_like(tokens)
+
+    if reverse:
+        # Flip the tensors along the sequence dimension
+        gates = torch.flip(gates, dims=[-1])
+        tokens = torch.flip(tokens, dims=[-1])
+
+    # Set the initial values
+    scanned_gates[..., 0] = gates[..., 0]
+    scanned_tokens[..., 0] = tokens[..., 0]
+
+    # Temporary tensors for computation
+    current_gates = gates[..., 0]
+    current_tokens = tokens[..., 0]
+
+    for t in range(1, seq_len):
+        # Compute new values
+        current_gates = gates[..., t] * current_gates
+        current_tokens = gates[..., t] * current_tokens + tokens[..., t]
+
+        # Assign to output tensors
+        scanned_gates[..., t] = current_gates
+        scanned_tokens[..., t] = current_tokens
+
+    if reverse:
+        scanned_gates = scanned_gates.flip(dims=[-1])
+        scanned_tokens = scanned_tokens.flip(dims=[-1])
+
+    return scanned_gates, scanned_tokens
+
+
+def torch_associative_scanBTC(gates, tokens, reverse=False):
+    """
+    PyTorch equivalent of a parallel scan for linear recurrence using gates and tokens.
+    x_t = g_t * x_{t-1} + b_t
+
+    where g_t are the gates and b_t are the tokens.
+
+    Args:
+        gates: Complex tensor representing the gates of shape (batch_size, seq_len, dim).
+        tokens: Complex tensor representing the tokens of shape (batch_size, seq_len, dim).
+
+    Returns:
+        A tuple of tensors (scanned_gates, scanned_tokens) where:
+            scanned_gates: The cumulative product of gates.
+            scanned_tokens: The cumulative result of applying the recurrence relation.
+
+    """
+    seq_len = gates.shape[-2]
+
+    if reverse:
+        gates = torch.flip(gates, dims=[-2])
+        tokens = torch.flip(tokens, dims=[-2])
+
+    # Initialize outputs
+    scanned_gates = torch.zeros_like(gates)
+    scanned_tokens = torch.zeros_like(tokens)
+
+    # Set the initial values
+    scanned_gates[..., 0, :] = gates[..., 0, :]
+    scanned_tokens[..., 0, :] = tokens[..., 0, :]
+
+    # Temporary tensors for computation
+    current_gates = gates[..., 0, :]
+    current_tokens = tokens[..., 0, :]
+
+    for t in range(1, seq_len):
+        # Compute new values
+        current_gates = gates[..., t, :] * current_gates
+        current_tokens = gates[..., t, :] * current_tokens + tokens[..., t, :]
+
+        # Assign to output tensors
+        scanned_gates[..., t, :] = current_gates
+        scanned_tokens[..., t, :] = current_tokens
+
+    if reverse:
+        scanned_gates = scanned_gates.flip(dims=[-2])
+        scanned_tokens = scanned_tokens.flip(dims=[-2])
+
+    return scanned_gates, scanned_tokens
+
 
 
 @triton.jit
@@ -24,6 +137,7 @@ def forward_scan_bct_complex(
     output_tokens_imag,
     SEQUENCE_LENGTH: tl.constexpr,
     CHANNELS: tl.constexpr,
+    REVERSE: tl.constexpr,
     ):
     """
     Forward scan with direct complex number handling.
@@ -50,13 +164,12 @@ def forward_scan_bct_complex(
     gates_r = tl.load(gates_real + strides)
     gates_i = tl.load(gates_imag + strides)
 
-    #print("fwd in triton gates_r, gates_i, tokens_r, tokens_i:")
-    #print(gates_r, gates_i, tokens_r, tokens_i)
-    # Perform scan operation
+    # Scan outputs: cummulative coefficience, final state
     tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
         (tokens_r, tokens_i, gates_r, gates_i),
         axis=0,
-        combine_fn=first_order_op_complex
+        combine_fn=first_order_op_complex,
+        reverse=REVERSE
     )
 
     # Store results
@@ -76,6 +189,7 @@ def backward_scan_bct_complex(
     d_tokens_real,
     d_tokens_imag,
     SEQUENCE_LENGTH: tl.constexpr,
+    REVERSE: tl.constexpr,
     CHANNELS: tl.constexpr,
     ):
     """Backward scan with direct complex number handling."""
@@ -85,28 +199,31 @@ def backward_scan_bct_complex(
 
     base_offset = batch_id * CHANNELS * SEQUENCE_LENGTH + channel_id * SEQUENCE_LENGTH
 
-    # Compute reversed strides for the sequence dimension
+    # For backward scan, read in reverse order
     reversed_strides = base_offset + (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH))
-
-    # Load data in reverse order
+    
+    # Load data in reverse order for backward scan
     gates_r = tl.load(gates_real + reversed_strides)
     gates_i = tl.load(gates_imag + reversed_strides)
-    grad_r = tl.load(grad_real + reversed_strides *2)
-    grad_i = tl.load(grad_imag + reversed_strides *2)
+    grad_r = tl.load(grad_real + reversed_strides * 2)
+    grad_i = tl.load(grad_imag + reversed_strides * 2)
 
-    #print("bwd in triton gates_r, gates_i, grad_r, grad_i:")
-    #print(gates_r, gates_i, grad_r, grad_i)
+    #print("\n")
+    #print("gates_r, gates_i", gates_r, gates_i)
+    #print("grad_r", "grad_i", grad_r, grad_i)
+    
     # Perform backward scan
     tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
         (grad_r, grad_i, gates_r, gates_i),
         axis=0,
-        combine_fn=first_order_op_complex
+        combine_fn=first_order_op_complex,
+        reverse=REVERSE,
     )
-    # Debug intermediate results
+
+    #print("REVERSE", REVERSE)
     #print("tokens_new_r, tokens_new_i, gates_r_out, gates_i_out:")
     #print(tokens_new_r, tokens_new_i, gates_r_out, gates_i_out)
-
-    # Store results in reverse order
+    
     tl.store(d_tokens_real + reversed_strides, tokens_new_r)
     tl.store(d_tokens_imag + reversed_strides, tokens_new_i)
     tl.store(d_gates_real + reversed_strides, gates_r_out)
@@ -116,7 +233,7 @@ def backward_scan_bct_complex(
 class ScanBCT(torch.autograd.Function):
     
     @staticmethod
-    def forward(gates, tokens):
+    def forward(gates, tokens, reverse=False):
         B, C, T = gates.shape
         assert tokens.shape == (B, C, T), "Tokens must have the same shape as gates."
         assert gates.is_contiguous(), "Gates tensor must be contiguous."
@@ -146,6 +263,7 @@ class ScanBCT(torch.autograd.Function):
             tokens_new_real, tokens_new_imag,
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
+            REVERSE=reverse,
             enable_fp_fusion=False
         )
         return gates_new, tokens_new
@@ -161,8 +279,9 @@ class ScanBCT(torch.autograd.Function):
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
         # grad_tokens: dL / db_t = dL / dx_t
     
-        # Padded reverse scan
-        gates, tokens,  output_tokens = ctx.saved_tensors
+        reverse = ctx.reverse
+        # Padded reverse scan:
+        gates, tokens, output_tokens = ctx.saved_tensors
         B, C, T = tokens.shape
 
         # Allocate output tensors
@@ -176,11 +295,17 @@ class ScanBCT(torch.autograd.Function):
         gates_real, gates_imag = gates.real, gates.imag
         grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
 
-        # Create shifted gates for backward pass
-        padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
-        padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[:, :, :1])], dim=-1)[:, :, 1:].contiguous()
+        # Create shifted gates for backward pass 
+        if reverse:
+            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real[..., :1]), gates_real], dim=-1)[..., :-1].contiguous()
+            padded_shifted_gates_imag = torch.cat([torch.zeros_like(gates_imag[..., :1]), gates_imag], dim=-1)[..., :-1].contiguous()
+        else:
+            padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
+            padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[:, :, :1])], dim=-1)[:, :, 1:].contiguous()
 
         # Backward scan
+        #print('padded_shifted_gates', padded_shifted_gates_real, padded_shifted_gates_imag)
+        #print('grad_tokens', grad_tokens_real, grad_tokens_imag)
         backward_scan_bct_complex[(B, C)](
             padded_shifted_gates_real, padded_shifted_gates_imag,
             grad_tokens_real, grad_tokens_imag,
@@ -188,22 +313,37 @@ class ScanBCT(torch.autograd.Function):
             d_tokens_real, d_tokens_imag,
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
+            REVERSE=reverse,
             enable_fp_fusion=False
         )
         #print('d_tokens_real computed', d_tokens_real)
+        #print('d_tokens_imag computed', d_tokens_imag)
         #print('d_gates_real computed', d_gates_real)
+        #print('d_gates_imag computed', d_gates_imag)
+
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
-       
-        padded_outputs = torch.cat([torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1)[..., :-1]
-        d_gates =  torch.complex(d_tokens_real,d_tokens_imag) * padded_outputs.conj()
-
         # grad_tokens: dL / db_t = dL / dx_{t+1} * g*_{t+1}
-        d_tokens = torch.complex(d_tokens_real, d_tokens_imag) # * gates.conj()
+        d_tokens = torch.complex(d_tokens_real, d_tokens_imag)
+                
+        # Compute d_gates using padded outputs 
+        if reverse:
+            # For x_t = a_t x_{t+1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t+1}
+            padded_outputs = torch.cat(
+                [output_tokens[..., 1:], torch.zeros_like(output_tokens[..., :1])], dim=-1
+            )
+            d_gates = d_tokens * padded_outputs.conj()
+        else:
+            # For x_t = a_t x_{t-1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t-1}
+            padded_outputs = torch.cat(
+                [torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1
+            )[..., :-1]
+            d_gates = d_tokens * padded_outputs.conj()
 
-        return d_gates, d_tokens
+        #print("out_grad_tokens", d_tokens)
+        return d_gates, d_tokens, None
 
     @staticmethod
-    def vmap(info, in_dims, gates, tokens):
+    def vmap(info, in_dims, gates, tokens, reverse=False):
         """
         A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
         
@@ -217,13 +357,13 @@ class ScanBCT(torch.autograd.Function):
         """
 
         # Handle case where gates is constant (None in in_dims)
-        if in_dims == (None, 0):
+        if in_dims == (None, 0, None):
             # gates: (C, T) - constant across batch
             # tokens: (B, C, T) - vectorized over batch dimension
             B = tokens.shape[0]
             # Expand gates to match batch dimension
             gates_expanded = gates.unsqueeze(0).expand(B, -1, -1).contiguous()
-            outputs_g, outputs_k = ScanBCT.apply(gates_expanded, tokens)
+            outputs_g, outputs_k = ScanBCT.apply(gates_expanded, tokens, reverse)
             out_dims = (0, 0)  # Both outputs vectorized over batch dimension
         else:
             raise NotImplementedError("Only (None, 0) is implemented")
@@ -233,12 +373,12 @@ class ScanBCT(torch.autograd.Function):
     @staticmethod
     def setup_context(ctx, inputs, outputs):
         # Define the context setup required for functorch transforms
-        gates, tokens = inputs
+        gates, tokens, reverse = inputs
         _, output_tokens = outputs
         ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
+        ctx.reverse = reverse
         
-def scan_bct_complex(gates, tokens):
+def scan_bct_complex(gates, tokens, reverse=False):
     """
     Solve a first-order recurrence relation for complex numbers.
     x_t = a_t x_{t-1} + b_t
@@ -247,7 +387,7 @@ def scan_bct_complex(gates, tokens):
     """
     gates = gates.contiguous()
     tokens = tokens.contiguous()
-    return ScanBCT.apply(gates, tokens)
+    return ScanBCT.apply(gates, tokens, reverse)
 
 
 @triton.jit
@@ -278,7 +418,7 @@ def first_order_op_complex(l_real, l_imag, l_gates_real, l_gates_imag,
 class ScanBTC(torch.autograd.Function):
     
     @staticmethod
-    def forward(gates, tokens):
+    def forward(gates, tokens, reverse=False):
         B, T, C = gates.shape
         assert tokens.shape == (B, T, C), "Tokens must have the same shape as gates."
         assert gates.is_contiguous(), "Gates tensor must be contiguous."
@@ -308,6 +448,7 @@ class ScanBTC(torch.autograd.Function):
             tokens_new_real, tokens_new_imag,
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
+            REVERSE=reverse,
             enable_fp_fusion=False
         )
 
@@ -323,6 +464,7 @@ class ScanBTC(torch.autograd.Function):
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
         # grad_tokens: dL / db_t = dL / dx_t
     
+        reverse = ctx.reverse
         # Padded reverse scan
         gates, tokens,  output_tokens = ctx.saved_tensors
         B, T, C = tokens.shape
@@ -341,8 +483,12 @@ class ScanBTC(torch.autograd.Function):
         grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
 
         # Create shifted gates for backward pass
-        padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1, :])], dim=-2)[..., 1:, :].contiguous()
-        padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[..., :1, :])], dim=-2)[..., 1:, :].contiguous()
+        if reverse:
+            padded_shifted_gates_real = torch.cat([ torch.ones_like(gates_real[..., :1, :]),gates_real,], dim=-2)[..., :-1, :].contiguous()
+            padded_shifted_gates_imag = torch.cat([ torch.zeros_like(gates_imag[..., :1, :]),gates_imag,], dim=-2)[..., :-1, :].contiguous()
+        else:
+            padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1, :])], dim=-2)[..., 1:, :].contiguous()
+            padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[..., :1, :])], dim=-2)[..., 1:, :].contiguous()
 
         #print("bwd: padded_shifted_gates_real, padded_shifted_gates_imag, grad_tokens_real, grad_tokens_imag:")
         #print(padded_shifted_gates_real.mT, padded_shifted_gates_imag.mT, grad_tokens_real.mT, grad_tokens_imag.mT)
@@ -354,22 +500,28 @@ class ScanBTC(torch.autograd.Function):
             d_tokens_real, d_tokens_imag,
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
+            REVERSE=reverse,
             enable_fp_fusion=False
         )
         #print('d_gates_real computed', d_gates_real.mT, d_gates_imag.mT)
         #print('d_tokens_real computed', d_tokens_real.mT, d_tokens_imag.mT)
 
-        # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}       
-        padded_outputs = torch.cat([torch.zeros_like(output_tokens[..., :1, :]), output_tokens], dim=-2)[..., :-1, :]
+        # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}   
+        if reverse:
+            padded_outputs = torch.cat(
+                [output_tokens[..., 1:, :],
+                torch.zeros_like(output_tokens[..., :1, :])], dim=-2)
+        else:
+            padded_outputs = torch.cat([torch.zeros_like(output_tokens[..., :1, :]), output_tokens], dim=-2)[..., :-1, :]
         d_gates =  torch.complex(d_tokens_real,d_tokens_imag) * padded_outputs.conj()
 
         # grad_tokens: dL / db_t = dL / dx_{t+1} * g*_{t+1}
         d_tokens = torch.complex(d_tokens_real, d_tokens_imag) # * gates.conj()
 
-        return d_gates, d_tokens
+        return d_gates, d_tokens, None
 
     @staticmethod
-    def vmap(info, in_dims, gates, tokens):
+    def vmap(info, in_dims, gates, tokens, reverse=False):
         """
         A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
         
@@ -383,12 +535,12 @@ class ScanBTC(torch.autograd.Function):
         """
 
         # Handle case where gates is constant (None in in_dims)
-        if in_dims == (None, 0):
+        if in_dims == (None, 0, None):
             # gates: (T, C) - constant for all batches  
             # tokens: (B, T, C) - vectorized over batch dimension
             batch_size = tokens.shape[0]
             gates_expanded = gates.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
-            outputs = ScanBTC.apply(gates_expanded, tokens)
+            outputs = ScanBTC.apply(gates_expanded, tokens, reverse)
 
             # Both outputs are batched
             out_dims = (0, 0)
@@ -400,14 +552,13 @@ class ScanBTC(torch.autograd.Function):
     @staticmethod
     def setup_context(ctx, inputs, outputs):
         # Define the context setup required for functorch transforms
-        gates, tokens = inputs
+        gates, tokens, reverse = inputs
         _, output_tokens = outputs
         ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        return ctx  # Return context
-        
+        ctx.reverse = reverse
     
 
-def scan_btc_complex(gates, tokens):
+def scan_btc_complex(gates, tokens, reverse=False):
     """
     Solve a first-order recurrence relation for complex numbers.
     x_t = a_t x_{t-1} + b_t
@@ -416,7 +567,7 @@ def scan_btc_complex(gates, tokens):
     """
     gates = gates.contiguous()
     tokens = tokens.contiguous()
-    return ScanBTC.apply(gates, tokens)
+    return ScanBTC.apply(gates, tokens, reverse)
 
 
 @triton.jit
@@ -431,6 +582,7 @@ def forward_scan_btc_complex(
     output_tokens_imag,
     SEQUENCE_LENGTH: tl.constexpr,
     CHANNELS: tl.constexpr,
+    REVERSE: tl.constexpr,
     ):
     """
     Forward scan with direct complex number handling.
@@ -463,7 +615,8 @@ def forward_scan_btc_complex(
     tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
         (tokens_r, tokens_i, gates_r, gates_i),
         axis=0,
-        combine_fn=first_order_op_complex
+        combine_fn=first_order_op_complex,
+        reverse=REVERSE
     )
 
     # print("fwd out triton: gates_r_out, gates_i_out, tokens_new_r, tokens_new_i:")
@@ -486,6 +639,7 @@ def backward_scan_btc_complex(
     d_tokens_real,
     d_tokens_imag,
     SEQUENCE_LENGTH: tl.constexpr,
+    REVERSE: tl.constexpr,
     CHANNELS: tl.constexpr,
     ):
     """Backward scan with direct complex number handling."""
@@ -516,7 +670,8 @@ def backward_scan_btc_complex(
     tokens_new_r, tokens_new_i, gates_r_out, gates_i_out = tl.associative_scan(
         (grad_r, grad_i, gates_r, gates_i),
         axis=0,
-        combine_fn=first_order_op_complex
+        combine_fn=first_order_op_complex,
+        reverse=REVERSE
     )
     # Store results in reverse order
     #print("bwd out triton:gates_r_out, gates_i_out, tokens_new_r, tokens_new_i:")
