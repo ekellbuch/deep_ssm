@@ -452,12 +452,11 @@ class S5Decoder(BaseDecoder):
         #hidden_states = self.dropout(hidden_states)
 
         if states is None:
-            states = self.initial_state(hidden_states.shape[0])
+            states = self.initial_state(hidden_states, hidden_states.shape[0])
 
-        new_states = []
+        residual = states
         for i, layer in enumerate(self.backbone):
-            hidden_states, state = layer(hidden_states, states[i])  # Pass the current state to the current layer
-            new_states.append(state)  # Collect the updated state
+            hidden_states, residual = layer(hidden_states, residual)  # Pass the current state to the current layer
 
         #hidden_states, states = self.backbone(hidden_states, states)
 
@@ -472,14 +471,22 @@ class S5Decoder(BaseDecoder):
 
         return seq_out
 
-    def initial_state(self, batch_size):
-        # init different A layer:
-        states = []
-        for layer_idx in range(self.n_layers):
+    def initial_state(self, x, batch_size):
+        model = self.backbone[0].seq
+        B_tilde, _ = model.seq.get_BC_tilde()
+        Lambda = model.seq.get_lambda()
+        step = torch.exp(model.seq.log_step[..., 0])
+        Lambda_bar, B_bar = model.seq.discretize(Lambda, B_tilde, step)
 
-            state_layer_idx = self.backbone[layer_idx].seq.initial_state(batch_size)
-            states.append(state_layer_idx)
-        return states
+        # Use last `kernelLen` inputs
+        x_snippet = x[:, -self.kernelLen:].to(B_bar.dtype)  # shape: [B, kernelLen, D]
+
+        state = torch.zeros(x.shape[0], Lambda_bar.shape[0], dtype=Lambda_bar.dtype, device=x.device)
+        for i in range(self.kernelLen):
+            u_ = x_snippet[:, i]  # [B, D]
+            Bu = torch.einsum('pd,bd->bp', B_bar, u_)  # [B, P]
+            state = Lambda_bar * state + Bu
+        return state
 
 class SashimiDecoder(BaseDecoder):
     def __init__(

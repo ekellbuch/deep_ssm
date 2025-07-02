@@ -18,7 +18,6 @@ from typing import Tuple
 from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
 from deep_ssm.mixers.s5_fjax.ssm_init import make_DPLR_HiPPO
 from deep_ssm.mixers.scan_utils import torch_associative_scanBTC, scan_btc_complex_autograd
-from deep_ssm.mixers.scan_utils import scan_btc_complex_autograd as scan_tc_complex
 
 try:
    import triton
@@ -48,10 +47,11 @@ else:
 
 if DEVICE == 'cuda':
     from deep_ssm.mixers.scan_utils import scan_btc_complex
-    def scan_tc_complex(g, t):
-        output_g, output_t = scan_btc_complex(g.unsqueeze(0), t.unsqueeze(0))
+    def scan_tc_complex(g, t, **kwargs):
+        output_g, output_t = scan_btc_complex(g.unsqueeze(0), t.unsqueeze(0), **kwargs)
         return output_g.squeeze(0), output_t.squeeze(0)
-
+else:
+    from deep_ssm.mixers.scan_utils import scan_btc_complex_autograd as scan_tc_complex
 
 def to_jax(x):
     return x.cpu().detach().numpy()

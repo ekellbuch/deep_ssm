@@ -112,7 +112,10 @@ def train(args):
       ckpt_path = args.eval_cfg.get("ckpt_path", None)
 
     # Test model
-    torch.mps.empty_cache()
+    if torch.backends.mps.is_available():
+      torch.mps.empty_cache()
+    elif torch.cuda.is_available():
+      torch.cuda.empty_cache()
     trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # End logging

@@ -51,19 +51,24 @@ class SpeechDataset(Dataset):
         )
 
 
-def _padding(batch, multiple=1):
+def _padding(batch, multiple=1, power=1, stride=1, kernel=1, pad_value=0):
   X, y, X_lens, y_lens, days = zip(*batch)
 
   max_len = max(seq.size(0) for seq in X)
 
   # Pad the sequences:
-  X_padded = pad_sequence(X, batch_first=True, padding_value=0)
-  y_padded = pad_sequence(y, batch_first=True, padding_value=0)
+  X_padded = pad_sequence(X, batch_first=True, padding_value=pad_value)
+  y_padded = pad_sequence(y, batch_first=True, padding_value=pad_value)
 
   # Pad to the desired length:
-  #if multiple > 1:
-  #  desired_len = math.ceil(max_len / multiple) * multiple
-  #  X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=0)
+  if power > 1:
+    assert multiple == 1
+    desired_len = 2**math.ceil(math.log2(max_len))
+    X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=pad_value)
+
+  if multiple > 1:
+    desired_len = math.ceil(max_len / multiple) * multiple
+    X_padded = F.pad(X_padded, (0, 0, 0,  desired_len - X_padded.size(1)), value=pad_value)
 
   return (
     X_padded,
@@ -104,6 +109,8 @@ def getDatasetLoaders(args):
 
   if args.get("pad_multiple", None) is not None:
     _padding_fn = lambda x: _padding(x, multiple=args["pad_multiple"])
+  elif args.get("pad_power", None) is not None:
+    _padding_fn = lambda x: _padding(x, power=args["pad_power"])
   else:
     _padding_fn = _padding
 
@@ -167,6 +174,8 @@ class SpeechDataModule(L.LightningDataModule):
         test_ds = SpeechDataset(loadedData["test"])
         if self.args.get("pad_multiple", None) is not None:
             self.padding_fn = lambda x: _padding(x, multiple=self.args["pad_multiple"])
+        elif self.args.get("pad_power", None) is not None:
+            self.padding_fn = lambda x: _padding(x, power=self.args["pad_power"])
         else:
             self.padding_fn = _padding
 
@@ -174,7 +183,7 @@ class SpeechDataModule(L.LightningDataModule):
         if self.args.get("train_split", 1) < 1:
           train_len = int(len(train_ds) * self.args.train_split)
           val_len = len(train_ds) - train_len
-          train_ds, val_ds = torch.utils.data.random_split(train_ds, [train_len, 1 - val_len])
+          train_ds, val_ds = torch.utils.data.random_split(train_ds, [train_len, val_len])
           val_ds.dataset.transform = None
           self.train_ds = train_ds
           self.val_ds = val_ds

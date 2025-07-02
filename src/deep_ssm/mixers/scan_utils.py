@@ -565,8 +565,12 @@ class ScanBTC(torch.autograd.Function):
 
             # Both outputs are batched
             out_dims = (0, 0)
+        elif (0, 0, None):
+            assert gates.ndim == 3
+            outputs = ScanBTC.apply(gates, tokens, reverse)
+            out_dims = (0, 0)
         else:
-            raise NotImplementedError("Only (None, 0) is implemented")
+            raise NotImplementedError(f"Only (None, 0, None) is implemented but requested {in_dims} gates{gates.shape} tokens {tokens.shape}")
 
         return outputs, out_dims
 
