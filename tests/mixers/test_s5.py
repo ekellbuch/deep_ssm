@@ -37,7 +37,21 @@ torch.autograd.set_detect_anomaly(True)
 
 parallel_scan = jax.lax.associative_scan
 
-device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+# Device selection logic
+if torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")  # Metal Performance Shaders on macOS
+elif torch.cuda.is_available():
+    DEVICE = torch.device("cuda")  # CUDA on NVIDIA GPUs
+else:
+    DEVICE = torch.device("cpu")  # Fallback to CPU
+
+
+if DEVICE == 'cuda':
+    from deep_ssm.mixers.scan_utils import scan_btc_complex
+    def scan_tc_complex(g, t):
+        output_g, output_t = scan_btc_complex(g.unsqueeze(0), t.unsqueeze(0))
+        return output_g.squeeze(0), output_t.squeeze(0)
+
 
 def to_jax(x):
     return x.cpu().detach().numpy()
@@ -255,7 +269,6 @@ def apply_ssm(
   
   Du = torch.vmap(lambda u: D * u)(cinput_sequence)
   y = y + Du.real
-
   if bidirectional:
     xs = xs[-1][:Lambda_bars.shape[-1]]
   else:
@@ -357,7 +370,7 @@ num_statess = [2] # num_states
 d_models = [2] # d_model
 batch_dims = [2] # batch_dim
 complexities = ["v0", "v1"]
-bidirectionals = [False,True]
+bidirectionals = [False, True]
 
 @pytest.mark.parametrize("seqlen", seqlens)
 @pytest.mark.parametrize("num_states", num_statess)
@@ -381,14 +394,14 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity, bidirection
     atol = 1e-2  # absolute tolerance
     rtol = 1e-2  # max relative difference
 
-    Lambda, B_tilde, C_tilde = make_initial_params(P, H, dtype, device, complexity, dtype_complex, bidirectional)
+    Lambda, B_tilde, C_tilde = make_initial_params(P, H, dtype, DEVICE, complexity, dtype_complex, bidirectional)
 
     #Lambda = torch.complex(torch.clip(Lambda.real, None, -1e-4), Lambda.imag)
     Lambda = Lambda / Lambda.abs().max()
     #B_tilde = B_tilde / B_tilde.abs().max()
     #C_tilde = C_tilde / C_tilde.abs().max()
-    D = torch.randn(H, dtype=dtype).to(device)
-    log_Delta = torch.randn(P, dtype=dtype).to(device)
+    D = torch.randn(H, dtype=dtype).to(DEVICE)
+    log_Delta = torch.randn(P, dtype=dtype).to(DEVICE)
 
     dtype_jax= jnp.complex64
     Lambda_jax = jnp.array(to_jax(Lambda), dtype=dtype_jax)
@@ -400,7 +413,7 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity, bidirection
     # Define jax params   
     params = (Lambda, B_tilde, C_tilde, D, log_Delta)
     params = [param.requires_grad_(True) for param in params]
-    input_sequences = torch.randn(B, L, H, dtype=dtype).to(device)
+    input_sequences = torch.randn(B, L, H, dtype=dtype).to(DEVICE)
 
     params_jax = (Lambda_jax, B_tilde_jax, C_tilde_jax, D_jax, log_Delta_jax)
     input_sequences_jax = jnp.array(input_sequences.cpu().detach().numpy())
@@ -417,18 +430,18 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity, bidirection
 
     # -----------------------------
     # compare apply ssm
-    """
+    
     jax_output, jaz2 = apply_ssm_jax(Lambda_bar_jax, B_bar_jax, C_tilde_jax, D_jax, input_sequences_jax[0], bidirectional=bidirectional)
 
     torch_output, torch2 = apply_ssm(Lambda_bar_torch, B_bar_torch, C_tilde, D, input_sequences[0], bidirectional=bidirectional)
 
-    assert jnp.allclose(to_jax(torch_output), jax_output, atol=1e-4), "Output does not match"
-    assert jnp.allclose(to_jax(torch2), jaz2, atol=1e-4), "Output does not match"
+    assert jnp.allclose(to_jax(torch_output), jax_output, atol=atol), "Output does not match"
+    assert jnp.allclose(to_jax(torch2), jaz2, atol=atol), "Output does not match"
 
     # Single sequence example
     for param in params:
         param.grad = None
-    """
+    
     output_sequence_jax = batch_apply_S5_layer_jax(params_jax, input_sequences_jax, bidirectional=bidirectional)
 
     output_sequence = batch_apply_S5_layer(params, input_sequences, bidirectional=bidirectional)
@@ -437,7 +450,7 @@ def test_match_output(seqlen, num_states,d_model, batch, complexity, bidirection
     assert output_sequence.shape == output_sequence_jax.shape
 
     # Compare output
-    assert jnp.allclose(output_sequence_jax.mean(), to_jax(output_sequence.mean()), atol=atol, rtol=rtol), "Loss of bacthed S5 layer do not match"
+    assert jnp.allclose(output_sequence_jax.mean(), to_jax(output_sequence.mean()), atol=atol, rtol=rtol), "Loss of batched S5 layer do not match"
 
     # ----------------------------------------------------------------------------------------------
     # Test loss computation
@@ -497,9 +510,9 @@ def test_discretization_forward_backward():
     rtol = 1e-2
     
     # Create test parameters
-    Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.randn(P, dtype=dtype)).to(device)
-    B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.randn(P, H, dtype=dtype)).to(device)
-    log_Delta = torch.randn(P, dtype=dtype).to(device)
+    Lambda = torch.complex(torch.randn(P, dtype=dtype), torch.randn(P, dtype=dtype)).to(DEVICE)
+    B_tilde = torch.complex(torch.randn(P, H, dtype=dtype), torch.randn(P, H, dtype=dtype)).to(DEVICE)
+    log_Delta = torch.randn(P, dtype=dtype).to(DEVICE)
     
     # Normalize for stability
     Lambda = Lambda / Lambda.abs().max()

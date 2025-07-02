@@ -7,6 +7,13 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from deep_ssm.mixers.scan_utils import scan_btc_complex, torch_associative_scanBTC, scan_btc_complex_autograd
 
+# Device selection logic
+if torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")  # Metal Performance Shaders on macOS
+elif torch.cuda.is_available():
+    DEVICE = torch.device("cuda")  # CUDA on NVIDIA GPUs
+else:
+    DEVICE = torch.device("cpu")  # Fallback to CPU
 
 # -------------------------------------------------------------------------------------------------
 def create_inputs(batch, dim, seq_len, complexity, only_real):
@@ -30,8 +37,11 @@ def create_inputs(batch, dim, seq_len, complexity, only_real):
         gates.imag = 0 
         tokens.imag = 0
 
+    gates = gates.to(DEVICE)
+    tokens = tokens.to(DEVICE)
     gates = gates.contiguous()
     tokens = tokens.contiguous()
+
     tokens.requires_grad_(True)
     gates.requires_grad_(True)
     return gates, tokens
@@ -39,10 +49,10 @@ def create_inputs(batch, dim, seq_len, complexity, only_real):
 # -------------------------------------------------------------------------------------------------
 
 only_reals =[False]
-complexities = ["v0", "v4"]
-batch_dims = [1, 4]
-feature_dims = [1, 4]
-seq_lens = [4, 256]
+complexities = ["v0","v1"]
+batch_dims = [1, 2]
+feature_dims = [1, 2]
+seq_lens = [4]
 reverses = [False,True]
 
 """

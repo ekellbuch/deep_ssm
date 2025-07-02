@@ -12,8 +12,8 @@ except:
     load_triton = False
 
 
-os.environ["TRITON_INTERPRET"]="1"
-os.environ["TRITON_LOG_LEVEL"] = "debug"
+#os.environ["TRITON_INTERPRET"]="1"
+#os.environ["TRITON_LOG_LEVEL"] = "debug"
 
 
 def torch_associative_scanBCT(gates, tokens, reverse=False):
@@ -159,7 +159,12 @@ def forward_scan_bct_complex(
     base_offset = batch_id * CHANNELS * SEQUENCE_LENGTH + channel_id * SEQUENCE_LENGTH
 
     # Sequence strides: Stride along the sequence dimension (T)
-    strides = base_offset + tl.arange(0, SEQUENCE_LENGTH)
+    if REVERSE:
+        seq_idx = SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)
+    else:
+        seq_idx = tl.arange(0, SEQUENCE_LENGTH)
+
+    strides = base_offset + seq_idx
 
     # we are dealing with complex numbers with real and imag parts interleaved in memory
     strides = strides * 2
@@ -175,8 +180,12 @@ def forward_scan_bct_complex(
         (tokens_r, tokens_i, gates_r, gates_i),
         axis=0,
         combine_fn=first_order_op_complex,
-        reverse=REVERSE
+        reverse=False
     )
+
+    out_idx = base_offset + seq_idx * CHANNELS
+    out_idx2 = out_idx * 2
+
 
     # Store results
     tl.store(output_gates_real + strides, gates_r_out)
@@ -206,7 +215,12 @@ def backward_scan_bct_complex(
     base_offset = batch_id * CHANNELS * SEQUENCE_LENGTH + channel_id * SEQUENCE_LENGTH
 
     # For backward scan, read in reverse order
-    reversed_strides = base_offset + (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH))
+    if REVERSE:
+        seq_idx = tl.arange(0, SEQUENCE_LENGTH)
+    else:
+        seq_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH))
+    
+    reversed_strides = base_offset + seq_idx
     
     # Load data in reverse order for backward scan
     gates_r = tl.load(gates_real + reversed_strides)
@@ -223,17 +237,21 @@ def backward_scan_bct_complex(
         (grad_r, grad_i, gates_r, gates_i),
         axis=0,
         combine_fn=first_order_op_complex,
-        reverse=REVERSE,
+        reverse=False,
     )
 
     #print("REVERSE", REVERSE)
     #print("tokens_new_r, tokens_new_i, gates_r_out, gates_i_out:")
     #print(tokens_new_r, tokens_new_i, gates_r_out, gates_i_out)
-    
-    tl.store(d_tokens_real + reversed_strides, tokens_new_r)
-    tl.store(d_tokens_imag + reversed_strides, tokens_new_i)
-    tl.store(d_gates_real + reversed_strides, gates_r_out)
-    tl.store(d_gates_imag + reversed_strides, gates_i_out)
+    if REVERSE:
+        rev_idx = tl.arange(0, SEQUENCE_LENGTH) 
+    else:
+        rev_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
+    store_idx = base_offset + rev_idx 
+    tl.store(d_tokens_real + store_idx, tokens_new_r)
+    tl.store(d_tokens_imag + store_idx, tokens_new_i)
+    tl.store(d_gates_real + store_idx, gates_r_out)
+    tl.store(d_gates_imag + store_idx, gates_i_out)
 
 
 class ScanBCT(torch.autograd.Function):
@@ -446,6 +464,7 @@ class ScanBTC(torch.autograd.Function):
         #print("fwd: gates_real, gates_imag,tokens_real, tokens_imag, :")
         #print(gates_real, gates_imag,tokens_real, tokens_imag)
         # Forward pass
+        #print(gates_real.data_ptr(), gates_imag.data_ptr(), tokens_real.data_ptr())
         forward_scan_btc_complex[(B, C)](
             gates_real, gates_imag,
             tokens_real, tokens_imag,
@@ -456,9 +475,6 @@ class ScanBTC(torch.autograd.Function):
             REVERSE=reverse,
             enable_fp_fusion=False
         )
-
-        #print("fwd out: gates_new, tokens_new:")
-        #print(gates_new, tokens_new)
 
         return gates_new, tokens_new
 
@@ -477,10 +493,10 @@ class ScanBTC(torch.autograd.Function):
         assert grad_tokens.shape == tokens.shape
 
         # Allocate output tensors
-        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype)
-        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype)
-        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype)
-        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype)
+        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype).contiguous()
+        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype).contiguous()
+        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype).contiguous()
+        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype).contiguous()
 
         # Split into real and imaginary parts
         gates = gates.conj()
@@ -489,8 +505,8 @@ class ScanBTC(torch.autograd.Function):
 
         # Create shifted gates for backward pass
         if reverse:
-            padded_shifted_gates_real = torch.cat([ torch.ones_like(gates_real[..., :1, :]),gates_real,], dim=-2)[..., :-1, :].contiguous()
-            padded_shifted_gates_imag = torch.cat([ torch.zeros_like(gates_imag[..., :1, :]),gates_imag,], dim=-2)[..., :-1, :].contiguous()
+            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real[..., :1, :]),gates_real,], dim=-2)[..., :-1, :].contiguous()
+            padded_shifted_gates_imag = torch.cat([torch.zeros_like(gates_imag[..., :1, :]),gates_imag,], dim=-2)[..., :-1, :].contiguous()
         else:
             padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1, :])], dim=-2)[..., 1:, :].contiguous()
             padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[..., :1, :])], dim=-2)[..., 1:, :].contiguous()
@@ -538,7 +554,7 @@ class ScanBTC(torch.autograd.Function):
         Returns:
             outputs: Output tensor of shape (B', B, T, C).
         """
-        #breakpoint()
+        
         # Handle case where gates is constant (None in in_dims)
         if in_dims == (None, 0, None):
             # gates: (T, C) - constant for all batches  
@@ -603,16 +619,20 @@ def forward_scan_btc_complex(
     base_offset = batch_id * SEQUENCE_LENGTH * CHANNELS + channel_id
 
     # Sequence strides: Stride along the sequence dimension (T)
-    strides = base_offset + tl.arange(0, SEQUENCE_LENGTH) * CHANNELS
+    if REVERSE:
+        seq_idx = SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)
+    else:
+        seq_idx = tl.arange(0, SEQUENCE_LENGTH)
+    stride_idx = base_offset + seq_idx * CHANNELS
 
     # Remember we are dealing with complex numbers which are interleaved in memory
-    strides = strides * 2
+    stride_idx2 = stride_idx * 2
 
     # Return a tensor whose values are loaded from memory at located specified by the pointer
-    tokens_r = tl.load(tokens_real + strides)
-    tokens_i = tl.load(tokens_imag + strides)
-    gates_r = tl.load(gates_real + strides)
-    gates_i = tl.load(gates_imag + strides)
+    tokens_r = tl.load(tokens_real + stride_idx2)
+    tokens_i = tl.load(tokens_imag + stride_idx2)
+    gates_r = tl.load(gates_real + stride_idx2)
+    gates_i = tl.load(gates_imag + stride_idx2)
 
     #print("fwd in triton: gates_r, gates_i, tokens_r, tokens_i:")
     #print(gates_r, gates_i, tokens_r, tokens_i)
@@ -621,17 +641,17 @@ def forward_scan_btc_complex(
         (tokens_r, tokens_i, gates_r, gates_i),
         axis=0,
         combine_fn=first_order_op_complex,
-        reverse=REVERSE
+        reverse=False
     )
 
-    # print("fwd out triton: gates_r_out, gates_i_out, tokens_new_r, tokens_new_i:")
-    # print(gates_r_out, gates_i_out, tokens_new_r, tokens_new_i)
+    out_idx = base_offset + seq_idx * CHANNELS
+    out_idx2 = out_idx * 2
 
     # Store results
-    tl.store(output_gates_real + strides, gates_r_out)
-    tl.store(output_gates_imag + strides, gates_i_out)
-    tl.store(output_tokens_real + strides, tokens_new_r)
-    tl.store(output_tokens_imag + strides, tokens_new_i)
+    tl.store(output_gates_real + out_idx2, gates_r_out)
+    tl.store(output_gates_imag + out_idx2, gates_i_out)
+    tl.store(output_tokens_real + out_idx2, tokens_new_r)
+    tl.store(output_tokens_imag + out_idx2, tokens_new_i)
 
 @triton.jit
 def backward_scan_btc_complex(
@@ -655,18 +675,25 @@ def backward_scan_btc_complex(
 
     # Same as forward scan but read sequence in reverse order
     base_offset = batch_id * SEQUENCE_LENGTH * CHANNELS + channel_id
-    strides = base_offset + tl.arange(0, SEQUENCE_LENGTH) * CHANNELS
-    reversed_strides = base_offset + (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) * CHANNELS
+    if REVERSE:
+        seq_idx =  tl.arange(0, SEQUENCE_LENGTH) 
+        rev_idx =  (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
+    else:
+        seq_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
+        rev_idx = tl.arange(0, SEQUENCE_LENGTH)
+    strides = base_offset + seq_idx * CHANNELS
+    reversed_strides = base_offset + rev_idx* CHANNELS
+
+    strides2 = strides*2
+    reversed_strides2 = reversed_strides*2
 
     # Remember we are dealing with complex numbers which are interleaved in memory
-    # reversed_strides = reversed_strides * 2
-    # However, 
 
     # Load data in reverse order
-    gates_r = tl.load(gates_real + reversed_strides)
-    gates_i = tl.load(gates_imag + reversed_strides)
-    grad_r = tl.load(grad_real + reversed_strides * 2)
-    grad_i = tl.load(grad_imag + reversed_strides * 2)
+    gates_r = tl.load(gates_real + strides)
+    gates_i = tl.load(gates_imag + strides)
+    grad_r = tl.load(grad_real + strides2)
+    grad_i = tl.load(grad_imag + strides2)
 
     #print("bwd in triton:gates_r, gates_i, grad_r, grad_i:")
     #print(gates_r, gates_i, grad_r, grad_i)
@@ -676,17 +703,25 @@ def backward_scan_btc_complex(
         (grad_r, grad_i, gates_r, gates_i),
         axis=0,
         combine_fn=first_order_op_complex,
-        reverse=REVERSE
+        reverse=False,
     )
     # Store results in reverse order
     #print("bwd out triton:gates_r_out, gates_i_out, tokens_new_r, tokens_new_i:")
     #print(gates_r_out, gates_i_out, tokens_new_r,tokens_new_i)
+    if REVERSE:
+        seq_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
+        rev_idx = tl.arange(0, SEQUENCE_LENGTH) 
+    else:
+        seq_idx =  tl.arange(0, SEQUENCE_LENGTH)
+        rev_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
+
+    store_idx = base_offset + rev_idx * CHANNELS
     
     # when we store we need to reverse the strides
-    tl.store(d_tokens_real + reversed_strides, tokens_new_r)
-    tl.store(d_tokens_imag + reversed_strides, tokens_new_i)
-    tl.store(d_gates_real + strides, gates_r_out)
-    tl.store(d_gates_imag + strides, gates_i_out)
+    tl.store(d_tokens_real + store_idx, tokens_new_r)
+    tl.store(d_tokens_imag + store_idx, tokens_new_i)
+    tl.store(d_gates_real + store_idx, gates_r_out)
+    tl.store(d_gates_imag + store_idx, gates_i_out)
 
 
 @torch.jit.script
