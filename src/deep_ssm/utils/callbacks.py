@@ -179,8 +179,15 @@ class EigenValTracking_pbatch(Callback):
                         C_tilde = torch.complex(C[..., 0], C[..., 1])
                         B_tilde = torch.complex(B[..., 0], B[..., 1])
 
+
+                        clip_eigs = pl_module.model.backbone.layers[layer_idx].seq.seq.clip_eigs
+                        if clip_eigs:
+                            Lambda_re = torch.clip(Lambda_re, None, max=-1e-4)
+
+                        Lambda = torch.complex(Lambda_re, Lambda_im)
+
                         step_scale = torch.exp(log_step[..., 0])
-                        Lambda_bar, B_bar =  pl_module.model.backbone.layers[layer_idx].seq.seq.discretize(Lambda_re, B_tilde, step_scale)
+                        Lambda_bar, B_bar =  pl_module.model.backbone.layers[layer_idx].seq.seq.discretize(Lambda, B_tilde, step_scale)
 
                         # We wto check statbility
                         self.log(f"layer{layer_name}/Lambda_bar_re_max", Lambda_bar.abs().max().item())
@@ -188,9 +195,9 @@ class EigenValTracking_pbatch(Callback):
                         self.log(f"layer{layer_name}/Lambda_bar_re_mean", Lambda_bar.abs().mean().item())
 
                         # Log oscillation: Im(Λ)
-                        pl_module.log(f"layer{layer_name}/Lambda_bar_im_mean", Lambda_im.mean().item())
-                        pl_module.log(f"layer{layer_name}/Lambda_bar_im_max", Lambda_im.max().item())
-                        pl_module.log(f"layer{layer_name}/Lambda_bar_im_min", Lambda_im.min().item())
+                        pl_module.log(f"layer{layer_name}/Lambda_bar_im_mean", Lambda_bar.imag.mean().item())
+                        pl_module.log(f"layer{layer_name}/Lambda_bar_im_max", Lambda_bar.imag.max().item())
+                        pl_module.log(f"layer{layer_name}/Lambda_bar_im_min", Lambda_bar.imag.min().item())
 
                         # Log step scale (Δ)
                         pl_module.log(f"layer{layer_name}/step_mean", step_scale.mean().item())
@@ -198,7 +205,7 @@ class EigenValTracking_pbatch(Callback):
                         pl_module.log(f"layer{layer_name}/step_min", step_scale.min().item())
 
                         # Optional: log norms of B, C, D
-                        pl_module.log(f"layer{layer_name}/B_norm", B_tilde.abs().norm().item())
+                        pl_module.log(f"layer{layer_name}/B_bar_norm", B_bar.abs().norm().item())
                         pl_module.log(f"layer{layer_name}/C_norm", C_tilde.abs().norm().item())
                         pl_module.log(f"layer{layer_name}/D_norm", D.norm().item())
                     else:
@@ -260,6 +267,26 @@ class CERCallback(Callback):
         self._finalize_epoch(pl_module, "test")
 
 
+class FreezeParamsCallback(Callback):
+    def __init__(self, freeze_epochs=5, params_to_freeze=["D"]):
+        self.freeze_epochs = freeze_epochs
+        self.params_to_freeze = params_to_freeze
+
+    def on_train_start(self, trainer, pl_module):
+        # Freeze all D parameters
+        for name, param in pl_module.named_parameters():
+            if any(param_name in name for param_name in self.params_to_freeze):
+                param.requires_grad = False
+                print(f"[FreezeParamsCallback] Freezing {name}")
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        # Unfreeze D after `freeze_epochs`
+        if trainer.current_epoch == self.freeze_epochs:
+            for name, param in pl_module.named_parameters():
+                if any(param_name in name for param_name in self.params_to_freeze):
+                    param.requires_grad = True
+                    print(f"[FreezeParamsCallback] Unfreezing {name}")
+
 all_callbacks = {
     "model_pbatch": GradNormCallback(),
     "model_pepoch": GradNormCallback_pepoch(),
@@ -268,4 +295,5 @@ all_callbacks = {
     "masking_scheduler": UpdateMaskingStrategy,
     "eigen_track": EigenValTracking_pbatch(),
     "cer" : CERCallback(),
+    "freeze_params": FreezeParamsCallback,
 }
