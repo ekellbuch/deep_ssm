@@ -103,6 +103,8 @@ def train(args):
         local_callbacks.append(all_callbacks["eigen_track"])
       if args.callbacks.get("cer", None):
         local_callbacks.append(all_callbacks["cer"])
+      if args.callbacks.get("freeze_params", None):
+        local_callbacks.append(all_callbacks["freeze_params"](**args.callbacks.freeze_params))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
