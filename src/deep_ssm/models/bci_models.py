@@ -370,6 +370,7 @@ class S5Decoder(BaseDecoder):
         batchnorm=False,
         bn_momentum=0.95,
         bandlimit=None,
+        activation="relu"
     ):
         super(S5Decoder, self).__init__(
             neural_dim=neural_dim,
@@ -417,7 +418,7 @@ class S5Decoder(BaseDecoder):
                 nn.init.zeros_(layer.bias)
 
         if self.fcc_layers:
-            d_ff = dff or 4*d_output
+            d_ff = d_model
             self.activation = F.relu if activation == 'relu' else F.gelu
             self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
             self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)

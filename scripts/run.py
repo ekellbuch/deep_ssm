@@ -101,6 +101,8 @@ def train(args):
         local_callbacks.append(ModelCheckpoint(**args.callbacks.checkpoint_cfg))
       if args.callbacks.get("eigen_track", None):
         local_callbacks.append(all_callbacks["eigen_track"])
+      if args.callbacks.get("cer", None):
+        local_callbacks.append(all_callbacks["cer"])
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 
@@ -116,6 +118,7 @@ def train(args):
       torch.mps.empty_cache()
     elif torch.cuda.is_available():
       torch.cuda.empty_cache()
+  
     trainer.test(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
     # End logging

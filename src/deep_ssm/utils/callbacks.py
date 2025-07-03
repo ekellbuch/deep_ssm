@@ -116,6 +116,45 @@ class EigenValTracking_pbatch(Callback):
         for layer_name, norm_value in norms.items():
             self.log(f'{layer_name}', norm_value)
 
+class CERCallback(Callback):
+    def __init__(self):
+        self.cer_outputs = {
+            "train": [],
+            "validation": [],
+            "test": [],
+        }
+
+    def _compute_and_store(self, pl_module, batch, flag):
+        X, y, X_len, y_len, dayIdx = batch
+        input_len = pl_module.get_lens(X_len)
+        preds = pl_module.model(X, dayIdx)
+        cer_v = pl_module.calculate_cer(preds, input_len, y, y_len)
+        self.cer_outputs[flag].append(cer_v)
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self._compute_and_store(pl_module, batch, flag="train")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        self._compute_and_store(pl_module, batch, flag="validation")
+
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        self._compute_and_store(pl_module, batch, flag="test")
+
+    def _finalize_epoch(self, pl_module, flag):
+        if self.cer_outputs[flag]:
+            epoch_cer = torch.stack([torch.tensor(x) for x in self.cer_outputs[flag]]).mean()
+            pl_module.log(f"cer_{flag}_epoch", epoch_cer, prog_bar=True)
+            self.cer_outputs[flag].clear()
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        self._finalize_epoch(pl_module, "train")
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        self._finalize_epoch(pl_module, "validation")
+
+    def on_test_epoch_end(self, trainer, pl_module):
+        self._finalize_epoch(pl_module, "test")
+
 
 all_callbacks = {
     "model_pbatch": GradNormCallback(),
@@ -124,4 +163,5 @@ all_callbacks = {
     "vars_pepoch": GradNormCallback_vars_pepoch(),
     "masking_scheduler": UpdateMaskingStrategy,
     "eigen_track": EigenValTracking_pbatch(),
+    "cer" : CERCallback(),
 }

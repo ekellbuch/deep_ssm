@@ -6,12 +6,21 @@ import torch
 import torch.nn.functional as F
 from typing import Literal, Tuple, Optional, Union
 import math
-from deep_ssm.mixers.s5_fjax.jax_func import associative_scan, lecun_normal
+from deep_ssm.mixers.s5_fjax.jax_func import lecun_normal
 from deep_ssm.mixers.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps, make_DPLR_HiPPO, \
   trunc_standard_normal
 
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
+if False: #DEVICE == "cuda":
+    from deep_ssm.mixers.scan_utils import scan_btc_complex
+    def scan_func(g, t, **kwargs):
+        output_g, output_t = scan_btc_complex(g, t, **kwargs)
+        return output_g, output_t
+else:
+    from deep_ssm.mixers.s5_fjax.jax_func import associative_scan
+    def scan_func(g, t, **kwargs):
+      return  associative_scan(binary_operator,(g, t),  **kwargs)
 
 
 # Discretization functions
@@ -132,13 +141,11 @@ def apply_ssm(
     Lambda_bars[0] = Lambda_bars[0] * prev_state
 
   # compute state sequence using associative scan: x_{t+1} = A x_t + B u
-  _, xs = associative_scan(binary_operator, (Lambda_bars, Bu_elements))
+  _, xs = scan_func(Lambda_bars, Bu_elements)
 
-  
+
   if bidirectional:
-    _, xs2 = associative_scan(
-      binary_operator, (Lambda_bars, Bu_elements), reverse=True
-    )
+    _, xs2 = scan_func(Lambda_bars, Bu_elements, reverse=True)
     xs = torch.cat((xs, xs2), dim=-1)
 
   # TODO: the last element of xs (non-bidir) is the hidden state for bidir flag it!

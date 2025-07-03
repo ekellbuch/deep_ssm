@@ -9,6 +9,7 @@ class BCIDecoder(L.LightningModule):
     self.model = model
 
     self.loss_ctc = torch.nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
+    self.calculate_cer = calculate_cer
 
   def get_lens(self, X_len):
     if self.model.unfolding:
@@ -42,7 +43,7 @@ class BCIDecoder(L.LightningModule):
 
     # Compute CER
     if compute_cer:
-      train_cer = calculate_cer(pred, input_len, y, y_len)
+      train_cer = self.calculate_cer(pred, input_len, y, y_len)
       self.log(f"cer_{flag_name}", train_cer)
     return loss
 
