@@ -77,54 +77,65 @@ class BCIDecoder(L.LightningModule):
     warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                                                          lr_lambda=warmup_lambda)
 
-    if self.args.scheduler_cfg.type == "linear":
-      scheduler = torch.optim.lr_scheduler.LinearLR(
+    # Main scheduler
+    scheduler_type = self.args.scheduler_cfg.type
+    scheduler_configs = self.args.scheduler_cfg.configs
+
+    if scheduler_type == "linear":
+      main_scheduler = torch.optim.lr_scheduler.LinearLR(
         optimizer,
-        **self.args.scheduler_cfg.configs
+        **scheduler_configs
       )
-    elif self.args.scheduler_cfg.type == "stepLR":
-      scheduler = torch.optim.lr_scheduler.StepLR(
+    elif scheduler_type == "stepLR":
+      main_scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
-        **self.args.scheduler_cfg.configs,
+        **scheduler_configs,
       )
-    elif self.args.scheduler_cfg.type == "cosine_annealing":
-      scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    elif scheduler_type == "cosine_annealing":
+      main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        **self.args.scheduler_cfg.configs,
+        **scheduler_configs,
       )
-    elif self.args.scheduler_cfg.type == 'reduce_on_plateau':
-      scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    elif scheduler_type == 'reduce_on_plateau':
+      main_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        **self.args.scheduler_cfg.configs,
+        **scheduler_configs,
       )
-    elif self.args.scheduler_cfg.type == 'cosine_annealing_warm_restarts':
-      scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    elif scheduler_type == 'cosine_annealing_warm_restarts':
+      main_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
-        **self.args.scheduler_cfg.configs,
+        **scheduler_configs,
       )
-    elif self.args.scheduler_cfg.type == 'cyclic_lr':
-      scheduler = torch.optim.lr_scheduler.CyclicLR(
+    elif scheduler_type == 'cyclic_lr':
+      main_scheduler = torch.optim.lr_scheduler.CyclicLR(
         optimizer,
-        **self.args.scheduler_cfg.configs,
+        **scheduler_configs,
       )
     else:
-      raise NotImplementedError(f"Scheduler {self.args.scheduler_cfg.type} not implemented")
+      raise NotImplementedError(f"Scheduler {scheduler_type} not implemented")
 
     # Copy all scheduler except 'configs' and 'type'
     scheduler_cfg_copy = {k: v for k, v in self.args.scheduler_cfg.items() if k not in ['configs', 'type']}
 
-    # Add warmup_scheduler to the scheduler_cfg_copy
+    # Wrap with SequentialLR if warmup is used
     if warmup_epochs > 0:
-      # Chained scheduler, where warmup runs first, then the main scheduler
-      chained_scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup_scheduler, scheduler],
-        milestones=[warmup_epochs]
-      )
-      scheduler_cfg_copy['scheduler'] = chained_scheduler
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, main_scheduler],
+            milestones=[warmup_epochs],
+        )
     else:
-      scheduler_cfg_copy['scheduler'] = scheduler
-    #lr_scheduler_config = { "scheduler" : scheduler}#, "optimizer": optimizer}
-    #lr_scheduler_config.update(scheduler_cfg_copy)
+        scheduler = main_scheduler
 
-    return [optimizer], [scheduler_cfg_copy]
+    # Lightning expects these fields
+    scheduler_dict = {
+        "scheduler": scheduler,
+        "interval": self.args.scheduler_cfg.get("interval", "epoch"),
+        "frequency": self.args.scheduler_cfg.get("frequency", 1),
+    }
+
+    # Only add 'monitor' if needed
+    if scheduler_type == "reduce_on_plateau":
+        scheduler_dict["monitor"] = self.args.scheduler_cfg.get("monitor", "ctc_loss_validation")
+
+    return [optimizer], [scheduler_dict]
