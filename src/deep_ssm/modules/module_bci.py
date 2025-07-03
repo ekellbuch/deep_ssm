@@ -39,7 +39,7 @@ class BCIDecoder(L.LightningModule):
       input_lengths=input_len,
       target_lengths=y_len,
     )
-    self.log(f"ctc_loss_{flag_name}", loss)
+    self.log(f"ctc_loss_{flag_name}", loss, on_epoch=True)
 
     # Compute CER
     if compute_cer:
