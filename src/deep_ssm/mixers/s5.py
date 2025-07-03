@@ -28,12 +28,14 @@ class SequenceLayer(torch.nn.Module):
     bn_momentum: float = 0.9,
     # optional parameters
     bandlimit: float = None,
+    add_residual: bool = True,
   ):
     super(SequenceLayer, self).__init__()
     self.d_model = d_model
     self.prenorm = prenorm
     self.batchnorm = batchnorm
     self.activation = activation
+    self.add_residual = add_residual
 
     self.seq = S5(
       d_model=d_model,
@@ -89,6 +91,8 @@ class SequenceLayer(torch.nn.Module):
       x = self.drop(x)
     elif self.activation == "gelu":
       x = self.drop(self.gelu(x))
+    elif self.activation == None:
+      pass
     else:
       raise NotImplementedError(
         "Activation: {} not implemented".format(self.activation))
@@ -112,7 +116,8 @@ class SequenceLayer(torch.nn.Module):
     x = self.apply_activation(x)  # (B, L, d_input)
 
     # residual connection
-    x = skip + x
+    if self.add_residual:
+      x = skip + x
 
     if not self.prenorm:
       if self.batchnorm:
@@ -143,7 +148,7 @@ class S5Model(nn.Module):
     bn_momentum: float = 0.9,
     bandlimit: float = None,
     discretization: str = "bilinear",
-
+    add_residual: bool = True,
   ):
     super(S5Model, self).__init__()
     self.n_layers = n_layers
@@ -168,6 +173,7 @@ class S5Model(nn.Module):
                     batchnorm=batchnorm,
                     bn_momentum=bn_momentum,
                     bandlimit=bandlimit,
+                    add_residual=add_residual,
                     ) for _ in range(self.n_layers)
     ])
 
