@@ -350,8 +350,6 @@ class MambaDecoder(BaseDecoder):
         if self.include_relu:
             hidden_states = torch.relu(hidden_states)
     
-        hidden_states = self.dropout(hidden_states)
-
         # Pass through the mixer
         hidden_states = self.backbone(hidden_states)
 
@@ -402,6 +400,9 @@ class S5Decoder(BaseDecoder):
         add_embedding_layer=True,
         init_output_decoder_layer=False,
         add_residual=True,
+        norm_epsilon=1e-5,
+        rms_norm=False,
+        C_init="lecun_normal",
     ):
         super(S5Decoder, self).__init__(
             neural_dim=neural_dim,
@@ -419,7 +420,7 @@ class S5Decoder(BaseDecoder):
         self.fcc_layers = fcc_layers
         self.n_layers = n_layers
         self.include_relu = include_relu
-        
+        self.add_residual = add_residual
         self.dropout = nn.Dropout(p=dropout)
 
         # Block of model layers
@@ -439,18 +440,21 @@ class S5Decoder(BaseDecoder):
                     bn_momentum=bn_momentum,
                     bandlimit=bandlimit,
                     add_residual=add_residual,
+                    C_init=C_init,
                     )
 
         self.fc_decoder_out = OutputDecoder(d_model, n_classes + 1, init_output_decoder_layer)  # +1 for CTC blank
 
+        self.norm_f = (nn.LayerNorm if not rms_norm else torch.nn.RMSNorm)(d_model, eps=norm_epsilon)
+
         if self.fcc_layers:
+            # TODO match with mamba layernorm
             d_ff = d_model
             self.activation = F.relu if activation == 'relu' else F.gelu
             self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
             self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
-            self.norm2 = nn.LayerNorm(d_model)
 
-
+    
     def forward(self, neuralInput: torch.Tensor, dayIdx: torch.Tensor, states: Optional[List[torch.Tensor]] = None):
         """
         Forward pass of the Decoder
@@ -475,11 +479,11 @@ class S5Decoder(BaseDecoder):
         if self.include_relu:
             hidden_states = torch.relu(hidden_states)
     
-        hidden_states = self.dropout(hidden_states)
 
         if states is None:
             states = self.initial_state(hidden_states, hidden_states.shape[0])
 
+        residual = hidden_states
         hidden_states, states = self.backbone(hidden_states, states)
 
         # Pass through FCC layers:
@@ -487,12 +491,18 @@ class S5Decoder(BaseDecoder):
             y = hidden_states
             y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
             y = self.dropout(self.conv2(y).transpose(-1, 1))
-            hidden_states = self.norm2(hidden_states + y)
+            hidden_states = hidden_states + y
+
+        if self.add_residual:
+            hidden_states = hidden_states + residual
+        hidden_states = self.norm_f(hidden_states)
+
 
         seq_out = self.fc_decoder_out(hidden_states)
 
         return seq_out
 
+    @torch.no_grad()
     def initial_state(self, x, batch_size):
         model = self.backbone.layers[0].seq
         B_tilde, _ = model.seq.get_BC_tilde()
@@ -510,7 +520,7 @@ class S5Decoder(BaseDecoder):
             state = Lambda_bar * state + Bu
 
         # For each layer, we need to initialize the state 
-        states = [state] * self.n_layers
+        states = [state.clone() for _ in range(self.n_layers)]
         return states
 
 class SashimiDecoder(BaseDecoder):
