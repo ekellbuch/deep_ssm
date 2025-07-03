@@ -4,8 +4,21 @@ import torch.nn as nn
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.models.audio_models import Sashimi
 import torch.nn.functional as F
-from deep_ssm.mixers.s5 import SequenceLayer
+from deep_ssm.mixers.s5 import S5Model
 from typing import Optional, List
+
+
+class OutputDecoder(nn.Module):
+    def __init__(self, d_output, n_classes, init_output_decoder_layer=False):
+        super(OutputDecoder, self).__init__()
+        self.fc_decoder_out = nn.Linear(d_output, n_classes)  
+        if init_output_decoder_layer:
+            nn.init.xavier_uniform_(self.fc_decoder_out.weight)
+            nn.init.zeros_(self.fc_decoder_out.bias)
+        
+    def forward(self, x):
+        seq_out = self.fc_decoder_out(x)
+        return seq_out
 
 
 class BaseDecoder(nn.Module):
@@ -19,6 +32,10 @@ class BaseDecoder(nn.Module):
         gaussianSmoothSize = 20,
         unfolding=True,
         input_nonlinearity="softsign",
+        add_embedding_layer=False,
+        init_embedding_layer=False,
+        embedding_layer_dim=None,
+
     ):
         """
         The BaseDecoder class is designed to process sequential
@@ -40,6 +57,7 @@ class BaseDecoder(nn.Module):
         self.gaussianSmoothSize = gaussianSmoothSize
         self.unfolding = unfolding
         self.input_nonlinearity = input_nonlinearity
+        self.add_embedding_layer = add_embedding_layer
 
         # Define the input layer nonlinearity (Softsign activation)
         if self.input_nonlinearity == "softsign":
@@ -77,6 +95,17 @@ class BaseDecoder(nn.Module):
         #for x in range(nDays):
         #    thisLayer = getattr(self, "inpLayer" + str(x))
         #    thisLayer.weight = nn.Parameter(thisLayer.weight + torch.eye(self.neural_dim))
+
+        if self.add_embedding_layer:
+            assert embedding_layer_dim is not None, "embedding_layer_dim must be provided if add_embedding_layer is True"
+            if self.unfolding:
+                in_dims = self.neural_dim * self.kernelLen
+            else:
+                in_dims = self.neural_dim
+            self.embedding_layer = nn.Linear(in_dims, embedding_layer_dim)
+            if init_embedding_layer:
+                nn.init.xavier_uniform_(self.embedding_layer.weight)
+                nn.init.zeros_(self.embedding_layer.bias)
 
     def forward_preprocessing(self, neuralInput, dayIdx):
         """
@@ -121,6 +150,8 @@ class BaseDecoder(nn.Module):
           stridedInputs = transformedNeural
 
         #assert stridedInputs.shape == (neuralInput.shape[0], (neuralInput.shape[1] - self.kernelLen) // self.strideLen + 1, self.neural_dim*self.kernelLen)
+        if self.add_embedding_layer:
+            stridedInputs = self.embedding_layer(stridedInputs)
         return stridedInputs
 
 
@@ -233,7 +264,10 @@ class MambaDecoder(BaseDecoder):
         fcc_layers=False,
         activation="relu",
         dff=None,
+        add_embedding_layer=True,
+        init_output_decoder_layer=False,
     ):
+        
         super(MambaDecoder, self).__init__(
             neural_dim=neural_dim,
             nDays=nDays,
@@ -242,6 +276,9 @@ class MambaDecoder(BaseDecoder):
             gaussianSmoothWidth=gaussianSmoothWidth,
             unfolding=unfolding,
             input_nonlinearity=input_nonlinearity,
+            add_embedding_layer=add_embedding_layer,
+            init_embedding_layer=init_embedding_layer,
+            embedding_layer_dim=d_model,
         )
         self.layer_dim = layer_dim
         self.d_model = d_model
@@ -255,13 +292,7 @@ class MambaDecoder(BaseDecoder):
         if bidirectional_input:
             raise NotImplementedError("Bidirectional input not supported for MambaDecoder")
 
-        if unfolding:
-          input_dims = self.neural_dim * kernelLen
-        else:
-          input_dims = self.neural_dim
-
         # input dimension to model dimension
-        self.linear_input = nn.Linear(input_dims, d_model)
         self.dropout = nn.Dropout(p=dropout)
 
         # Block of model layers
@@ -284,13 +315,8 @@ class MambaDecoder(BaseDecoder):
             d_output = d_model*2
         else:
             d_output = d_model
-        self.fc_decoder_out = nn.Linear(d_output, n_classes + 1)  # +1 for CTC blank
 
-        # Initialize embedding weights:
-        if init_embedding_layer:
-            for layer in [self.linear_input, self.fc_decoder_out]:
-                nn.init.xavier_uniform_(layer.weight)
-                nn.init.zeros_(layer.bias)
+        self.fc_decoder_out = OutputDecoder(d_output, n_classes + 1, init_output_decoder_layer)  # +1 for CTC blank
 
         if self.fcc_layers:
             d_ff = dff or 4*d_output
@@ -318,9 +344,8 @@ class MambaDecoder(BaseDecoder):
             neuralInput /= stdev
 
         # Preprocess batch
-        stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
+        hidden_states = self.forward_preprocessing(neuralInput, dayIdx)
 
-        hidden_states = self.linear_input(stridedInputs)
         # include relu
         if self.include_relu:
             hidden_states = torch.relu(hidden_states)
@@ -363,6 +388,7 @@ class S5Decoder(BaseDecoder):
         d_model=256,
         ssm_size=384,
         n_layers=4, 
+        blocks=1,
         bidirectional=False,
         conj_sym=False,
         dropout=0.1,
@@ -370,7 +396,12 @@ class S5Decoder(BaseDecoder):
         batchnorm=False,
         bn_momentum=0.95,
         bandlimit=None,
-        activation="relu"
+        step_rescale=1.0,
+        clip_eigs=False,
+        activation="gelu",
+        add_embedding_layer=True,
+        init_output_decoder_layer=False,
+        add_residual=True,
     ):
         super(S5Decoder, self).__init__(
             neural_dim=neural_dim,
@@ -380,42 +411,37 @@ class S5Decoder(BaseDecoder):
             gaussianSmoothWidth=gaussianSmoothWidth,
             unfolding=unfolding,
             input_nonlinearity=input_nonlinearity,
+            add_embedding_layer=add_embedding_layer,
+            init_embedding_layer=init_embedding_layer,
+            embedding_layer_dim=d_model,
         )
         self.normalize_batch = normalize_batch
         self.fcc_layers = fcc_layers
         self.n_layers = n_layers
         self.include_relu = include_relu
-
-        if unfolding:
-          input_dims = self.neural_dim * kernelLen
-        else:
-          input_dims = self.neural_dim
-
-        # input dimension to model dimension
-        self.linear_input = nn.Linear(input_dims, d_model)
+        
         self.dropout = nn.Dropout(p=dropout)
 
         # Block of model layers
-        self.backbone = nn.Sequential(*[
-            SequenceLayer(d_model=d_model,
+        self.backbone = S5Model(
+                    d_model=d_model,
                     ssm_size=ssm_size,
+                    n_layers=n_layers,
+                    blocks=blocks,
                     bidirectional=bidirectional,
                     conj_sym=conj_sym,
+                    clip_eigs=clip_eigs,
+                    step_rescale=step_rescale,
                     dropout=dropout,
+                    activation=activation,
                     prenorm=prenorm,
                     batchnorm=batchnorm,
                     bn_momentum=bn_momentum,
                     bandlimit=bandlimit,
-                    ) for _ in range(self.n_layers)
-        ])
+                    add_residual=add_residual,
+                    )
 
-        self.fc_decoder_out = nn.Linear(d_model, n_classes + 1)  # +1 for CTC blank
-
-        # Initialize embedding weights:
-        if init_embedding_layer:
-            for layer in [self.linear_input, self.fc_decoder_out]:
-                nn.init.xavier_uniform_(layer.weight)
-                nn.init.zeros_(layer.bias)
+        self.fc_decoder_out = OutputDecoder(d_model, n_classes + 1, init_output_decoder_layer)  # +1 for CTC blank
 
         if self.fcc_layers:
             d_ff = d_model
@@ -443,23 +469,18 @@ class S5Decoder(BaseDecoder):
             neuralInput /= stdev
 
         # Preprocess batch
-        stridedInputs = self.forward_preprocessing(neuralInput, dayIdx)
+        hidden_states = self.forward_preprocessing(neuralInput, dayIdx)
 
-        hidden_states = self.linear_input(stridedInputs)
         # include relu
         if self.include_relu:
             hidden_states = torch.relu(hidden_states)
     
-        #hidden_states = self.dropout(hidden_states)
+        hidden_states = self.dropout(hidden_states)
 
         if states is None:
             states = self.initial_state(hidden_states, hidden_states.shape[0])
 
-        residual = states
-        for i, layer in enumerate(self.backbone):
-            hidden_states, residual = layer(hidden_states, residual)  # Pass the current state to the current layer
-
-        #hidden_states, states = self.backbone(hidden_states, states)
+        hidden_states, states = self.backbone(hidden_states, states)
 
         # Pass through FCC layers:
         if self.fcc_layers:
@@ -473,7 +494,7 @@ class S5Decoder(BaseDecoder):
         return seq_out
 
     def initial_state(self, x, batch_size):
-        model = self.backbone[0].seq
+        model = self.backbone.layers[0].seq
         B_tilde, _ = model.seq.get_BC_tilde()
         Lambda = model.seq.get_lambda()
         step = torch.exp(model.seq.log_step[..., 0])
@@ -487,7 +508,10 @@ class S5Decoder(BaseDecoder):
             u_ = x_snippet[:, i]  # [B, D]
             Bu = torch.einsum('pd,bd->bp', B_bar, u_)  # [B, P]
             state = Lambda_bar * state + Bu
-        return state
+
+        # For each layer, we need to initialize the state 
+        states = [state] * self.n_layers
+        return states
 
 class SashimiDecoder(BaseDecoder):
     def __init__(
@@ -512,6 +536,10 @@ class SashimiDecoder(BaseDecoder):
         ff=2,  # Add feed-forward expansion factor
         dropout=0.0, # Add dropout
         input_nonlinearity="softsign",
+        init_output_decoder_layer=False,
+        add_embedding_layer=False,
+        init_embedding_layer=False,
+        embedding_layer_dim=None,
     ):
         super(SashimiDecoder, self).__init__(
             neural_dim=neural_dim,
@@ -521,6 +549,9 @@ class SashimiDecoder(BaseDecoder):
             gaussianSmoothWidth=gaussianSmoothWidth,
             unfolding=unfolding,
             input_nonlinearity=input_nonlinearity,
+            add_embedding_layer=add_embedding_layer,
+            init_embedding_layer=init_embedding_layer,
+            embedding_layer_dim=embedding_layer_dim,
         )
         self.layer_dim = layer_dim
         self.d_model = d_model
@@ -537,8 +568,9 @@ class SashimiDecoder(BaseDecoder):
         # Linear transformation for the input to match the Sashimi model dimensions
         d_mamba = d_model * 2 if self.bidirectional_input else d_model
 
-        self.linear_input = nn.Linear(
-          input_dims * (2 if self.bidirectional_input else 1), d_mamba
+        d_out =  input_dims * (2 if self.bidirectional_input else 1)
+        self.linear_input = OutputDecoder(
+          d_out, d_mamba, init_output_decoder_layer=init_output_decoder_layer
         )
 
         # Initialize the Sashimi backbone with the necessary parameters
@@ -556,7 +588,7 @@ class SashimiDecoder(BaseDecoder):
         )
 
         # Final layer to project the Sashimi output to the number of classes + CTC blank
-        self.fc_decoder_out = nn.Linear(self.d_model, n_classes + 1)
+        self.fc_decoder_out = OutputDecoder(self.d_model, n_classes + 1)
 
     def forward(self, neuralInput, dayIdx):
         # Preprocess the input (e.g., Gaussian smoothing and unfolding)
