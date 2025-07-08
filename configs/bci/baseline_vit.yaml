@@ -11,8 +11,8 @@ seed: 0
 data_cfg:
   batchSize: 64
   num_workers: 0
-  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/ptDecoder_ctc_both"
-  train_split: 0.8    # % of training data assigned to train_loader 1=100%
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc_both"
+  train_split: 1.0    # % of training data assigned to train_loader 1=100%
   # transformations:
   whiteNoiseSD: 0.2
   constantOffsetSD: 0.05
@@ -40,8 +40,8 @@ model_cfg:
     depth: 7
     heads: 6
     mlp_dim_ratio: 4
-    dropout: 0.1
-    input_dropout: 0.1
+    dropout: 0.35
+    input_dropout: 0.2
     look_ahead: 0
     gaussianSmoothWidth: 2.0
     T5_style_pos: true
@@ -87,15 +87,15 @@ callbacks:
 
 trainer_cfg:
   fast_dev_run: false
-  logger: none #"wandb"
+  logger: "wandb"
   accelerator: "auto"
-  max_steps: 5
+  max_epochs: 600
   log_every_n_steps: 100
   gradient_clip_val: 0
   gradient_clip_algorithm: "norm"
-  limit_test_batches: 1
-  limit_train_batches: 1
-  limit_val_batches: 1
+  limit_test_batches: 
+  limit_train_batches: 
+  limit_val_batches: 
   
 
 checkpoint_cfg:
