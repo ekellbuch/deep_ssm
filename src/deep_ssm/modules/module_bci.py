@@ -111,6 +111,11 @@ class BCIDecoder(L.LightningModule):
         optimizer,
         **scheduler_configs,
       )
+    elif scheduler_type == 'multistep':
+      main_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        **scheduler_configs,
+      )
     else:
       raise NotImplementedError(f"Scheduler {scheduler_type} not implemented")
 
@@ -139,3 +144,33 @@ class BCIDecoder(L.LightningModule):
         scheduler_dict["monitor"] = self.args.scheduler_cfg.get("monitor", "ctc_loss_validation")
 
     return [optimizer], [scheduler_dict]
+  
+
+class BCIEncoder(BCIDecoder):
+  def __init__(self, args, model):
+    super().__init__(args, model)
+
+  def _custom_step(self, batch, batch_idx, flag_name='test', compute_cer=True):
+
+    X, y, X_len, y_len, dayIdx = batch
+
+    input_len = self.get_lens(X_len)
+
+    # forward pass
+    pred = self.model(X, X_len, dayIdx)
+    adjustedLens = self.model.bit_model.compute_length(X_len)
+
+    # calculate CTC loss
+    loss = self.loss_ctc(
+      log_probs=torch.permute(pred.log_softmax(2), [1, 0, 2]),
+      targets=y,
+      input_lengths=adjustedLens,
+      target_lengths=y_len,
+    )
+    self.log(f"ctc_loss_{flag_name}", loss, on_epoch=True)
+
+    # Compute CER
+    if compute_cer:
+      train_cer = self.calculate_cer(pred, input_len, y, y_len)
+      self.log(f"cer_{flag_name}", train_cer)
+    return loss

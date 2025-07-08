@@ -6,6 +6,9 @@ from deep_ssm.models.audio_models import Sashimi
 import torch.nn.functional as F
 from deep_ssm.mixers.s5 import S5Model
 from typing import Optional, List
+import sys
+sys.path.append('/Users/ekb/Projects/deepseq/transformers_with_dietcorp/src')
+from neural_decoder.bit import BiT_Phoneme
 
 
 class OutputDecoder(nn.Module):
@@ -618,4 +621,103 @@ class SashimiDecoder(BaseDecoder):
         seq_out = self.fc_decoder_out(hidden_states)
 
         return seq_out
+
+
+class BiTDecoder(nn.Module):
+    def __init__(
+        self,
+        n_classes,
+        # BiT specific parameters
+        patch_size=4,
+        dim=512,
+        depth=8,
+        heads=8,
+        mlp_dim_ratio=4,
+        dim_head=64,
+        dropout=0.1,
+        input_dropout=0.1,
+        look_ahead=0,
+        T5_style_pos=True,
+        max_mask_pct=0.0,
+        num_masks=1,
+        mask_token_zeros=True,
+        num_masks_channels=0,
+        max_mask_channels=0,
+        dist_dict_path=None,
+        linderman_lab=False,
+        # Base decoder parameters
+        gaussianSmoothWidth=0,
+        # get rid of this
+        nDays=None,
+    ):
+        super().__init__()
+        self.patch_size = patch_size
+        self.dim = dim
+        self.depth = depth
+        self.heads = heads
+        self.mlp_dim_ratio = mlp_dim_ratio
+        self.dim_head = dim_head
+        self.dropout = dropout
+        self.input_dropout = input_dropout
+        self.look_ahead = look_ahead
+        self.T5_style_pos = T5_style_pos
+        self.max_mask_pct = max_mask_pct
+        self.num_masks = num_masks
+        self.mask_token_zeros = mask_token_zeros
+        self.num_masks_channels = num_masks_channels
+        self.max_mask_channels = max_mask_channels
+        self.dist_dict_path = dist_dict_path
+        self.linderman_lab = linderman_lab
+
+        # some classes 
+        self.unfolding = False
+        
+        # Initialize the BiT model 
+        # Note: patch_size here should match the neural_dim for proper channel handling
+        self.bit_model = BiT_Phoneme(
+            patch_size=patch_size,  # (time_patch, feature_patch) 
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            mlp_dim_ratio=mlp_dim_ratio,
+            dim_head=dim_head,
+            dropout=dropout,
+            input_dropout=input_dropout,
+            look_ahead=look_ahead,
+            gaussianSmoothWidth=gaussianSmoothWidth,  # Use the configured value
+            nClasses=n_classes,
+            T5_style_pos=T5_style_pos,
+            max_mask_pct=max_mask_pct,
+            num_masks=num_masks,
+            mask_token_zeros=mask_token_zeros,
+            num_masks_channels=num_masks_channels,
+            max_mask_channels=max_mask_channels,
+            dist_dict_path=dist_dict_path,
+            linderman_lab=linderman_lab,
+        )
+
+    def forward(self, neuralInput, X_len, dayIdx):
+        # BiT model expects raw neural input and handles its own preprocessing
+        # We apply minimal day-specific preprocessing but skip the unfolding
+        
+        # Apply day-specific transformations (weights and bias)
+        batch_size, seq_len, num_features = neuralInput.shape
+        # Select the weight matrix for the current day based on dayIdx
+        #dayWeights = torch.index_select(self.dayWeights, 0, dayIdx)  # (BS, N, N)
+        
+        # Apply a linear transformation to the neural input using the selected day weight matrix
+        #transformedNeural = torch.einsum(
+        #    "btd,bdk->btk", neuralInput, dayWeights
+        #) + torch.index_select(self.dayBias, 0, dayIdx)  # (BS, L, N)
+        
+        # Apply input nonlinearity
+        #if self.input_nonlinearity == "softsign":
+        #    transformedNeural = self.inputLayerNonlinearity(transformedNeural)
+        
+        # BiT model expects X_len for length computation
+        #X_len = torch.full((batch_size,), seq_len, device=neuralInput.device, dtype=torch.long)
+        
+        # Forward through BiT model - BiT expects (B, T, F) format
+        output = self.bit_model(neuralInput, X_len, None)
+        return output
 

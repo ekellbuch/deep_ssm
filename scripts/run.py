@@ -14,7 +14,13 @@ from deep_ssm.utils.callbacks import all_callbacks
 import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
 
-device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+# Set device
+if torch.backends.mps.is_available():
+  DEVICE = "mps"
+elif torch.cuda.is_available():
+  DEVICE = "cuda"
+else:
+  DEVICE = "cpu"
 
 
 def print_memory_usage(device="cuda"):

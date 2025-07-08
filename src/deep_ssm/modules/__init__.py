@@ -1,4 +1,5 @@
 
-from .module_bci import BCIDecoder
+from .module_bci import BCIDecoder, BCIEncoder
 
-all_modules = {"bci": BCIDecoder}
+all_modules = {"bci": BCIDecoder,
+               "bci_encoder": BCIEncoder}
