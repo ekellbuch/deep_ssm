@@ -7,7 +7,9 @@ import torch.nn.functional as F
 from deep_ssm.mixers.s5 import S5Model
 from typing import Optional, List
 import sys
-sys.path.append('/Users/ekb/Projects/deepseq/transformers_with_dietcorp/src')
+import os 
+import deep_ssm
+sys.path.append(os.path.join( os.path.dirname(deep_ssm.__file__), "../../..","transformers_with_dietcorp/src"))
 from neural_decoder.bit import BiT_Phoneme
 
 
