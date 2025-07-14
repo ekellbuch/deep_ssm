@@ -27,6 +27,7 @@ except:
 
 from typing import Optional
 from deep_ssm.mixers.mamba_simple import Mamba
+from deep_ssm.mixers.mamba2_simple import Mamba2Simple
 
 
 def create_block(
@@ -42,7 +43,8 @@ def create_block(
   bidirectional=False,
   mamba_bi_new=False,
   bidirectional_strategy=None,
-  d_out=None
+  d_out=None,
+  mamba2=False
 ):
   if mamba_bi_new:
     model = MambaWrapper
@@ -58,6 +60,7 @@ def create_block(
                       bidirectional=bidirectional,
                       bidirectional_strategy=bidirectional_strategy,
                       d_out=d_out,
+                      mamba2=mamba2,
                       )
 
   norm_cls = partial(
@@ -87,6 +90,7 @@ class MambaWrapper(nn.Module):
         d_model: int,
         bidirectional: bool = False,
         bidirectional_strategy: Optional[str] = None,
+        mamba2: bool = False,
         **mamba_kwargs,
     ):
         super().__init__()
@@ -96,14 +100,30 @@ class MambaWrapper(nn.Module):
             raise NotImplementedError(f"`{bidirectional_strategy}` strategy for bi-directionality is not implemented!")
         self.bidirectional = bidirectional
         self.bidirectional_strategy = bidirectional_strategy
-        self.mamba_fwd = Mamba(
+        self.mamba2 = mamba2
+        
+        mamba_class = Mamba2Simple if mamba2 else Mamba
+        
+        # Filter kwargs based on which mamba class we're using
+        if mamba2:
+            # Mamba2Simple doesn't accept d_out parameter and needs rmsnorm=False when RMSNormGated is not available
+            filtered_kwargs = {k: v for k, v in mamba_kwargs.items() if k != 'd_out'}
+            # Disable rmsnorm if RMSNormGated is not available
+            try:
+                from mamba_ssm.ops.triton.layernorm_gated import RMSNorm as RMSNormGated
+            except ImportError:
+                filtered_kwargs['rmsnorm'] = False
+        else:
+            filtered_kwargs = mamba_kwargs
+            
+        self.mamba_fwd = mamba_class(
             d_model=d_model,
-            **mamba_kwargs
+            **filtered_kwargs
         )
         if bidirectional:
-            self.mamba_rev = Mamba(
+            self.mamba_rev = mamba_class(
                 d_model=d_model,
-                **mamba_kwargs
+                **filtered_kwargs
             )
         else:
             self.mamba_rev = None
@@ -178,6 +198,7 @@ class MixerModel(nn.Module):
         mamba_bi_new=False,
         initialize_mixer=False,
         bidirectional_strategy=None,
+        mamba2=False,
     ):
         super().__init__()
 
@@ -189,6 +210,7 @@ class MixerModel(nn.Module):
         self.fused_add_norm = fused_add_norm
         self.bidirectional = bidirectional
         self.bidirectional_strategy = bidirectional_strategy
+        self.mamba2 = mamba2
 
         # Block of model layers
         if self.bidirectional and self.bidirectional_strategy == "concatenate":
@@ -214,7 +236,8 @@ class MixerModel(nn.Module):
                     fused_add_norm=fused_add_norm,
                     rms_norm=rms_norm,
                     bidirectional_strategy=bidirectional_strategy,
-                    d_out=d_outputs[i]
+                    d_out=d_outputs[i],
+                    mamba2=mamba2
                 )
                 for i in range(n_layer)
             ]

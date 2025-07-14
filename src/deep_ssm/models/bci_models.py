@@ -8,7 +8,7 @@ from deep_ssm.mixers.s5 import S5Model
 from typing import Optional, List
 import sys
 import os 
-from deep_ssm.models.bci_phoneme import BiT_Phoneme, BiT_Mamba_Phoneme
+from deep_ssm.models.bci_phoneme import BiT_Phoneme, BiT_Mamba_Phoneme, BiT_S5_Phoneme, BiT_Mamba2_Phoneme
 
 class OutputDecoder(nn.Module):
     def __init__(self, d_output, n_classes, init_output_decoder_layer=False):
@@ -830,6 +830,208 @@ class BiTMambaDecoder(nn.Module):
 
     def forward(self, neuralInput, X_len, dayIdx):
         # Forward through BiT-Mamba model
+        output = self.bit_model(neuralInput, X_len, None)
+        return output
+
+
+class BiTS5Decoder(nn.Module):
+    def __init__(
+        self,
+        n_classes,
+        # BiT specific parameters
+        patch_size=4,
+        dim=512,
+        d_model=None,  # For S5
+        d_state=16,
+        n_layers=8,  # replaces depth
+        dropout=0.1,
+        input_dropout=0.1,
+        look_ahead=0,
+        T5_style_pos=True,
+        max_mask_pct=0.0,
+        num_masks=1,
+        mask_token_zeros=True,
+        num_masks_channels=0,
+        max_mask_channels=0,
+        dist_dict_path=None,
+        linderman_lab=False,
+        # Base decoder parameters
+        gaussianSmoothWidth=0,
+        # Additional parameters that might be passed from config
+        depth=None,  # For compatibility 
+        heads=6,
+        mlp_dim_ratio=4,
+        dim_head=64,
+        # get rid of this
+        nDays=None,
+    ):
+        super().__init__()
+        
+        # Use dim as d_model if not specified
+        if d_model is None:
+            d_model = dim
+            
+        # Use depth as n_layers if specified 
+        if depth is not None:
+            n_layers = depth
+            
+        self.patch_size = patch_size
+        self.dim = dim
+        self.d_model = d_model
+        self.d_state = d_state
+        self.n_layers = n_layers
+        self.dropout = dropout
+        self.input_dropout = input_dropout
+        self.look_ahead = look_ahead
+        self.T5_style_pos = T5_style_pos
+        self.max_mask_pct = max_mask_pct
+        self.num_masks = num_masks
+        self.mask_token_zeros = mask_token_zeros
+        self.num_masks_channels = num_masks_channels
+        self.max_mask_channels = max_mask_channels
+        self.dist_dict_path = dist_dict_path
+        self.linderman_lab = linderman_lab
+        self.depth = depth
+        self.heads = heads
+        self.mlp_dim_ratio = mlp_dim_ratio
+        self.dim_head = dim_head
+
+        # some classes 
+        self.unfolding = False
+        
+        # Initialize the BiT-S5 model 
+        self.bit_model = BiT_S5_Phoneme(
+            patch_size=patch_size,
+            dim=dim,
+            d_model=d_model,
+            d_state=d_state,
+            n_layers=n_layers,
+            dropout=dropout,
+            input_dropout=input_dropout,
+            look_ahead=look_ahead,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            nClasses=n_classes,
+            T5_style_pos=T5_style_pos,
+            max_mask_pct=max_mask_pct,
+            num_masks=num_masks,
+            mask_token_zeros=mask_token_zeros,
+            num_masks_channels=num_masks_channels,
+            max_mask_channels=max_mask_channels,
+            dist_dict_path=dist_dict_path,
+            linderman_lab=linderman_lab,
+            # Add transformer params for compatibility 
+            depth=n_layers,
+            heads=heads,
+            mlp_dim_ratio=mlp_dim_ratio,
+            dim_head=dim_head,
+        )
+
+    def forward(self, neuralInput, X_len, dayIdx):
+        # Forward through BiT-S5 model
+        output = self.bit_model(neuralInput, X_len, None)
+        return output
+
+
+class BiTMamba2Decoder(nn.Module):
+    def __init__(
+        self,
+        n_classes,
+        # BiT specific parameters
+        patch_size=4,
+        dim=512,
+        d_model=None,  # For mamba2
+        d_state=16,
+        d_conv=4,
+        expand_factor=1,
+        layer_dim=8,  # replaces depth
+        dropout=0.1,
+        input_dropout=0.1,
+        look_ahead=0,
+        T5_style_pos=True,
+        max_mask_pct=0.0,
+        num_masks=1,
+        mask_token_zeros=True,
+        num_masks_channels=0,
+        max_mask_channels=0,
+        dist_dict_path=None,
+        linderman_lab=False,
+        # Base decoder parameters
+        gaussianSmoothWidth=0,
+        # Additional parameters that might be passed from config
+        depth=None,  # For compatibility 
+        heads=6,
+        mlp_dim_ratio=4,
+        dim_head=64,
+        # get rid of this
+        nDays=None,
+    ):
+        super().__init__()
+        
+        # Use dim as d_model if not specified
+        if d_model is None:
+            d_model = dim
+            
+        # Use depth as layer_dim if specified 
+        if depth is not None:
+            layer_dim = depth
+            
+        self.patch_size = patch_size
+        self.dim = dim
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand_factor = expand_factor
+        self.layer_dim = layer_dim
+        self.dropout = dropout
+        self.input_dropout = input_dropout
+        self.look_ahead = look_ahead
+        self.T5_style_pos = T5_style_pos
+        self.max_mask_pct = max_mask_pct
+        self.num_masks = num_masks
+        self.mask_token_zeros = mask_token_zeros
+        self.num_masks_channels = num_masks_channels
+        self.max_mask_channels = max_mask_channels
+        self.dist_dict_path = dist_dict_path
+        self.linderman_lab = linderman_lab
+        self.depth = depth
+        self.heads = heads
+        self.mlp_dim_ratio = mlp_dim_ratio
+        self.dim_head = dim_head
+
+        # some classes 
+        self.unfolding = False
+        
+        # Initialize the BiT-Mamba2 model 
+        self.bit_model = BiT_Mamba2_Phoneme(
+            patch_size=patch_size,
+            dim=dim,
+            d_model=d_model,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand_factor=expand_factor,
+            layer_dim=layer_dim,
+            dropout=dropout,
+            input_dropout=input_dropout,
+            look_ahead=look_ahead,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            nClasses=n_classes,
+            T5_style_pos=T5_style_pos,
+            max_mask_pct=max_mask_pct,
+            num_masks=num_masks,
+            mask_token_zeros=mask_token_zeros,
+            num_masks_channels=num_masks_channels,
+            max_mask_channels=max_mask_channels,
+            dist_dict_path=dist_dict_path,
+            linderman_lab=linderman_lab,
+            # Add transformer params for compatibility 
+            depth=layer_dim,
+            heads=heads,
+            mlp_dim_ratio=mlp_dim_ratio,
+            dim_head=dim_head,
+        )
+
+    def forward(self, neuralInput, X_len, dayIdx):
+        # Forward through BiT-Mamba2 model
         output = self.bit_model(neuralInput, X_len, None)
         return output
 
