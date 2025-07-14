@@ -1,4 +1,4 @@
-from .bci_models import MambaDecoder, GRUDecoder, SashimiDecoder, S5Decoder, BiTDecoder, BiTMambaDecoder, BiTS5Decoder, BiTMamba2Decoder
+from .bci_models import MambaDecoder, GRUDecoder, SashimiDecoder, S5Decoder, BiTDecoder, BiTMambaDecoder, BiTS5Decoder, BiTMamba2Decoder, BiTSashimiDecoder
 
 all_models = {
   "bci_gru" : GRUDecoder,
@@ -9,4 +9,5 @@ all_models = {
   "bci_bit_mamba": BiTMambaDecoder,
   "bci_bit_s5": BiTS5Decoder,
   "bci_bit_mamba2": BiTMamba2Decoder,
+  "bci_vit_sashimi": BiTSashimiDecoder,
 }

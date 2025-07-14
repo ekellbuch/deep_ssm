@@ -8,7 +8,7 @@ from deep_ssm.mixers.s5 import S5Model
 from typing import Optional, List
 import sys
 import os 
-from deep_ssm.models.bci_phoneme import BiT_Phoneme, BiT_Mamba_Phoneme, BiT_S5_Phoneme, BiT_Mamba2_Phoneme
+from deep_ssm.models.bci_phoneme import BiT_Phoneme, BiT_Mamba_Phoneme, BiT_S5_Phoneme, BiT_Mamba2_Phoneme, BiT_Sashimi_Phoneme
 
 class OutputDecoder(nn.Module):
     def __init__(self, d_output, n_classes, init_output_decoder_layer=False):
@@ -1035,3 +1035,49 @@ class BiTMamba2Decoder(nn.Module):
         output = self.bit_model(neuralInput, X_len, None)
         return output
 
+
+class BiTSashimiDecoder(nn.Module):
+  def __init__(self, n_classes, patch_size, dim, d_model, d_state, d_conv, expand_factor, layer_dim, dropout, input_dropout, look_ahead, T5_style_pos, max_mask_pct, num_masks, mask_token_zeros, num_masks_channels, max_mask_channels, dist_dict_path, linderman_lab, gaussianSmoothWidth, depth, heads, mlp_dim_ratio, dim_head, bidirectional, pool, ff, unet, transposed,
+                       nDays=None,
+):
+    super().__init__()
+    
+    # BiT models don't use unfolding
+    self.unfolding = False
+
+    self.bit_model = BiT_Sashimi_Phoneme(
+      patch_size=patch_size,
+      dim=dim,
+      d_model=d_model,
+      d_state=d_state,
+      d_conv=d_conv,
+      expand_factor=expand_factor,
+      layer_dim=layer_dim,
+      dropout=dropout,
+      input_dropout=input_dropout,
+      look_ahead=look_ahead,
+      gaussianSmoothWidth=gaussianSmoothWidth,
+      nClasses=n_classes,
+      T5_style_pos=T5_style_pos,
+      max_mask_pct=max_mask_pct,
+      num_masks=num_masks,
+      mask_token_zeros=mask_token_zeros,
+      num_masks_channels=num_masks_channels,
+      max_mask_channels=max_mask_channels,
+      dist_dict_path=dist_dict_path,
+      linderman_lab=linderman_lab,
+      depth=depth,
+      heads=heads,
+      mlp_dim_ratio=mlp_dim_ratio,
+      dim_head=dim_head,
+      bidirectional=bidirectional,
+      pool=pool,
+      ff=ff,
+      unet=unet,
+      transposed=transposed,
+    )
+
+  def forward(self, neuralInput, X_len, dayIdx):
+    # Forward through BiT-Sashimi model
+    output = self.bit_model(neuralInput, X_len, None)
+    return output

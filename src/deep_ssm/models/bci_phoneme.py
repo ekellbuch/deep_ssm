@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.s5 import S5Model
 from deep_ssm.mixers.mamba2_simple import Mamba2Simple
+from deep_ssm.models.audio_models import Sashimi
 '''
 Code adapted from Fracois Porcher: https://github.com/FrancoisPorcher/vit-pytorch
 and from bit.py in transformers_with_dietcorp
@@ -858,3 +859,137 @@ class BiT_Mamba2_Phoneme(BiT_Phoneme):
         
         return out
 
+
+
+class BiT_Sashimi_Phoneme(BiT_Phoneme):
+    """BiT model that uses Sashimi instead of Transformer layers"""
+    
+    def __init__(self, *, patch_size, dim, d_model, d_state, d_conv, expand_factor, 
+                 layer_dim, dropout, input_dropout, look_ahead, gaussianSmoothWidth, 
+                 nClasses, T5_style_pos, max_mask_pct, num_masks, mask_token_zeros,
+                 num_masks_channels, max_mask_channels, dist_dict_path, linderman_lab,
+                 # Additional transformer parameters needed for parent class
+                 depth=None, heads=None, mlp_dim_ratio=None, dim_head=None,
+                 ssm_type="s4", bidirectional=False, pool=[4, 4], ff=2, unet=False, transposed=True):
+        
+        # Set default transformer parameters (not used but required by parent)
+        if depth is None:
+            depth = layer_dim
+        if heads is None:
+            heads = 8
+        if mlp_dim_ratio is None:
+            mlp_dim_ratio = 4
+        if dim_head is None:
+            dim_head = 64
+
+        # Initialize parent class first
+        super().__init__(
+            patch_size=patch_size,
+            dim=dim,
+            depth=depth,
+            heads=heads,
+            mlp_dim_ratio=mlp_dim_ratio,
+            dim_head=dim_head,
+            dropout=dropout,
+            input_dropout=input_dropout,
+            look_ahead=look_ahead,
+            gaussianSmoothWidth=gaussianSmoothWidth,
+            nClasses=nClasses,
+            T5_style_pos=T5_style_pos,
+            max_mask_pct=max_mask_pct,
+            num_masks=num_masks,
+            mask_token_zeros=mask_token_zeros,
+            num_masks_channels=num_masks_channels,
+            max_mask_channels=max_mask_channels,
+            dist_dict_path=dist_dict_path,
+            linderman_lab=linderman_lab,
+        )
+        
+        # Store sashimi-specific parameters
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand_factor = expand_factor
+        self.layer_dim = layer_dim
+        
+        # Replace transformer with sashimi backbone
+        del self.transformer  # Remove the transformer from parent class
+        
+        # Project from patch embedding dim to sashimi d_model if different
+        if dim != d_model:
+            self.dim_projection = nn.Linear(dim, d_model)
+        else:
+            self.dim_projection = nn.Identity()
+            
+        # Sashimi backbone
+        self.sashimi_backbone = Sashimi(
+            d_model=d_model,
+            n_layers=layer_dim,
+            pool=pool,
+            expand=expand_factor,
+            ff=ff,
+            bidirectional=bidirectional,
+            unet=unet,
+            dropout=dropout,
+            ssm_type=ssm_type,
+            transposed=transposed,
+        )
+        
+        # Output projection
+        if d_model != dim:
+            self.output_projection = nn.Linear(d_model, dim)
+        else:
+            self.output_projection = nn.Identity()
+    
+    def forward(self, neuralInput, X_len, day_idx=None):
+        """
+        Args:
+            neuralInput: Tensor of shape (B, T, F)
+            X_len: Tensor of shape (B,)
+            day_idx: tensor of shape (B)
+        Returns:
+            Tensor: (B, num_patches, nClasses+1)
+        """
+        
+        neuralInput = pad_to_multiple(neuralInput, multiple=self.patch_height)
+        
+        neuralInput = torch.permute(neuralInput, (0, 2, 1))
+        neuralInput = self.gaussianSmoother(neuralInput)
+        neuralInput = torch.permute(neuralInput, (0, 2, 1))
+        
+        neuralInput = neuralInput.unsqueeze(1)
+        
+        # add time masking
+        if self.training and self.max_mask_pct > 0:
+            x = self.to_patch(neuralInput)
+            x, _ = self.apply_time_mask(x, X_len)    
+            x = self.patch_to_emb(x)
+        else:
+            x = self.to_patch_embedding(neuralInput)
+
+        # apply input level dropout. 
+        x = self.dropout(x)
+        
+        b, seq_len, _ = x.shape
+        
+        # Add sin embeddings if T5 Style is False. 
+        if self.T5_style_pos == False:
+            pos_emb = get_sinusoidal_pos_emb(seq_len, self.dim, device=x.device)
+            x = x + pos_emb.unsqueeze(0)
+        
+        # Project to sashimi dimension
+        x = self.dim_projection(x)  # (B, seq_len, d_model)
+        
+        # Pass through sashimi backbone (no temporal mask needed for sashimi)
+        x, _ = self.sashimi_backbone(x)  # (B, seq_len, d_model)
+        
+        # Project back to dim
+        x = self.output_projection(x)  # (B, seq_len, dim)
+        
+        # Apply post-model block
+        x = self.post_model_block(x)
+        
+        # Final projection to classes
+        out = self.projection(x)  # (B, seq_len, nClasses+1)
+        
+        return out
