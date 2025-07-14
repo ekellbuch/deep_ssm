@@ -174,7 +174,6 @@ class Mamba2Simple(nn.Module):
                 A,
                 D=self.D,
                 chunk_size=self.chunk_size,
-                seq_idx=seq_idx,
                 activation=self.activation,
                 rmsnorm_weight=self.norm.weight if self.rmsnorm else None,
                 rmsnorm_eps=self.norm.eps if self.rmsnorm else 1e-6,
@@ -183,7 +182,6 @@ class Mamba2Simple(nn.Module):
                 headdim=self.headdim,
                 ngroups=self.ngroups,
                 norm_before_gate=False,
-                initial_states=initial_states,
                 **dt_limit_kwargs,
             )
         else:
