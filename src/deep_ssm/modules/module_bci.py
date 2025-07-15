@@ -2,6 +2,7 @@ import lightning as L
 import torch
 from deep_ssm.metrics.bci_metrics import calculate_cer
 from torchmetrics.text import WordErrorRate
+from torchmetrics.functional.text import word_error_rate
 
 
 class BaseBCIModule(L.LightningModule):
@@ -159,7 +160,7 @@ class BCIWhisperModule(BaseBCIModule):
       references = self.processor.batch_decode(transcriptions, skip_special_tokens=True)
       #print(f"{flag_name} True sequence: ", references)
       #print(f"{flag_name} Prediction: ", predictions)
-      batch_wer = self.wer(predictions,references)
+      batch_wer = self.wer(predictions,references).mean()
       self.log(f"wer_{flag_name}", batch_wer)
     return loss
 
