@@ -42,7 +42,7 @@ model_cfg:
     input_dropout: 0.2
     look_ahead: 0
     gaussianSmoothWidth: 2.0
-    T5_style_pos: true
+    T5_style_pos: false
     max_mask_pct: 0.075
     num_masks: 20
     mask_token_zeros: false
