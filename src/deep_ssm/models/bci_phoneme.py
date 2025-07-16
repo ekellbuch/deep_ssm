@@ -195,7 +195,6 @@ class BiT_Phoneme(nn.Module):
         self.max_mask_pct = max_mask_pct
         self.num_masks = num_masks    
         self.patch_dim = patch_height * patch_width
-        self.T5_style_pos = T5_style_pos
         self.num_masks_channels = num_masks_channels
         self.max_channels_to_mask = max_mask_channels
         self.dist_dict_path = dist_dict_path

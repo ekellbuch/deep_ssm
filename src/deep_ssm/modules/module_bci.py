@@ -44,7 +44,7 @@ class BCIDecoder(L.LightningModule):
     # Compute CER
     if compute_cer:
       train_cer = self.calculate_cer(pred, input_len, y, y_len)
-      self.log(f"cer_{flag_name}", train_cer)
+      self.log(f"cer_{flag_name}", train_cer, on_epoch=True)
     return loss
 
   def validation_step(self, batch, batch_idx):
@@ -150,6 +150,9 @@ class BCIEncoder(BCIDecoder):
   def __init__(self, args, model):
     super().__init__(args, model)
 
+  def get_lens(self, X_len):
+    return self.model.bit_model.compute_length(X_len)
+
   def _custom_step(self, batch, batch_idx, flag_name='test', compute_cer=True):
 
     X, y, X_len, y_len, dayIdx = batch
@@ -158,19 +161,20 @@ class BCIEncoder(BCIDecoder):
 
     # forward pass
     pred = self.model(X, X_len, dayIdx)
-    adjustedLens = self.model.bit_model.compute_length(X_len)
 
     # calculate CTC loss
     loss = self.loss_ctc(
       log_probs=torch.permute(pred.log_softmax(2), [1, 0, 2]),
       targets=y,
-      input_lengths=adjustedLens,
+      input_lengths=input_len,
       target_lengths=y_len,
     )
     self.log(f"ctc_loss_{flag_name}", loss, on_epoch=True)
 
+    #if flag_name == 'train':
+    #  print(f"train loss: {loss}")
     # Compute CER
     if compute_cer:
       train_cer = self.calculate_cer(pred, input_len, y, y_len)
-      self.log(f"cer_{flag_name}", train_cer)
+      self.log(f"cer_{flag_name}", train_cer, on_epoch=True)
     return loss

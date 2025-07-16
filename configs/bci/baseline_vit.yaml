@@ -36,15 +36,16 @@ model_cfg:
     # BiT specific parameters
     patch_size: [5, 256]
     dim: 384
-    dim_head: 64
     depth: 7
     heads: 6
+    dim_head: 64
     mlp_dim_ratio: 4
-    dropout: 0.35
+    T5_style_pos: true
+
     input_dropout: 0.2
+    dropout: 0.35
     look_ahead: 0
     gaussianSmoothWidth: 2.0
-    T5_style_pos: true
     max_mask_pct: 0.075
     num_masks: 20
     mask_token_zeros: false
@@ -96,6 +97,7 @@ trainer_cfg:
   limit_test_batches: 
   limit_train_batches: 
   limit_val_batches: 
+  num_sanity_val_steps: # disable sanity check
   
 
 checkpoint_cfg:

@@ -11,7 +11,7 @@ import lightning as L
 
 
 class SpeechDataset(Dataset):
-    def __init__(self, data, transform=None):
+    def __init__(self, data, transform=None,restricted_days=[], ventral_6v_only=False, return_transcript=False):
         self.data = data
         self.transform = transform
         self.n_days = len(data)
@@ -21,17 +21,34 @@ class SpeechDataset(Dataset):
         self.phone_seqs = []
         self.neural_time_bins = []
         self.phone_seq_lens = []
-        #self.transcriptions = []
+        self.transcriptions = []
         self.days = []
 
+        ommitted_trials = 0
         for day in range(self.n_days):
+            
+            if restricted_days:
+                
+                # only train/test on restricted days
+                if day not in restricted_days:
+                    ommitted_trials += len(data[day]["sentenceDat"])
+                    continue
             for trial in range(len(data[day]["sentenceDat"])):
-                self.neural_feats.append(data[day]["sentenceDat"][trial])
+                
+                if ventral_6v_only:
+                    self.neural_feats.append(data[day]["sentenceDat"][trial][:, 0:128])
+                else:
+                    self.neural_feats.append(data[day]["sentenceDat"][trial])
+
                 self.phone_seqs.append(data[day]["phonemes"][trial])
                 self.neural_time_bins.append(data[day]["sentenceDat"][trial].shape[0])
                 self.phone_seq_lens.append(data[day]["phoneLens"][trial])
                 self.days.append(day)
-                #self.transcriptions.append(data[day]["transcriptions"][trial])
+
+                if return_transcript:
+                  self.transcriptions.append(data[day]["transcriptions"][trial])
+
+        self.n_trials = self.n_trials - ommitted_trials
 
     def __len__(self):
         return self.n_trials
@@ -188,6 +205,7 @@ class SpeechDataModule(L.LightningDataModule):
           self.train_ds = train_ds
           self.val_ds = val_ds
         else:
+            # Otherwise the test set is the validation set.
             self.train_ds, self.val_ds = train_ds, test_ds
 
         self.test_ds = test_ds

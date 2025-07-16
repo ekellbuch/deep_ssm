@@ -32,6 +32,7 @@ class AddOffset(Transform):
     self.constantOffsetSD = constantOffsetSD
 
   def __call__(self, X):
+    # X is L x D
     X += (torch.randn([1, X.shape[-1]], device=X.device) * self.constantOffsetSD)
     return X
 
