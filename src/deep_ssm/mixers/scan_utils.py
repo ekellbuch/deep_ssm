@@ -1,4 +1,11 @@
 """
+torch_associative_scanBCT
+torch_associative_scanBTC
+scan_bct_complex
+scan_btc_complex
+scan_btc_complex_autograd
+scan_bct_complex_autograd
+
 
 """
 import torch
@@ -873,8 +880,14 @@ class ComplexLinearScanBTC(torch.autograd.Function):
             outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates_expanded, tokens, reverse)
             # Return with correct out_dims - both outputs are batched
             out_dims = (0, 0)
+        if in_dims == (0, 0, None):
+            # gates: (B, T, C) -
+            # tokens: (B, T, C) - 
+            # output to be T, C
+            outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates, tokens, reverse)
+            out_dims = (None, None)
         else:
-            raise NotImplementedError("Only (None, 0) is implemented")
+            raise NotImplementedError(f"Only (None, 0) is implemented -- in_dims was {in_dims}")
 
         return (outputs_g, outputs_k), out_dims
 
