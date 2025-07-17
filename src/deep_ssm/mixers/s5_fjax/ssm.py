@@ -308,8 +308,10 @@ class S5SSM(torch.nn.Module):
 
     if self.bandlimit is not None:
       step = step_rescale * torch.exp(self.log_step[...,0])
-      freqs = step / step_rescale * Lambda[:, 1].abs() / (2 * math.pi)
+      freqs = step / step_rescale * Lambda.imag.abs() / (2 * math.pi)
       mask = torch.where(freqs < bandlimit * 0.5, 1, 0)  # (64, )
+      if self.bidirectional:
+        mask = mask.repeat(2)
       self.C = torch.nn.Parameter(
         torch.view_as_real(torch.view_as_complex(self.C) * mask)
       )
