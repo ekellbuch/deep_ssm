@@ -24,7 +24,13 @@ if tuple(map(int, torch.__version__.split('.')[:2])) >= (1, 10):
 else:
     _resolve_conj = lambda x: x.conj()
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+if torch.backends.mps.is_available():
+    device = 'cpu'
+elif torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'cpu'
+#device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def get_logger(name=__name__, level=logging.INFO) -> logging.Logger:
     """Initializes multi-GPU-friendly python logger."""

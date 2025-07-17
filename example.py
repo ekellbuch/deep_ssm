@@ -60,6 +60,9 @@ def view_transform_gs(img, grayscale=True):
   else:
     return img.view(3, 1024).t()
 
+def view_transform_mnist(img):
+  return img.view(1, 784).t()
+
 class SequenceLayer(torch.nn.Module):
   def __init__(
     self,
@@ -446,7 +449,12 @@ if __name__ == "__main__":
   if args.wandb:
     wandb.init(project="example_cifar10", config=args)
 
-  device = 'cuda' if torch.cuda.is_available() else 'cpu'
+  if torch.cuda.is_available():
+    device = 'cuda'
+  elif torch.backends.mps.is_available():
+    device = 'mps'
+  else:
+    device = 'cpu'
   best_acc = 0  # best test accuracy
   start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
@@ -491,7 +499,7 @@ if __name__ == "__main__":
 
     transform = transforms.Compose([
       transforms.ToTensor(),
-      transforms.Lambda(lambda x: x.view(1, 784).t())
+      transforms.Lambda(view_transform_mnist)
     ])
     transform_train = transform_test = transform
 
@@ -513,7 +521,7 @@ if __name__ == "__main__":
 
   # Dataloaders
   trainloader = torch.utils.data.DataLoader(
-    trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True, pin_memory=True)
+    trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True, pin_memory=(device == 'cuda'))
   valloader = torch.utils.data.DataLoader(
     valset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
   testloader = torch.utils.data.DataLoader(
@@ -566,7 +574,7 @@ if __name__ == "__main__":
 
 
   # Step into both the optimizer and scheduler
-  @torch.compile(fullgraph=False)
+  #@torch.compile(fullgraph=False)
   def update_gradient():
     optimizer.step()
     scheduler.step()

@@ -5,11 +5,11 @@ import wandb
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
-from deep_ssm.data.data_loader import SpeechDataModule
 from deep_ssm.modules import all_modules
 from deep_ssm.models import all_models
 from omegaconf import OmegaConf
 from deep_ssm.utils.callbacks import all_callbacks
+from deep_ssm.data import all_datasets
 
 import torch
 torch.set_float32_matmul_precision('medium')  # Or 'high'
@@ -72,12 +72,15 @@ def train(args):
       else:
         logger = None
 
-
     # get dataset:
-    datamodule = SpeechDataModule(args.data_cfg)
+    dataset_module = args.data_cfg.get('dataset_module', 'speech')
+    datamodule = all_datasets[dataset_module](args.data_cfg)
 
     # get module and model:
-    modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=datamodule.nDays)
+    if dataset_module in ['speech']:
+        modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=datamodule.nDays)
+    else:
+        modelito = all_models[args.model_cfg.type](**args.model_cfg.configs)
 
     if args.model_cfg.get("resume_ckpt_path", None):
       # Do not resume training simply load checkpoints
