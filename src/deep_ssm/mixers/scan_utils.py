@@ -295,7 +295,6 @@ class ScanBCT(torch.autograd.Function):
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
             REVERSE=reverse,
-            enable_fp_fusion=False
         )
         return gates_new, tokens_new
 
@@ -345,7 +344,6 @@ class ScanBCT(torch.autograd.Function):
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
             REVERSE=reverse,
-            enable_fp_fusion=False
         )
         #print('d_tokens_real computed', d_tokens_real)
         #print('d_tokens_imag computed', d_tokens_imag)
@@ -480,7 +478,6 @@ class ScanBTC(torch.autograd.Function):
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
             REVERSE=reverse,
-            enable_fp_fusion=False
         )
 
         return gates_new, tokens_new
@@ -529,7 +526,6 @@ class ScanBTC(torch.autograd.Function):
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
             REVERSE=reverse,
-            enable_fp_fusion=False
         )
         #print('d_gates_real computed', d_gates_real.mT, d_gates_imag.mT)
         #print('d_tokens_real computed', d_tokens_real.mT, d_tokens_imag.mT)
@@ -1044,4 +1040,284 @@ def scan_bct_complex_autograd(gates, tokens, reverse=False):
     tokens = tokens.contiguous()
     return ComplexLinearScanBCT.apply(gates, tokens, reverse)
 
+@triton.jit
+def pack128(a_real, a_imag, b_real, b_imag):
+    """Fixed version of pack128 - pack 4 float32 values into 2 uint64 values"""
+    a_real_u32 = a_real.to(tl.uint32, bitcast=True)
+    a_imag_u32 = a_imag.to(tl.uint32, bitcast=True)
+    b_real_u32 = b_real.to(tl.uint32, bitcast=True)
+    b_imag_u32 = b_imag.to(tl.uint32, bitcast=True)
 
+    # Pack first complex number (a_real, a_imag) into low64
+    low64 = a_real_u32.to(tl.uint64) | (a_imag_u32.to(tl.uint64) << 32)
+    # Pack second complex number (b_real, b_imag) into high64  
+    high64 = b_real_u32.to(tl.uint64) | (b_imag_u32.to(tl.uint64) << 32)
+    
+    return low64, high64
+
+@triton.jit
+def unpack128(low64, high64):
+    """Fixed version of unpack128 - unpack 2 uint64 values into 4 float32 values"""
+    # Unpack first complex number from low64
+    a_real = (low64 & 0xFFFFFFFF).to(tl.uint32).to(tl.float32, bitcast=True)
+    a_imag = (low64 >> 32).to(tl.uint32).to(tl.float32, bitcast=True)
+    
+    # Unpack second complex number from high64
+    b_real = (high64 & 0xFFFFFFFF).to(tl.uint32).to(tl.float32, bitcast=True)
+    b_imag = (high64 >> 32).to(tl.uint32).to(tl.float32, bitcast=True)
+    
+    return a_real, a_imag, b_real, b_imag
+
+@triton.jit
+def first_order_op_128(l0, l1, r0, r1):
+    a_r, a_i, b_r, b_i = unpack128(l0, l1)
+    g_r, g_i, t_r, t_i = unpack128(r0, r1)
+
+    new_a_r, new_a_i = complex_mul(g_r, g_i, a_r, a_i)
+    mul_r, mul_i = complex_mul(g_r, g_i, b_r, b_i)
+
+    new_b_r = mul_r + t_r
+    new_b_i = mul_i + t_i
+
+    return pack128(new_a_r, new_a_i, new_b_r, new_b_i)
+
+@triton.jit
+def forward_scan_bct_complex_packed(
+    gates_real,
+    gates_imag,
+    tokens_real,
+    tokens_imag,
+    output_gates_real,
+    output_gates_imag,
+    output_tokens_real,
+    output_tokens_imag,
+    SEQUENCE_LENGTH: tl.constexpr,
+    REVERSE: tl.constexpr,
+    CHANNELS: tl.constexpr,
+):
+    # Program IDs for Batch and Channel (dimensions along which we parallelize)
+    batch_id = tl.program_id(axis=0)  # Batch index
+    channel_id = tl.program_id(axis=1)  # Channel index
+
+    # Base offset for batch and channel in the BCT layout
+    base_offset = batch_id * CHANNELS * SEQUENCE_LENGTH + channel_id * SEQUENCE_LENGTH
+
+    # Sequence strides: Stride along the sequence dimension (T)
+    if REVERSE:
+        seq_idx = SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)
+    else:
+        seq_idx = tl.arange(0, SEQUENCE_LENGTH)
+
+    strides = base_offset + seq_idx
+
+    # we are dealing with complex numbers with real and imag parts interleaved in memory
+    strides = strides * 2
+
+    # Return a tensor whose values are loaded from memory at located specified by the pointer
+    tokens_r = tl.load(tokens_real + strides)
+    tokens_i = tl.load(tokens_imag + strides)
+    gates_r = tl.load(gates_real + strides)
+    gates_i = tl.load(gates_imag + strides)
+
+    # Pack and scan
+    l0, l1 = pack128(gates_r, gates_i, tokens_r, tokens_i)
+    out0, out1 = tl.associative_scan((l0, l1), axis=0, combine_fn=first_order_op_128)
+    gates_r_out, gates_i_out, tokens_new_r, tokens_new_i = unpack128(out0, out1)
+
+    # Store results
+    tl.store(output_gates_real + strides, gates_r_out)
+    tl.store(output_gates_imag + strides, gates_i_out)
+    tl.store(output_tokens_real + strides, tokens_new_r)
+    tl.store(output_tokens_imag + strides, tokens_new_i)
+
+@triton.jit
+def backward_scan_bct_complex_packed(
+    gates_real,
+    gates_imag,
+    grad_real,
+    grad_imag,
+    d_tokens_real,
+    d_tokens_imag,
+    d_gates_real,
+    d_gates_imag,
+    SEQUENCE_LENGTH: tl.constexpr,
+    REVERSE: tl.constexpr,
+    CHANNELS: tl.constexpr,
+):
+    batch_id = tl.program_id(axis=0)
+    channel_id = tl.program_id(axis=1)
+
+    base_offset = batch_id * CHANNELS * SEQUENCE_LENGTH + channel_id * SEQUENCE_LENGTH
+
+    # For backward scan, read in reverse order
+    if REVERSE:
+        seq_idx = tl.arange(0, SEQUENCE_LENGTH)
+    else:
+        seq_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH))
+    
+    reversed_strides = base_offset + seq_idx
+    
+    # Load data in reverse order for backward scan
+    # Note: gates and grads have different memory layouts
+    gates_r = tl.load(gates_real + reversed_strides)
+    gates_i = tl.load(gates_imag + reversed_strides)
+    grad_r = tl.load(grad_real + reversed_strides * 2)
+    grad_i = tl.load(grad_imag + reversed_strides * 2)
+    
+    # Perform backward scan - note the order matches first_order_op_complex
+    l0, l1 = pack128(gates_r, gates_i, grad_r, grad_i)
+    out0, out1 = tl.associative_scan((l0, l1), axis=0, combine_fn=first_order_op_128)
+    gates_r_out, gates_i_out, tokens_new_r, tokens_new_i = unpack128(out0, out1)
+
+    if REVERSE:
+        rev_idx = tl.arange(0, SEQUENCE_LENGTH) 
+    else:
+        rev_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
+    store_idx = base_offset + rev_idx 
+    tl.store(d_tokens_real + store_idx, tokens_new_r)
+    tl.store(d_tokens_imag + store_idx, tokens_new_i)
+    tl.store(d_gates_real + store_idx, gates_r_out)
+    tl.store(d_gates_imag + store_idx, gates_i_out)
+
+
+class ScanBCTPacked(torch.autograd.Function):
+    @staticmethod
+    def forward(gates, tokens, reverse=False):
+        B, C, T = gates.shape
+        assert tokens.shape == (B, C, T), "Tokens must have the same shape as gates."
+        assert gates.is_contiguous(), "Gates tensor must be contiguous."
+        assert tokens.is_contiguous(), "Tokens tensor must be contiguous."
+
+        # Split into real and imaginary parts
+        gates_real, gates_imag = gates.real, gates.imag
+        tokens_real, tokens_imag = tokens.real, tokens.imag
+
+        # Allocate output tensors
+        gates_new = torch.zeros_like(gates, dtype=gates.dtype)
+        tokens_new = torch.zeros_like(tokens, dtype=tokens.dtype)
+
+        gates_new_real = gates_new.real
+        gates_new_imag = gates_new.imag
+        tokens_new_real = tokens_new.real
+        tokens_new_imag = tokens_new.imag
+
+        # Forward pass
+        forward_scan_bct_complex_packed[(B, C)](
+            gates_real, gates_imag,
+            tokens_real, tokens_imag,
+            gates_new_real, gates_new_imag,
+            tokens_new_real, tokens_new_imag,
+            SEQUENCE_LENGTH=T,
+            REVERSE=reverse,
+            CHANNELS=C,
+        )
+        return gates_new, tokens_new
+
+    @staticmethod
+    def setup_context(ctx, inputs, outputs):
+        # Define the context setup required for functorch transforms
+        gates, tokens, reverse = inputs
+        _, output_tokens = outputs
+        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
+        ctx.reverse = reverse
+
+    @staticmethod
+    def backward(ctx, grad_gates, grad_tokens):
+        gates, tokens, output_tokens = ctx.saved_tensors
+        reverse = ctx.reverse
+        B, C, T = gates.shape
+
+        # Allocate output tensors
+        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype)
+        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype)
+        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype)
+        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype)
+
+        # Split into real and imaginary parts
+        gates = gates.conj()
+        gates_real, gates_imag = gates.real, gates.imag
+        grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
+
+        # Create shifted gates for backward pass 
+        if reverse:
+            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real[..., :1]), gates_real], dim=-1)[..., :-1].contiguous()
+            padded_shifted_gates_imag = torch.cat([torch.zeros_like(gates_imag[..., :1]), gates_imag], dim=-1)[..., :-1].contiguous()
+        else:
+            padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
+            padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[..., :1])], dim=-1)[..., 1:].contiguous()
+
+        backward_scan_bct_complex_packed[(B, C)](
+            padded_shifted_gates_real, padded_shifted_gates_imag,
+            grad_tokens_real, grad_tokens_imag,
+            d_tokens_real, d_tokens_imag,
+            d_gates_real, d_gates_imag,
+            SEQUENCE_LENGTH=T,
+            REVERSE=reverse,
+            CHANNELS=C,
+        )
+        
+        # grad_tokens: dL / db_t = dL / dx_t
+        d_tokens = torch.complex(d_tokens_real, d_tokens_imag)
+                
+        # Compute d_gates using padded outputs 
+        if reverse:
+            # For x_t = a_t x_{t+1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t+1}
+            padded_outputs = torch.cat(
+                [output_tokens[..., 1:], torch.zeros_like(output_tokens[..., :1])], dim=-1
+            )
+            d_gates = d_tokens * padded_outputs.conj()
+        else:
+            # For x_t = a_t x_{t-1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t-1}
+            padded_outputs = torch.cat(
+                [torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1
+            )[..., :-1]
+            d_gates = d_tokens * padded_outputs.conj()
+
+        return d_gates, d_tokens, None
+    
+    @staticmethod
+    def vmap(info, in_dims, gates, tokens, reverse=False):
+        """
+        A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
+        
+        Args:
+             info: Metadata or additional info for vmap (not used here).
+            in_dims: Tuple specifying the dimension to slice for each input.
+            gates: Input gates tensor of shape (B, T, C) if in_dims[0] is None.
+            tokens: Input tokens tensor of shape (B', B, T, C) if in_dims[1] is 0.
+        Returns:
+            outputs: Output tensor of shape (B', B, T, C).
+        """
+
+        # Handle case where gates is constant (None in in_dims)
+        if in_dims == (None, 0, None):
+            # gates: (C, T) - constant across batch
+            # tokens: (B, C, T) - vectorized over batch dimension
+            B = tokens.shape[0]
+            # Expand gates to match batch dimension
+            gates_expanded = gates.unsqueeze(0).expand(B, -1, -1).contiguous()
+            outputs_g, outputs_k = ScanBCT.apply(gates_expanded, tokens, reverse)
+            out_dims = (0, 0)  # Both outputs vectorized over batch dimension
+        else:
+            raise NotImplementedError("Only (None, 0) is implemented")
+
+        return (outputs_g, outputs_k), out_dims
+
+
+def scan_bct_complex_packed(gates, tokens, reverse=False):
+    return ScanBCTPacked.apply(gates, tokens, reverse)
+
+"""
+def scan_bct_complex_packed(gates, tokens, reverse=False):
+    # TODO: fix packing so that we can feed in values as float32s
+    # Torchinductor does not support code generation for complex operators.
+    gr, gi = gates.real, gates.imag
+    tr, ti = tokens.real, tokens.imag
+
+    out_gr, out_gi, out_tr, out_ti = ScanBCTPackedSplit.apply(gr, gi, tr, ti, reverse=reverse)
+
+    # Recombine function
+    output_gates = torch.complex(out_gr, out_gi)
+    output_tokens = torch.complex(out_tr, out_ti)
+    return output_gates, output_tokens
+"""

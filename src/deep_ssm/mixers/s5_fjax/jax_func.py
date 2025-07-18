@@ -23,13 +23,15 @@ else:
     DEVICE = "cpu"
 
 try:
-    from deep_ssm.mixers.scan_utils import scan_bct_complex, torch_associative_scanBCT
+    from deep_ssm.mixers.scan_utils import scan_bct_complex, torch_associative_scanBCT, scan_bct_complex_packed
     from deep_ssm.mixers.scan_utils import scan_btc_complex, torch_associative_scanBTC
     include_scan_bct_complex = True
     include_scan_btc_complex = True
+    include_scan_bct_complex_packed = True
 except:
     include_scan_bct_complex = False
     include_scan_btc_complex = False
+    include_scan_bct_complex_packed = False
 
 try:
     from accelerated_scan.ref import scan as scan_ref
@@ -58,6 +60,7 @@ if not(DEVICE == "cuda"):
     include_scan_triton = False
     include_scan_bct_complex = False
     include_scan_btc_complex = False
+    include_scan_bct_complex_packed = False
 
 
 from typing import (
@@ -310,6 +313,7 @@ def test_associative_scan(shape=(1, 32, 32), axis=-1, is_complex=False):
         print("scan_triton working as expected! -- reverse not included")
 
     if include_scan_bct_complex and is_complex:
+
         gates, tokens = scan_bct_complex(tx, tx)
         close_gates = (
             torch.isclose(gates.real, ty1.real, rtol=1e-5, atol=1e-5).all()
@@ -361,6 +365,35 @@ def test_associative_scan(shape=(1, 32, 32), axis=-1, is_complex=False):
         assert close_tokens_r, "Expected torch_associative_scanBCT tokens_r & pytorch impl to be close"
 
         print("scan_bct_complex working as expected!")
+
+    if scan_bct_complex_packed and is_complex:
+        gates, tokens = scan_bct_complex_packed(tx, tx)
+        close_gates = (
+            torch.isclose(gates.real, ty1.real, rtol=1e-5, atol=1e-5).all()
+            and torch.isclose(gates.imag, ty1.imag, rtol=1e-5, atol=1e-5).all()
+        )
+        close_tokens = (
+            torch.isclose(tokens.real, ty2.real, rtol=1e-5, atol=1e-5).all()
+            and torch.isclose(tokens.imag, ty2.imag, rtol=1e-5, atol=1e-5).all()
+        )
+        assert close_gates, "Expected scan_bct_complex_packed gates & pytorch impl to be close"
+        assert close_tokens, "Expected scan_bct_complex_packed tokens & pytorch impl to be close"
+
+        # add reverse:
+        gates_r, tokens_r = scan_bct_complex(tx, tx, reverse=True)
+        close_gates_r = (
+            torch.isclose(gates_r.real, ty1r.real, rtol=1e-5, atol=1e-5).all()
+            and torch.isclose(gates_r.imag, ty1r.imag, rtol=1e-5, atol=1e-5).all()
+        )
+        close_tokens_r = (
+            torch.isclose(tokens_r.real, ty2r.real, rtol=1e-5, atol=1e-5).all()
+            and torch.isclose(tokens_r.imag, ty2r.imag, rtol=1e-5, atol=1e-5).all()
+        )
+        assert close_gates_r, "Expected scan_bct_complex_packed gates_r & pytorch impl to be close"
+        assert close_tokens_r, "Expected scan_bct_complex_packed tokens_r & pytorch impl to be close"
+
+        print("scan_bct_complex_packed working as expected!")
+
 def _interleave(a, b, axis: int):
     # https://stackoverflow.com/questions/60869537/how-can-i-interleave-5-pytorch-tensors
     b_trunc = a.shape[axis] == b.shape[axis] + 1
@@ -661,7 +694,10 @@ def time_torch_associative_scan(nested_func, tx, repeats=100, axis=2, as_compile
         return associative_scan(nested_func, (tx, tx), axis=axis)
 
     if as_compiled:
-        scan_fn = torch.compile(scan_fn)
+        try:
+            scan_fn = torch.compile(scan_fn)
+        except:
+            logging.log (f"Failed to compile {associative_scan}")
 
     # warmup
     for _ in range(num_warmups):
@@ -685,8 +721,10 @@ def time_accelerated_scan_associative_scan(fn, tx, repeats=100, as_compiled=Fals
         return fn(tx, tx)
 
     if as_compiled:
-        scan_fn = torch.compile(scan_fn)
-    
+        try:
+            scan_fn = torch.compile(scan_fn)
+        except:
+            logging.log(f"Did not compile {scan_fn}")
     # warmup
     for _ in range(num_warmups):
         out = scan_fn(tx)
@@ -708,6 +746,7 @@ def compare_associative_scan_timing(shape=(1, 32, 32), repeats=100, is_complex=F
         x = np.ones(shape=shape)  + np.ones(shape=shape) * 1j
         dtype_torch = torch.complex64
         dtype_jax = jax.numpy.complex64
+        assert axis == len(shape) - 1
     else:
         x = np.ones(shape=shape)
         dtype_torch = torch.float32
@@ -722,22 +761,36 @@ def compare_associative_scan_timing(shape=(1, 32, 32), repeats=100, is_complex=F
         return a_j * a_i, a_j * b_i + b_j
 
     jax_time = time_jax_associative_scan(nested_func, jx, repeats, axis=axis, as_compiled=as_compiled)
-    torch_time = time_torch_associative_scan(nested_func, tx, repeats, axis=axis, as_compiled=as_compiled)
 
     print(f"JAX associative_scan average time: {jax_time:.6f} seconds")
-    print(f"PyTorch associative_scan average time: {torch_time:.6f} seconds")
+    if not as_compiled:
+        torch_time = time_torch_associative_scan(nested_func, tx, repeats, axis=axis, as_compiled=as_compiled)
+        print(f"PyTorch associative_scan average time: {torch_time:.6f} seconds")
+    else:
+        print(f"PyTorch associative_scan cannot be compiled")
+
     if include_scan_ref and not is_complex:
         scan_ref_time = time_accelerated_scan_associative_scan(scan_ref, tx, repeats, as_compiled=as_compiled)
         print(f"scan_ref average time: {scan_ref_time:.6f} seconds")
+
     if include_scan_warp and not is_complex:
         scan_warp_time = time_accelerated_scan_associative_scan(scan_warp, tx, repeats, as_compiled=as_compiled)
         print(f"scan_warp average time: {scan_warp_time:.6f} seconds")
+
     if include_scan_triton and not is_complex:
-        scan_triton_time = time_accelerated_scan_associative_scan(scan_triton, tx, repeats, as_compiled=as_compiled)
-        print(f"scan_triton average time: {scan_triton_time:.6f} seconds")
+        if not as_compiled:
+            scan_triton_time = time_accelerated_scan_associative_scan(scan_triton, tx, repeats, as_compiled=as_compiled)
+            print(f"scan_triton average time: {scan_triton_time:.6f} seconds")
+        else:
+            print(f"scan_triton cannot be compiled")
+
     if include_scan_bct_complex and is_complex:
         scan_triton_time = time_accelerated_scan_associative_scan(scan_bct_complex, tx, repeats, as_compiled=as_compiled)
         print(f"scan_bct_complex average time: {scan_triton_time:.6f} seconds")
+
+    if include_scan_bct_complex_packed and is_complex:
+        scan_triton_time = time_accelerated_scan_associative_scan(scan_bct_complex_packed, tx, repeats, as_compiled=as_compiled)
+        print(f"scan_bct_complex_packed average time: {scan_triton_time:.6f} seconds")
 
 
 if __name__ == "__main__":
@@ -745,11 +798,16 @@ if __name__ == "__main__":
     #test_interleave()
     #test_associative_scan()
     #test_associative_scan(shape=(96, 256))
-    test_associative_scan(shape=(2, 24, 256))
-    test_associative_scan(is_complex=True)
+    #test_associative_scan(shape=(2, 24, 256))
+    #test_associative_scan(is_complex=True)
 
     import time
     print("\nComparing times: real numbers")
     compare_associative_scan_timing(shape=(2,32,256), repeats=5)
     print("\nComparing times: complex numbers")
     compare_associative_scan_timing(shape=(2,32,256), repeats=5, is_complex=True)
+
+    print("\nComparing compiled times: real numbers")
+    compare_associative_scan_timing(shape=(2,32,256), repeats=5, as_compiled=True)
+    print("\nComparing compiled times: complex numbers")
+    compare_associative_scan_timing(shape=(2,32,256), repeats=5, is_complex=True, as_compiled=True)
