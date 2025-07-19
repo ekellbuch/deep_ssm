@@ -45,7 +45,7 @@ import torch
 from torch.autograd import Function
 import pytest
 from timeit import timeit
-from deep_ssm.mixers.scan_utils import scan_bct_complex, torch_associative_scanBCT, scan_bct_complex_autograd, scan_bct_complex_packed
+from deep_ssm.mixers.scan_utils import scan_bct_complex, torch_associative_scanBCT, scan_bct_complex_autograd, scan_bct_complex_packed, scan_bct_complex_split
 from torch.func import vmap
 from functools import partial
 
@@ -214,6 +214,27 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len, reverse):
     assert torch.allclose(seq_tokens_grad, tri_tokens_grad, atol=atol), print(f"Backward pass mismatch token vanilla {seq_tokens_grad} and triton packed {tri_tokens_grad}" )
     assert torch.allclose(seq_gates_grad, tri_gates_grad, atol=atol), print(f"Backward pass mismatch gates  vanilla {seq_gates_grad} and triton packed {tri_gates_grad}" )
 
+    # ----------------------------
+    # Triton Implementation packed split
+    tokens.grad = None  # Reset gradients
+    gates.grad = None
+
+    new_g, new_t = scan_bct_complex_split(gates, tokens, reverse)
+
+    # Compute a loss
+    loss_tri = new_t.abs().sum()
+    loss_tri.backward()
+
+    tri_gates_grad = gates.grad.clone()
+    tri_tokens_grad = tokens.grad.clone()
+    # Check forward pass match
+    atol = 1e-5
+
+    assert torch.allclose(out_token, new_t, atol=atol),  print(f"Forward pass mismatch token vanilla {out_token} and triton packed split {new_t}" )
+    # Check backward pass match
+    assert torch.allclose(seq_tokens_grad, tri_tokens_grad, atol=atol), print(f"Backward pass mismatch token vanilla {seq_tokens_grad} and triton packed split {tri_tokens_grad}" )
+    assert torch.allclose(seq_gates_grad, tri_gates_grad, atol=atol), print(f"Backward pass mismatch gates  vanilla {seq_gates_grad} and triton packed split {tri_gates_grad}" )
+
 
 in_dims_pairs = [(None, 0)]#, (0, 1), (1, 0), (1, 1)]
 
@@ -335,5 +356,23 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims, reverse)
     assert torch.allclose(outputs_seq_token, outputs3_vmap_token, atol=atol), print(f"Vmap forward 3 outputs token {outputs3_vmap_token} do not match standard {outputs_seq_token}")
     assert torch.allclose(seq_gates_grad, vmap3_gates_grad, atol=atol), print(f"Vmap forward 3 gate gradients {vmap3_gates_grad} do not match standard {seq_gates_grad}")
     assert torch.allclose(seq_tokens_grad, vmap3_tokens_grad, atol=atol), print(f"Vmap forward 3 token gradients {vmap3_tokens_grad} do not match standard {seq_tokens_grad}")
+
+    # -------------------------------------
+    # Vmap triton scan_bct_complex_split:
+    gates.grad = None
+    tokens.grad = None
+    vmap_forward4 = torch.vmap(lambda g, t: scan_bct_complex_split(g,t, reverse), in_dims=in_dims, out_dims=out_dims)
+    outputs4_vmap_g, outputs4_vmap_token = vmap_forward4(gates, tokens)
+    loss = func_(outputs4_vmap_token)
+    loss.backward()
+
+    # Get the gradients from the standard backward pass
+    vmap4_gates_grad = gates.grad.clone()
+    vmap4_tokens_grad = tokens.grad.clone()
+
+    assert torch.allclose(outputs_seq_g, outputs4_vmap_g, atol=atol), print(f"Vmap forward 4 outputs gates {outputs4_vmap_g} do not match standard {outputs_seq_g}")
+    assert torch.allclose(outputs_seq_token, outputs4_vmap_token, atol=atol), print(f"Vmap forward 4 outputs token {outputs4_vmap_token} do not match standard {outputs_seq_token}")
+    assert torch.allclose(seq_gates_grad, vmap4_gates_grad, atol=atol), print(f"Vmap forward 4 gate gradients {vmap4_gates_grad} do not match standard {seq_gates_grad}")
+    assert torch.allclose(seq_tokens_grad, vmap4_tokens_grad, atol=atol), print(f"Vmap forward 4 token gradients {vmap4_tokens_grad} do not match standard {seq_tokens_grad}")
 
     return

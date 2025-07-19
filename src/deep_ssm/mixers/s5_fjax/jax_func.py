@@ -13,6 +13,7 @@ import numpy as np
 from torch.utils._pytree import tree_flatten, tree_unflatten
 import logging 
 from functools import partial
+from typing import Tuple
 
 # device can be cpu, cuda, mps
 if torch.cuda.is_available():
@@ -688,6 +689,44 @@ def time_jax_associative_scan(nested_func, jx, repeats=100, axis=-1, as_compiled
     return (end_time - start_time) / repeats
 
 
+def time_jax_associative_scan_backward(nested_func, jx, repeats=100, axis=-1, as_compiled=False, num_warmups=5):
+    import jax
+
+    if as_compiled:
+        @partial(jax.jit, static_argnames=["axis"])
+        def scan_fn(x, axis):
+            def loss_fn(x):
+                _, out = jax.lax.associative_scan(nested_func, (x, x), axis=axis)
+                # For complex numbers, take the real part for differentiation
+                if jax.numpy.iscomplexobj(out):
+                    return jax.numpy.real(out).sum()
+                else:
+                    return out.sum()
+            return jax.grad(loss_fn)(x)
+    else:    
+        def scan_fn(x, axis):
+            def loss_fn(x):
+                _, out = jax.lax.associative_scan(nested_func, (x, x), axis=axis)
+                # For complex numbers, take the real part for differentiation
+                if jax.numpy.iscomplexobj(out):
+                    return jax.numpy.real(out).sum()
+                else:
+                    return out.sum()
+            return jax.grad(loss_fn)(x)
+
+    # Warm-up (ensure compilation happens before timing)
+    for _ in range(num_warmups):
+        grad_out = scan_fn(jx, axis)
+        grad_out.block_until_ready()
+
+    start_time = time.time()
+    for _ in range(repeats):
+        grad_out = scan_fn(jx, axis)
+        grad_out.block_until_ready()
+    end_time = time.time()
+    return (end_time - start_time) / repeats
+
+
 def time_torch_associative_scan(nested_func, tx, repeats=100, axis=2, as_compiled=False, num_warmups=5):
 
     def scan_fn(tx):
@@ -700,8 +739,9 @@ def time_torch_associative_scan(nested_func, tx, repeats=100, axis=2, as_compile
             logging.log (f"Failed to compile {associative_scan}")
 
     # warmup
-    for _ in range(num_warmups):
-        out = scan_fn(tx)
+    with torch.no_grad():
+        for _ in range(num_warmups):
+            out = scan_fn(tx)
 
     if tx.is_cuda:
         torch.cuda.synchronize()
@@ -715,6 +755,43 @@ def time_torch_associative_scan(nested_func, tx, repeats=100, axis=2, as_compile
     return (end_time - start_time) / repeats
 
 
+def time_torch_associative_scan_backward(nested_func, tx, repeats=100, axis=2, as_compiled=False, num_warmups=5):
+
+    def scan_fn(x):
+        _ , out = associative_scan(nested_func, (x, x), axis=axis)
+        return out
+
+    if as_compiled:
+        try:
+            scan_fn = torch.compile(scan_fn)
+        except Exception as e:
+            logging.log(f"Failed to compile {associative_scan}:{e}")
+
+    def scan_fn_bwd(tx):
+        tx = tx.detach().clone().requires_grad_()  # <-- right here
+        out = scan_fn(tx)
+        loss = out.real.sum() if torch.is_complex(out) else out.sum()
+        grad = torch.autograd.grad(loss, tx)[0]
+        return grad
+
+    # Warm-up
+    for _ in range(num_warmups):
+        out = scan_fn_bwd(tx)
+
+    if tx.is_cuda:
+        torch.cuda.synchronize()
+
+    # Timed run
+    start = time.time()
+    for _ in range(repeats):
+        scan_fn_bwd(tx)
+    if tx.is_cuda:
+        torch.cuda.synchronize()
+    end = time.time()
+
+    return (end - start) / repeats
+    
+
 def time_accelerated_scan_associative_scan(fn, tx, repeats=100, as_compiled=False, num_warmups=5):
     
     def scan_fn(tx):
@@ -723,8 +800,9 @@ def time_accelerated_scan_associative_scan(fn, tx, repeats=100, as_compiled=Fals
     if as_compiled:
         try:
             scan_fn = torch.compile(scan_fn)
-        except:
-            logging.log(f"Did not compile {scan_fn}")
+        except Exception as e:
+            logging.warning(f"Failed to compile {scan_fn}:{e}")
+
     # warmup
     for _ in range(num_warmups):
         out = scan_fn(tx)
@@ -736,7 +814,42 @@ def time_accelerated_scan_associative_scan(fn, tx, repeats=100, as_compiled=Fals
     end_time = time.time()
     return (end_time - start_time) / repeats
 
-def compare_associative_scan_timing(shape=(1, 32, 32), repeats=100, is_complex=False, axis=-1, as_compiled=False):
+
+def time_accelerated_scan_associative_scan_backward(fn, tx, repeats=100, as_compiled=False, num_warmups=5):
+    
+    def scan_fn(tx):
+        _, out = fn(tx, tx)
+        return out
+
+    if as_compiled:
+        try:
+            scan_fn = torch.compile(scan_fn)
+        except Exception as e:
+            logging.warning(f"Did not compile {scan_fn}: {e}")
+
+    def scan_fn_bwd(tx):
+        tx = tx.detach().clone().requires_grad_()  # <-- right here
+        out = scan_fn(tx)
+        loss = out.real.sum() if torch.is_complex(out) else out.sum()
+        grad = torch.autograd.grad(loss, tx)[0]
+        return grad
+
+    # warmup
+    for _ in range(num_warmups):
+        grad = scan_fn_bwd(tx)
+
+    if tx.is_cuda:
+        torch.cuda.synchronize()
+
+    start_time = time.time()
+    for _ in range(repeats):
+        scan_fn_bwd(tx)
+    if tx.is_cuda:
+        torch.cuda.synchronize()
+    end_time = time.time()
+    return (end_time - start_time) / repeats
+
+def compare_associative_scan_timing(shape=(1, 32, 32), repeats=100, is_complex=False, axis=-1, as_compiled=False, include_backward=True):
     import jax
 
     if axis == -1:
@@ -755,42 +868,120 @@ def compare_associative_scan_timing(shape=(1, 32, 32), repeats=100, is_complex=F
     jx = jax.numpy.array(x, dtype=dtype_jax)
     tx = torch.tensor(x, dtype=dtype_torch, device=DEVICE)
 
-    def nested_func(a, b):
+    if is_complex:
+        @torch.compile
+        def nested_func_real(
+            ar_i:torch.Tensor,
+            ai_i:torch.Tensor,
+            br_i:torch.Tensor,
+            bi_i:torch.Tensor,
+            ar_j:torch.Tensor,
+            ai_j:torch.Tensor,
+            br_j:torch.Tensor,
+            bi_j:torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor,torch.Tensor, torch.Tensor]:
+            # a_j * a_i
+            ar = ar_j * ar_i - ai_j * ai_i
+            ai = ar_j * ai_i + ai_j * ar_i
+
+            # a_j * b_i + b_j
+            br = ar_j * br_i - ai_j * bi_i + br_j
+            bi = ar_j * bi_i + ai_j * br_i + bi_j
+
+            return ar, ai, br, bi
+                            
+
+        @torch._dynamo.disable()
+        def nested_func(a:torch.Tensor, b:torch.Tensor)-> Tuple[torch.Tensor, torch.Tensor]:
+            a_i, b_i = a
+            a_j, b_j = b
+
+            # Extract real and imaginary parts
+            ar_i, ai_i = a_i.real, a_i.imag
+            br_i, bi_i = b_i.real, b_i.imag
+            ar_j, ai_j = a_j.real, a_j.imag
+            br_j, bi_j = b_j.real, b_j.imag
+
+            # Compute in compiled function
+            ar, ai, br, bi = nested_func_real(ar_i, ai_i, br_i, bi_i, ar_j, ai_j, br_j, bi_j)
+
+            # Recombine complex
+            a_out = torch.complex(ar, ai)
+            b_out = torch.complex(br, bi)
+
+            return a_out, b_out
+    else:
+        def nested_func(a, b):
+            a_i, b_i = a
+            a_j, b_j = b
+            return a_j * a_i, a_j * b_i + b_j
+
+    @jax.jit
+    def nested_func_jax(a, b):
         a_i, b_i = a
         a_j, b_j = b
         return a_j * a_i, a_j * b_i + b_j
 
-    jax_time = time_jax_associative_scan(nested_func, jx, repeats, axis=axis, as_compiled=as_compiled)
+    print("=== FORWARD PASS TIMING ===")
+    jax_time = time_jax_associative_scan(nested_func_jax, jx, repeats, axis=axis, as_compiled=as_compiled)
+    print(f"JAX associative_scan average time compiled={as_compiled}: {jax_time:.6f} seconds")
 
-    print(f"JAX associative_scan average time: {jax_time:.6f} seconds")
-    if not as_compiled:
-        torch_time = time_torch_associative_scan(nested_func, tx, repeats, axis=axis, as_compiled=as_compiled)
-        print(f"PyTorch associative_scan average time: {torch_time:.6f} seconds")
-    else:
-        print(f"PyTorch associative_scan cannot be compiled")
+    torch_time = time_torch_associative_scan(nested_func, tx, repeats, axis=axis, as_compiled=as_compiled)
+    print(f"PyTorch associative_scan average time compiled={as_compiled}: {torch_time:.6f} seconds")
 
     if include_scan_ref and not is_complex:
         scan_ref_time = time_accelerated_scan_associative_scan(scan_ref, tx, repeats, as_compiled=as_compiled)
-        print(f"scan_ref average time: {scan_ref_time:.6f} seconds")
+        print(f"scan_ref average time compiled={as_compiled}: {scan_ref_time:.6f} seconds")
 
     if include_scan_warp and not is_complex:
         scan_warp_time = time_accelerated_scan_associative_scan(scan_warp, tx, repeats, as_compiled=as_compiled)
-        print(f"scan_warp average time: {scan_warp_time:.6f} seconds")
+        print(f"scan_warp average time compiled={as_compiled}: {scan_warp_time:.6f} seconds")
 
     if include_scan_triton and not is_complex:
         if not as_compiled:
             scan_triton_time = time_accelerated_scan_associative_scan(scan_triton, tx, repeats, as_compiled=as_compiled)
-            print(f"scan_triton average time: {scan_triton_time:.6f} seconds")
+            print(f"scan_triton average time compiled={as_compiled}: {scan_triton_time:.6f} seconds")
         else:
             print(f"scan_triton cannot be compiled")
 
     if include_scan_bct_complex and is_complex:
         scan_triton_time = time_accelerated_scan_associative_scan(scan_bct_complex, tx, repeats, as_compiled=as_compiled)
-        print(f"scan_bct_complex average time: {scan_triton_time:.6f} seconds")
+        print(f"scan_bct_complex average time compiled={as_compiled}: {scan_triton_time:.6f} seconds")
 
     if include_scan_bct_complex_packed and is_complex:
         scan_triton_time = time_accelerated_scan_associative_scan(scan_bct_complex_packed, tx, repeats, as_compiled=as_compiled)
-        print(f"scan_bct_complex_packed average time: {scan_triton_time:.6f} seconds")
+        print(f"scan_bct_complex_packed average time compiled={as_compiled}: {scan_triton_time:.6f} seconds")
+
+    if include_backward:
+        print("\n=== BACKWARD PASS TIMING ===")
+        jax_backward_time = time_jax_associative_scan_backward(nested_func_jax, jx, repeats, axis=axis, as_compiled=as_compiled)
+        print(f"JAX associative_scan backward average time compiled={as_compiled}: {jax_backward_time:.6f} seconds")
+        
+        torch_backward_time = time_torch_associative_scan_backward(nested_func, tx, repeats, axis=axis, as_compiled=as_compiled)
+        print(f"PyTorch associative_scan backward average time compiled={as_compiled}: {torch_backward_time:.6f} seconds")
+
+        if include_scan_ref and not is_complex:
+            scan_ref_backward_time = time_accelerated_scan_associative_scan_backward(scan_ref, tx, repeats, as_compiled=as_compiled)
+            print(f"scan_ref backward average time compiled={as_compiled}: {scan_ref_backward_time:.6f} seconds")
+
+        if include_scan_warp and not is_complex:
+            scan_warp_backward_time = time_accelerated_scan_associative_scan_backward(scan_warp, tx, repeats, as_compiled=as_compiled)
+            print(f"scan_warp backward average time compiled={as_compiled}: {scan_warp_backward_time:.6f} seconds")
+
+        if include_scan_triton and not is_complex:
+            if not as_compiled:
+                scan_triton_backward_time = time_accelerated_scan_associative_scan_backward(scan_triton, tx, repeats, as_compiled=as_compiled)
+                print(f"scan_triton backward average time compiled={as_compiled}: {scan_triton_backward_time:.6f} seconds")
+            else:
+                print(f"scan_triton backward cannot be compiled")
+
+        if include_scan_bct_complex and is_complex:
+            scan_bct_complex_backward_time = time_accelerated_scan_associative_scan_backward(scan_bct_complex, tx, repeats, as_compiled=as_compiled)
+            print(f"scan_bct_complex backward average time: {scan_bct_complex_backward_time:.6f} seconds")
+
+
+        if include_scan_bct_complex_packed and is_complex:
+            scan_bct_complex_packed_backward_time = time_accelerated_scan_associative_scan_backward(scan_bct_complex_packed, tx, repeats, as_compiled=as_compiled)
+            print(f"scan_bct_complex_packed backward average time compiled={as_compiled}: {scan_bct_complex_packed_backward_time:.6f} seconds")
 
 
 if __name__ == "__main__":
@@ -802,12 +993,13 @@ if __name__ == "__main__":
     #test_associative_scan(is_complex=True)
 
     import time
-    print("\nComparing times: real numbers")
-    compare_associative_scan_timing(shape=(2,32,256), repeats=5)
-    print("\nComparing times: complex numbers")
-    compare_associative_scan_timing(shape=(2,32,256), repeats=5, is_complex=True)
+    #print("\nComparing non-compiled times: real numbers")
+    #compare_associative_scan_timing(shape=(2,32,256), repeats=1, is_complex=False, as_compiled=False)
+    #print("\nComparing non-compiled times: complex numbers")
+    #compare_associative_scan_timing(shape=(2,32,256), repeats=1, is_complex=True, as_compiled=False)
 
-    print("\nComparing compiled times: real numbers")
-    compare_associative_scan_timing(shape=(2,32,256), repeats=5, as_compiled=True)
+    #print("\nComparing compiled times: real numbers")
+    #compare_associative_scan_timing(shape=(2,32,512), repeats=1, is_complex=True, as_compiled=True)
+
     print("\nComparing compiled times: complex numbers")
-    compare_associative_scan_timing(shape=(2,32,256), repeats=5, is_complex=True, as_compiled=True)
+    compare_associative_scan_timing(shape=(2,32,512), repeats=1, is_complex=True, as_compiled=True)
