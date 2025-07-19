@@ -1434,24 +1434,23 @@ class ScanBCTPackedSplit(torch.autograd.Function):
         tokens_new_real = torch.zeros_like(tokens_real, dtype=tokens_real.dtype)
         tokens_new_imag = torch.zeros_like(tokens_imag, dtype=tokens_imag.dtype)
 
-        # Forward pass - use standard kernel with reconstructed complex tensors
-        gates_complex = torch.complex(gates_real, gates_imag)
-        tokens_complex = torch.complex(tokens_real, tokens_imag)
-        
-        gates_new_complex = torch.zeros_like(gates_complex)
-        tokens_new_complex = torch.zeros_like(tokens_complex)
-        
-        forward_scan_bct_complex[(B, C)](
-            gates_complex.real, gates_complex.imag,
-            tokens_complex.real, tokens_complex.imag,
-            gates_new_complex.real, gates_new_complex.imag,
-            tokens_new_complex.real, tokens_new_complex.imag,
+        # Allocate output tensors - keep them as separate real/imag tensors
+        gates_new_real = torch.zeros_like(gates_real, dtype=gates_real.dtype)
+        gates_new_imag = torch.zeros_like(gates_imag, dtype=gates_imag.dtype)
+        tokens_new_real = torch.zeros_like(tokens_real, dtype=tokens_real.dtype)
+        tokens_new_imag = torch.zeros_like(tokens_imag, dtype=tokens_imag.dtype)
+ 
+        forward_scan_bct_complex_split[(B, C)](
+            gates_real, gates_imag,           # Direct use of split inputs
+            tokens_real, tokens_imag,         # Direct use of split inputs
+            gates_new_real, gates_new_imag,   # Direct output to split tensors
+            tokens_new_real, tokens_new_imag, # Direct output to split tensors
             SEQUENCE_LENGTH=T,
             CHANNELS=C,
             REVERSE=reverse,
         )
         
-        return gates_new_complex.real, gates_new_complex.imag, tokens_new_complex.real, tokens_new_complex.imag
+        return gates_new_real, gates_new_imag, tokens_new_real, tokens_new_imag
 
     @staticmethod
     def setup_context(ctx, inputs, outputs):
@@ -1472,10 +1471,9 @@ class ScanBCTPackedSplit(torch.autograd.Function):
         d_gates_real = torch.zeros_like(gates_real, dtype=gates_real.dtype)
         d_gates_imag = torch.zeros_like(gates_imag, dtype=gates_imag.dtype)
 
-        # Reconstruct gates tensor and apply conjugation
-        gates = torch.complex(gates_real, gates_imag)
-        gates = gates.conj()
-        gates_real_conj, gates_imag_conj = gates.real, gates.imag
+        # Apply conjugation to split tensors directly (conj flips sign of imaginary part)
+        gates_real_conj = gates_real
+        gates_imag_conj = -gates_imag
 
         # Create shifted gates for backward pass 
         if reverse:
@@ -1494,25 +1492,31 @@ class ScanBCTPackedSplit(torch.autograd.Function):
             REVERSE=reverse,
             CHANNELS=C,
         )
-        
-        # Compute d_gates using padded outputs 
-        output_tokens = torch.complex(output_tokens_real, output_tokens_imag)
-        d_tokens = torch.complex(d_tokens_real, d_tokens_imag)
-        
+           
+        # Compute d_gates using split tensor operations
         if reverse:
             # For x_t = a_t x_{t+1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t+1}
-            padded_outputs = torch.cat(
-                [output_tokens[..., 1:], torch.zeros_like(output_tokens[..., :1])], dim=-1
+            padded_outputs_real = torch.cat(
+                [output_tokens_real[..., 1:], torch.zeros_like(output_tokens_real[..., :1])], dim=-1
             )
-            d_gates = d_tokens * padded_outputs.conj()
+            padded_outputs_imag = torch.cat(
+                [output_tokens_imag[..., 1:], torch.zeros_like(output_tokens_imag[..., :1])], dim=-1
+            )
         else:
             # For x_t = a_t x_{t-1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t-1}
-            padded_outputs = torch.cat(
-                [torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1
+            padded_outputs_real = torch.cat(
+                [torch.zeros_like(output_tokens_real[..., :1]), output_tokens_real], dim=-1
             )[..., :-1]
-            d_gates = d_tokens * padded_outputs.conj()
+            padded_outputs_imag = torch.cat(
+                [torch.zeros_like(output_tokens_imag[..., :1]), output_tokens_imag], dim=-1
+            )[..., :-1]
 
-        return d_gates.real, d_gates.imag, d_tokens.real, d_tokens.imag, None
+        # Complex multiplication: d_tokens * padded_outputs.conj()
+        # (a + bi) * (c - di) = (ac + bd) + (bc - ad)i
+        d_gates_real_final = d_tokens_real * padded_outputs_real + d_tokens_imag * padded_outputs_imag
+        d_gates_imag_final = d_tokens_imag * padded_outputs_real - d_tokens_real * padded_outputs_imag
+
+        return d_gates_real_final, d_gates_imag_final, d_tokens_real, d_tokens_imag, None
 
     @staticmethod
     def vmap(info, in_dims, gates_real, gates_imag, tokens_real, tokens_imag, reverse=False):
