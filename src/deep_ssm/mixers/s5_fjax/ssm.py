@@ -12,10 +12,36 @@ from deep_ssm.mixers.s5_fjax.ssm_init import init_VinvB, init_CV, init_log_steps
 
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
-if False: #DEVICE == "cuda":
-    from deep_ssm.mixers.scan_utils import scan_btc_complex
+def next_power_of_2(x):
+    return 1 << (x - 1).bit_length()
+
+if DEVICE == "cuda":
+    from deep_ssm.mixers.scan_utils import scan_btc_complex   
     def scan_func(g, t, **kwargs):
+        """
+        Apply scan_btc_complex with padding to the next power of 2 in the sequence dimension.
+        
+        Args:
+            g: Tensor of shape (B, T, C), complex dtype.
+            t: Tensor of shape (B, T, C), complex dtype.
+        
+        Returns:
+            output_g, output_t: Scanned outputs truncated to original length T.
+        """
+        T = g.shape[-2]
+        T_pad = next_power_of_2(T)
+
+        if T_pad > T:
+            pad_len = T_pad - T
+            # Pad the sequence dimension (T), which is dim=1
+            g = F.pad(g, (0, 0, 0, pad_len))  # (left, right, top, bottom)
+            t = F.pad(t, (0, 0, 0, pad_len))
+
         output_g, output_t = scan_btc_complex(g, t, **kwargs)
+
+        # Truncate back to original T
+        output_g = output_g[...,:T, :]
+        output_t = output_t[...,:T, :]
         return output_g, output_t
 else:
     from deep_ssm.mixers.s5_fjax.jax_func import associative_scan

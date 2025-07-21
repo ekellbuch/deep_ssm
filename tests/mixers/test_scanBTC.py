@@ -83,7 +83,9 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len, reverse):
     out_g, out_token = torch_associative_scanBTC(gates, tokens, reverse)
 
     # Compute a loss
-    loss_seq = out_token.abs().sum()
+    func_ = lambda x: x.abs().sum().mean()
+
+    loss_seq = func_(out_token)
     loss_seq.backward()
 
     seq_gates_grad = gates.grad.clone()
@@ -97,7 +99,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len, reverse):
     outputs_g, outputs_t = scan_btc_complex_autograd(gates,tokens, reverse)
 
     # Compute a loss
-    loss = outputs_t.abs().sum()
+    loss = func_(outputs_t)
     loss.backward()
 
     seq2_gates_grad = gates.grad.clone()
@@ -111,7 +113,7 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len, reverse):
     new_g, new_t = scan_btc_complex(gates, tokens, reverse)
 
     # Compute a loss
-    loss_tri = new_t.abs().sum()
+    loss_tri = func_(new_t)
     loss_tri.backward()
 
     tri_gates_grad = gates.grad.clone()
@@ -173,25 +175,32 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims, reverse)
         gates = gates[0].detach().contiguous().requires_grad_()
         out_dims = (0, 0)
 
-    # Let's define a function:
-    func_ = lambda x: x.abs().sum((-1,-2)).mean()
-    
+    # ----------------------------
+    # PyTorch Sequential Implementation
     # Let's calculate the outputs and grad_outputs structure:
     gates.grad = None
-    tokens.grad = None
-
+    tokens.grad = None    
     outputs_seq_g, outputs_seq_token = torch_associative_scanBTC(gates, tokens, reverse)
+
+    # Let's define a function:
+    func_ = lambda x: x.abs().sum().mean()
     loss = func_(outputs_seq_token)
     loss.backward()
+
     seq_gates_grad = gates.grad.clone()
     seq_tokens_grad = tokens.grad.clone()
 
+    # ----------------------------
+    # CustomAutograd Implementation
     # Now compare the vmap forward pass:
     gates.grad = None
     tokens.grad = None
+
     vmap_forward = torch.vmap(lambda g, t: torch_associative_scanBTC(g, t, reverse), in_dims=in_dims, out_dims=out_dims)
     outputs_vmap_g, outputs_vmap_token = vmap_forward(gates, tokens)
+    
     loss = func_(outputs_vmap_token)
+
     loss.backward()
     vmap_gates_grad = gates.grad.clone()
     vmap_tokens_grad = tokens.grad.clone()
@@ -216,6 +225,7 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims, reverse)
 
     assert torch.allclose(outputs_seq_g, outputs2_vmap_g, atol=atol), print(f"Vmap forward 2 outputs gates {outputs2_vmap_g} do not match standard {outputs_seq_g}")
     assert torch.allclose(outputs_seq_token, outputs2_vmap_token, atol=atol), print(f"Vmap forward 2 outputs token {outputs2_vmap_token} do not match standard {outputs_seq_token}")
+
     assert torch.allclose(seq_gates_grad, vmap2_gates_grad, atol=atol), print(f"Vmap forward 2 gate gradients {vmap2_gates_grad} do not match standard {seq_gates_grad}")
     assert torch.allclose(seq_tokens_grad, vmap2_tokens_grad, atol=atol), print(f"Vmap forward 2 token gradients {vmap2_tokens_grad} do not match standard {seq_tokens_grad}")
 

@@ -1,0 +1,75 @@
+Comment: >
+  # This trains the baseline S4 model on sequential MNIST
+  python run.py --config-path="../configs/seq_mnist" --config-name="s4" trainer_cfg.fast_dev_run=1 model_cfg.configs.n_layers=1 
+  test_accuracy         0.9926000237464905
+  test_loss          0.043390095233917236
+
+# S4 Sequential MNIST Configuration
+project_name: "seq_debug"
+experiment_name: "seq_debug_s4"
+
+seed: 42
+
+
+data_cfg:
+  dataset_module: "sequential_mnist"
+  batchSize: 64
+  num_workers: 0
+  train_split: 0.9
+  data_dir: "./data"
+
+module_cfg:
+  type: "sequential"
+
+model_cfg:
+  type: "s4_base"
+  resume_ckpt_path:   # load weights from ckpt but not parameters.
+  configs:
+    d_model: 256
+    n_layers: 4
+    dropout: 0.1
+    prenorm: true
+    transposed: true
+    mode: 
+    kernel: "s4d"
+    d_input: 1
+    d_output: 10
+    lr: 0.001  # because so random
+    backend: "naive"
+
+optimizer_cfg:
+  lr_factor: 4.5
+  ssm_lr_base: 0.001
+  weight_decay: 0.0  # MNIST typically uses no weight decay
+
+
+trainer_cfg:
+  max_epochs: 250
+  accelerator: "auto"
+  precision: 32
+  fast_dev_run: false
+  logger: none #"wandb"  # or "tensorboard" or null
+  log_every_n_steps: 50
+  limit_test_batches:
+  limit_train_batches:
+  limit_val_batches:
+
+callbacks:
+  lr_monitor:
+    logging_interval: "epoch"
+  early_stopping:
+    monitor: "val_accuracy"
+    mode: "max"
+    patience: 20
+    verbose: true
+  checkpoint_cfg:
+    dirpath: "checkpoints/s4_mnist"
+    filename: "s4-{epoch:02d}-{val_accuracy:.3f}"
+    monitor: "val_accuracy"
+    mode: "max"
+    save_top_k: 3
+    save_last: true
+
+eval_cfg:
+  eval_only: 0
+  ckpt_path:

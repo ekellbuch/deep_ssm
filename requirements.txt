@@ -13,3 +13,6 @@ triton==2.2.0
 mamba-ssm[causal-conv1d]  # temporary flag to install selective_scan_cuda 
 edit-distance
 pyparsing
+pytest
+jax[cuda12]
+hydra-core

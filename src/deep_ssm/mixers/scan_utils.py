@@ -5,18 +5,17 @@ scan_bct_complex
 scan_btc_complex
 scan_btc_complex_autograd
 scan_bct_complex_autograd
-
-
 """
 import torch
 import os
-from typing import Tuple
+from typing import Tuple, List
 try:
     import triton
     import triton.language as tl
     load_triton = True
 except:
     load_triton = False
+import torch.nn as nn
 
 
 #os.environ["TRITON_INTERPRET"]="1"
@@ -271,12 +270,14 @@ class ScanBCT(torch.autograd.Function):
         assert tokens.is_contiguous(), "Tokens tensor must be contiguous."
 
         # Split into real and imaginary parts
-        gates_real, gates_imag = gates.real, gates.imag
-        tokens_real, tokens_imag = tokens.real, tokens.imag
+        gates_real = gates.real
+        gates_imag = gates.imag
+        tokens_real = tokens.real
+        tokens_imag = tokens.imag
 
         # Allocate output tensors
-        gates_new = torch.zeros_like(gates, dtype=gates.dtype)
-        tokens_new = torch.zeros_like(tokens, dtype=tokens.dtype)
+        gates_new = torch.empty_like(gates, dtype=gates.dtype)
+        tokens_new = torch.empty_like(tokens, dtype=tokens.dtype)
 
         gates_new_real = gates_new.real
         gates_new_imag = gates_new.imag
@@ -315,24 +316,36 @@ class ScanBCT(torch.autograd.Function):
         B, C, T = tokens.shape
 
         # Allocate output tensors
-        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype)
-        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype)
-        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype)
-        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype)
+        d_tokens_real = torch.empty_like(tokens.real, dtype=tokens.real.dtype)
+        d_tokens_imag = torch.empty_like(tokens.imag, dtype=tokens.imag.dtype)
+        d_gates_real = torch.empty_like(gates.real, dtype=gates.real.dtype)
+        d_gates_imag = torch.empty_like(gates.imag, dtype=gates.imag.dtype)
 
         # Split into real and imaginary parts
-        gates = gates.conj()
-        gates_real, gates_imag = gates.real, gates.imag
-        grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
+        gates_real = gates.real
+        gates_imag = - gates.imag
+        grad_tokens_real = grad_tokens.real
+        grad_tokens_imag = grad_tokens.imag
 
         # Create shifted gates for backward pass 
+        padded_shifted_gates_real = torch.empty_like(gates_real)
+        padded_shifted_gates_imag = torch.empty_like(gates_imag)
+            
         if reverse:
-            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real[..., :1]), gates_real], dim=-1)[..., :-1].contiguous()
-            padded_shifted_gates_imag = torch.cat([torch.zeros_like(gates_imag[..., :1]), gates_imag], dim=-1)[..., :-1].contiguous()
+            # Fill first position with ones/zeros
+            padded_shifted_gates_real[..., 0] = 1.0
+            padded_shifted_gates_imag[..., 0] = 0.0
+            # Copy shifted gates
+            padded_shifted_gates_real[..., 1:] = gates_real[..., :-1]
+            padded_shifted_gates_imag[..., 1:] = gates_imag[..., :-1]
         else:
-            padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
-            padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[:, :, :1])], dim=-1)[:, :, 1:].contiguous()
-
+            # Copy shifted gates
+            padded_shifted_gates_real[..., :-1] = gates_real[..., 1:]
+            padded_shifted_gates_imag[..., :-1] = gates_imag[..., 1:]
+            # Fill last position with ones/zeros
+            padded_shifted_gates_real[..., -1] = 1.0
+            padded_shifted_gates_imag[..., -1] = 0.0
+        
         # Backward scan
         #print('padded_shifted_gates', padded_shifted_gates_real, padded_shifted_gates_imag)
         #print('grad_tokens', grad_tokens_real, grad_tokens_imag)
@@ -356,7 +369,7 @@ class ScanBCT(torch.autograd.Function):
                 
         # Compute d_gates using padded outputs 
         if reverse:
-            # For x_t = a_t x_{t+1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t+1}
+            # For x_t = a_t x_{t+1} + b_t → dL/da_t = dL/x_t * x_{t+1}
             padded_outputs = torch.cat(
                 [output_tokens[..., 1:], torch.zeros_like(output_tokens[..., :1])], dim=-1
             )
@@ -407,7 +420,7 @@ class ScanBCT(torch.autograd.Function):
         ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
         ctx.reverse = reverse
         
-@torch._dynamo.disable()
+@torch.compiler.disable(recursive=False)
 def scan_bct_complex(gates, tokens, reverse=False):
     """
     Solve a first-order recurrence relation for complex numbers.
@@ -446,21 +459,25 @@ def first_order_op_complex(l_real, l_imag, l_gates_real, l_gates_imag,
 
 
 class ScanBTC(torch.autograd.Function):
-    
+    reverse = False  # default
+
     @staticmethod
-    def forward(gates, tokens, reverse=False):
+    def forward(gates: torch.Tensor, tokens: torch.Tensor):
+
         B, T, C = gates.shape
         assert tokens.shape == (B, T, C), "Tokens must have the same shape as gates."
         assert gates.is_contiguous(), "Gates tensor must be contiguous."
         assert tokens.is_contiguous(), "Tokens tensor must be contiguous."
 
         # Split into real and imaginary parts
-        gates_real, gates_imag = gates.real, gates.imag
-        tokens_real, tokens_imag = tokens.real, tokens.imag
+        gates_real = gates.real
+        gates_imag = gates.imag
+        tokens_real = tokens.real
+        tokens_imag = tokens.imag
 
         # Allocate output tensors
-        gates_new = torch.zeros_like(gates, dtype=gates.dtype)
-        tokens_new = torch.zeros_like(tokens, dtype=tokens.dtype)
+        gates_new = torch.empty_like(gates, dtype=gates.dtype)
+        tokens_new = torch.empty_like(tokens, dtype=tokens.dtype)
 
         gates_new_real = gates_new.real
         gates_new_imag = gates_new.imag
@@ -471,6 +488,8 @@ class ScanBTC(torch.autograd.Function):
         #print(gates_real, gates_imag,tokens_real, tokens_imag)
         # Forward pass
         #print(gates_real.data_ptr(), gates_imag.data_ptr(), tokens_real.data_ptr())
+        reverse= ScanBTC.reverse
+
         forward_scan_btc_complex[(B, C)](
             gates_real, gates_imag,
             tokens_real, tokens_imag,
@@ -484,29 +503,36 @@ class ScanBTC(torch.autograd.Function):
         return gates_new, tokens_new
 
     @staticmethod
-    def backward(ctx, grad_gates, grad_tokens):
+    def setup_context(ctx, inputs: Tuple[torch.Tensor, torch.Tensor], outputs: Tuple[torch.Tensor, torch.Tensor]):
+        # Define the context setup required for functorch transforms
+        gates, tokens = inputs
+        ctx.reverse = ScanBTC.reverse
+        ctx.save_for_backward(gates, tokens, outputs[1])  # Example: saving inputs that may be needed later
+
+    @staticmethod
+    def backward(ctx, grad_gates: torch.Tensor, grad_tokens: torch.Tensor):
         # Given a linear scan: x_{t+1} = g_{t+1} * x_t + b_{t+1}
         # dL / dx_t = dL / dx_{t+1} * dx_{t+1}/dx_t = dL / dx_{t+1} * g*_{t+1}
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}
         # grad_tokens: dL / db_t = dL / dx_t
-    
-        reverse = ctx.reverse
         # Padded reverse scan
-        gates, tokens,  output_tokens = ctx.saved_tensors
+        gates, tokens, output_tokens = ctx.saved_tensors
         B, T, C = tokens.shape
 
         assert grad_tokens.shape == tokens.shape
 
+        reverse= ctx.reverse
         # Allocate output tensors
-        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype).contiguous()
-        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype).contiguous()
-        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype).contiguous()
-        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype).contiguous()
+        d_tokens_real = torch.empty_like(tokens.real, dtype=tokens.real.dtype).contiguous()
+        d_tokens_imag = torch.empty_like(tokens.imag, dtype=tokens.imag.dtype).contiguous()
+        d_gates_real = torch.empty_like(gates.real, dtype=gates.real.dtype).contiguous()
+        d_gates_imag = torch.empty_like(gates.imag, dtype=gates.imag.dtype).contiguous()
 
         # Split into real and imaginary parts
-        gates = gates.conj()
-        gates_real, gates_imag = gates.real, gates.imag
-        grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
+        gates_real = gates.real
+        gates_imag = - gates.imag
+        grad_tokens_real = grad_tokens.real
+        grad_tokens_imag = grad_tokens.imag
 
         # Create shifted gates for backward pass
         if reverse:
@@ -532,7 +558,7 @@ class ScanBTC(torch.autograd.Function):
         #print('d_tokens_real computed', d_tokens_real.mT, d_tokens_imag.mT)
 
         # grad_gates: dL / dg_t = dL / dx_{t+1} * x*_{t}   
-        if reverse:
+        if ctx.reverse:
             padded_outputs = torch.cat(
                 [output_tokens[..., 1:, :],
                 torch.zeros_like(output_tokens[..., :1, :])], dim=-2)
@@ -543,10 +569,10 @@ class ScanBTC(torch.autograd.Function):
         # grad_tokens: dL / db_t = dL / dx_{t+1} * g*_{t+1}
         d_tokens = torch.complex(d_tokens_real, d_tokens_imag) # * gates.conj()
 
-        return d_gates, d_tokens, None
+        return d_gates, d_tokens
 
     @staticmethod
-    def vmap(info, in_dims, gates, tokens, reverse=False):
+    def vmap(info, in_dims: List, gates: torch.Tensor, tokens: torch.Tensor):
         """
         A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
         
@@ -557,46 +583,43 @@ class ScanBTC(torch.autograd.Function):
             tokens: Input tokens tensor of shape (B', B, T, C) if in_dims[1] is 0.
         Returns:
             outputs: Output tensor of shape (B', B, T, C).
-        """
-        
+        """    
         # Handle case where gates is constant (None in in_dims)
-        if in_dims == (None, 0, None):
+        if in_dims == (None, 0):
             # gates: (T, C) - constant for all batches  
             # tokens: (B, T, C) - vectorized over batch dimension
+            # TODO: check:
+            # tokens: (B, 1, L, C) → (B, L, C)
+            tokens = tokens.squeeze(1)
             batch_size = tokens.shape[0]
-            gates_expanded = gates.unsqueeze(0).expand_as(tokens).contiguous()
-            outputs = ScanBTC.apply(gates_expanded, tokens, reverse)
-
+            gates = gates.expand(batch_size,-1,-1).contiguous()
+            outputs_g, outputs_a = ScanBTC.apply(gates, tokens)
             # Both outputs are batched
-            out_dims = (0, 0)
-        elif (0, 0, None):
+            return  (outputs_g, outputs_a), (None, 0)
+        elif in_dims == (0, 0):
             assert gates.ndim == 3
-            outputs = ScanBTC.apply(gates, tokens, reverse)
-            out_dims = (0, 0)
+            outputs_g , outputs_a= ScanBTC.apply(gates, tokens)
+            return (outputs_g,outputs_a), (0,0)
         else:
             raise NotImplementedError(f"Only (None, 0, None) is implemented but requested {in_dims} gates{gates.shape} tokens {tokens.shape}")
 
-        return outputs, out_dims
 
-    @staticmethod
-    def setup_context(ctx, inputs, outputs):
-        # Define the context setup required for functorch transforms
-        gates, tokens, reverse = inputs
-        _, output_tokens = outputs
-        ctx.save_for_backward(gates, tokens, output_tokens)  # Example: saving inputs that may be needed later
-        ctx.reverse = reverse
-    
-
-def scan_btc_complex(gates, tokens, reverse=False):
+class ScanBTC2(nn.Module):
     """
-    Solve a first-order recurrence relation for complex numbers.
-    x_t = a_t x_{t-1} + b_t
-    where :math:`a_t` ("gates") and :math:`b_t` ("tokens") are sequences of vectors.
-
+    Wrapper module around ScanBTC that allows setting the reverse flag cleanly.
     """
-    gates = gates.contiguous()
-    tokens = tokens.contiguous()
-    return ScanBTC.apply(gates, tokens, reverse)
+    def __init__(self, reverse: bool = False):
+        super().__init__()
+        self.reverse = reverse
+
+    def forward(self, gates: torch.Tensor, tokens: torch.Tensor):
+        # Dynamically create a subclass of ScanBTC with reverse captured
+        ScanBTC.reverse = self.reverse
+        return ScanBTC.apply(gates.contiguous(), tokens.contiguous())
+
+
+def scan_btc_complex(x: torch.Tensor, y: torch.Tensor, reverse: bool=False):
+    return ScanBTC2(reverse=reverse)(x, y)
 
 
 @triton.jit
@@ -752,7 +775,10 @@ def binary_operator(
 
 class ComplexLinearScanBTC(torch.autograd.Function):
     @staticmethod
-    def forward(gates, tokens, reverse=False):
+    def forward(
+        gates: torch.Tensor,
+        tokens: torch.Tensor,
+        reverse: bool = False):
         """
         Forward pass for the complex linear scan.
         x_t = g_t * x_{t-1} + b_t
@@ -763,38 +789,40 @@ class ComplexLinearScanBTC(torch.autograd.Function):
             outputs: Complex tensor of shape (batch, len, dim).
         """
         seq_len = tokens.shape[-2]
-        outputs = torch.zeros_like(tokens, dtype=torch.cfloat)
-        outputs_gates = torch.zeros_like(gates, dtype=torch.cfloat)
-        
+
         if reverse:
             gates = torch.flip(gates, dims=[-2])
             tokens = torch.flip(tokens, dims=[-2])
 
-        # Initialize (a_prefix, b_prefix) variables
-        a_prefix = gates[..., 0, :]
-        b_prefix = tokens[..., 0, :]
-
+        scanned_gates = torch.zeros_like(gates, dtype=torch.cfloat)
+        scanned_tokens = torch.zeros_like(tokens, dtype=torch.cfloat)
+        
         # initialize x_0 = a_0 * x_0 + b_prefix,  but we assume x_0 = 0
-        outputs[..., 0, :] = tokens[..., 0, :]
-        outputs_gates[..., 0, :] = gates[..., 0, :]
+        scanned_gates[..., 0, :] = gates[..., 0, :]
+        scanned_tokens[..., 0, :] = tokens[..., 0, :]
+
+        # Initialize (a_prefix, b_prefix) variables
+        current_gates = gates[..., 0, :]
+        current_tokens = tokens[..., 0, :]
+
     
         for t in range(1, seq_len):
             #outputs[..., t] = gates[..., t] * outputs[..., t-1] + tokens[..., t]
 
             # (a_prefix, b_prefix) = (a_prefix, b_prefix) o (gates[..., t], tokens[..., t])
-            a_prefix, b_prefix = binary_operator((a_prefix, b_prefix), (gates[..., t, :], tokens[..., t, :]))
+            current_gates, current_tokens = binary_operator((current_gates, current_tokens), (gates[..., t, :], tokens[..., t, :]))
             # x_t = a_prefix * x_0 + b_prefix
-            outputs[..., t, :] = b_prefix
-            outputs_gates[..., t, :] = a_prefix
+            scanned_gates[..., t, :] = current_gates
+            scanned_tokens[..., t, :] = current_tokens
         
         if reverse:
-            outputs_gates = torch.flip(outputs_gates, dims=[-2])
-            outputs = torch.flip(outputs, dims=[-2])
+            scanned_gates = torch.flip(scanned_gates, dims=[-2])
+            scanned_tokens = torch.flip(scanned_tokens, dims=[-2])
 
-        return outputs_gates, outputs
+        return scanned_gates, scanned_tokens
         
     @staticmethod
-    def backward(ctx, grads_gates, grad_outputs):
+    def backward(ctx, grads_gates: torch.Tensor, grad_outputs: torch.Tensor):
         """
         Backward pass for the complex linear scan.
         Args:
@@ -845,7 +873,7 @@ class ComplexLinearScanBTC(torch.autograd.Function):
         return grad_gates, grad_tokens, None
 
     @staticmethod
-    def setup_context(ctx, inputs, outputs):
+    def setup_context(ctx, inputs: Tuple[torch.Tensor,torch.Tensor,torch.Tensor], outputs: Tuple[torch.Tensor,torch.Tensor]):
         # Define the context setup required for functorch transforms
         gates, tokens, reverse = inputs
         _, output_tokens = outputs
@@ -853,7 +881,7 @@ class ComplexLinearScanBTC(torch.autograd.Function):
         ctx.reverse = reverse
 
     @staticmethod
-    def vmap(info, in_dims, gates, tokens, reverse=False):
+    def vmap(info, in_dims: List, gates: torch.Tensor, tokens: torch.Tensor, reverse: bool =False):
         """
         A "vmap rule" is the logic of how to perform the operation given inputs with one additional dimension.        
         with vmap we slice over dimension and applies function to each slide:
@@ -870,6 +898,8 @@ class ComplexLinearScanBTC(torch.autograd.Function):
 
         # Handle case where gates is constant (None in in_dims)
         if in_dims == (None, 0, None):
+            # None for the first input: this argument is not batched but the same across all dimensions
+            # 0 for the second input: 
             # gates: (T, C) - constant for all batches
             # tokens: (B, T, C) - vectorized over batch dimension
             batch_size = tokens.shape[0]
@@ -877,23 +907,23 @@ class ComplexLinearScanBTC(torch.autograd.Function):
             outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates_expanded, tokens, reverse)
             # Return with correct out_dims - both outputs are batched
             out_dims = (0, 0)
-        if in_dims == (0, 0, None):
+            return (outputs_g, outputs_k), out_dims
+        elif in_dims == (0, 0, None):
             # gates: (B, T, C) -
             # tokens: (B, T, C) - 
             # output to be T, C
             outputs_g, outputs_k = ComplexLinearScanBTC.apply(gates, tokens, reverse)
             out_dims = (None, None)
+            return (outputs_g, outputs_k), out_dims
         else:
             raise NotImplementedError(f"Only (None, 0) is implemented -- in_dims was {in_dims}")
 
-        return (outputs_g, outputs_k), out_dims
 
-
-def scan_btc_complex_autograd(gates, tokens, reverse=False):
+#@torch.compiler.disable(recursive=False)
+def scan_btc_complex_autograd(gates: torch.Tensor, tokens: torch.Tensor, reverse: bool =False):
     gates = gates.contiguous()
     tokens = tokens.contiguous()
-    outputs = ComplexLinearScanBTC.apply(gates, tokens, reverse)
-    return outputs
+    return ComplexLinearScanBTC.apply(gates, tokens, reverse)
 
 
 class ComplexLinearScanBCT(torch.autograd.Function):
@@ -1251,6 +1281,9 @@ def backward_scan_bct_complex_packed(
     SEQUENCE_LENGTH: tl.constexpr,
     REVERSE: tl.constexpr,
     CHANNELS: tl.constexpr,
+    GATES_STRIDE: tl.constexpr,      # 1 for separate tensors, 2 for complex views
+    GRAD_STRIDE: tl.constexpr,       # 1 for separate tensors, 2 for complex views
+    OUTPUT_STRIDE: tl.constexpr,     # 1 for separate tensors, 2 for complex views
 ):
     batch_id = tl.program_id(axis=0)
     channel_id = tl.program_id(axis=1)
@@ -1263,14 +1296,16 @@ def backward_scan_bct_complex_packed(
     else:
         seq_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH))
     
-    reversed_strides = base_offset + seq_idx
+    # Apply appropriate strides for different memory layouts
+    gates_strides = (base_offset + seq_idx) * GATES_STRIDE
+    grad_strides = (base_offset + seq_idx) * GRAD_STRIDE
     
     # Load data in reverse order for backward scan
     # Note: gates and grads have different memory layouts
-    gates_r = tl.load(gates_real + reversed_strides)
-    gates_i = tl.load(gates_imag + reversed_strides)
-    grad_r = tl.load(grad_real + reversed_strides * 2)
-    grad_i = tl.load(grad_imag + reversed_strides * 2)
+    gates_r = tl.load(gates_real + gates_strides)
+    gates_i = tl.load(gates_imag + gates_strides)
+    grad_r = tl.load(grad_real + grad_strides)
+    grad_i = tl.load(grad_imag + grad_strides)
     
     # Perform backward scan - note the order matches first_order_op_complex
     l0, l1 = pack128(gates_r, gates_i, grad_r, grad_i)
@@ -1281,11 +1316,12 @@ def backward_scan_bct_complex_packed(
         rev_idx = tl.arange(0, SEQUENCE_LENGTH) 
     else:
         rev_idx = (SEQUENCE_LENGTH - 1 - tl.arange(0, SEQUENCE_LENGTH)) 
-    store_idx = base_offset + rev_idx 
-    tl.store(d_tokens_real + store_idx, tokens_new_r)
-    tl.store(d_tokens_imag + store_idx, tokens_new_i)
-    tl.store(d_gates_real + store_idx, gates_r_out)
-    tl.store(d_gates_imag + store_idx, gates_i_out)
+
+    output_strides = (base_offset + rev_idx) * OUTPUT_STRIDE
+    tl.store(d_tokens_real + output_strides, tokens_new_r)
+    tl.store(d_tokens_imag + output_strides, tokens_new_i)
+    tl.store(d_gates_real + output_strides, gates_r_out)
+    tl.store(d_gates_imag + output_strides, gates_i_out)
 
 
 class ScanBCTPacked(torch.autograd.Function):
@@ -1297,12 +1333,14 @@ class ScanBCTPacked(torch.autograd.Function):
         assert tokens.is_contiguous(), "Tokens tensor must be contiguous."
 
         # Split into real and imaginary parts
-        gates_real, gates_imag = gates.real, gates.imag
-        tokens_real, tokens_imag = tokens.real, tokens.imag
+        gates_real = gates.real
+        gates_imag = gates.imag
+        tokens_real = tokens.real
+        tokens_imag = tokens.imag
 
         # Allocate output tensors
-        gates_new = torch.zeros_like(gates, dtype=gates.dtype)
-        tokens_new = torch.zeros_like(tokens, dtype=tokens.dtype)
+        gates_new = torch.empty_like(gates, dtype=gates.dtype)
+        tokens_new = torch.empty_like(tokens, dtype=tokens.dtype)
 
         gates_new_real = gates_new.real
         gates_new_imag = gates_new.imag
@@ -1334,54 +1372,70 @@ class ScanBCTPacked(torch.autograd.Function):
         gates, tokens, output_tokens = ctx.saved_tensors
         reverse = ctx.reverse
         B, C, T = gates.shape
-
+        
         # Allocate output tensors
-        d_tokens_real = torch.zeros_like(tokens.real, dtype=tokens.real.dtype)
-        d_tokens_imag = torch.zeros_like(tokens.imag, dtype=tokens.imag.dtype)
-        d_gates_real = torch.zeros_like(gates.real, dtype=gates.real.dtype)
-        d_gates_imag = torch.zeros_like(gates.imag, dtype=gates.imag.dtype)
+        # OPTION 1: Use complex tensor views (now supported!)
+        d_gates = torch.empty_like(gates)
+        d_tokens = torch.empty_like(tokens)
+        
+        d_gates_real = d_gates.real
+        d_gates_imag = d_gates.imag
+        d_tokens_real = d_tokens.real
+        d_tokens_imag = d_tokens.imag
 
-        # Split into real and imaginary parts
-        gates = gates.conj()
-        gates_real, gates_imag = gates.real, gates.imag
-        grad_tokens_real, grad_tokens_imag = grad_tokens.real, grad_tokens.imag
+        # Split inputs
+        grad_tokens_real = grad_tokens.real
+        grad_tokens_imag = grad_tokens.imag
 
-        # Create shifted gates for backward pass 
+        # Create shifted gates
         if reverse:
-            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real[..., :1]), gates_real], dim=-1)[..., :-1].contiguous()
-            padded_shifted_gates_imag = torch.cat([torch.zeros_like(gates_imag[..., :1]), gates_imag], dim=-1)[..., :-1].contiguous()
+            d_gates_real[..., 1:] = gates.real[..., :-1]
+            d_gates_real[..., 0] = 1.0
+            d_gates_imag[..., 1:] = -gates.imag[..., :-1]
+            d_gates_imag[..., 0] = 0.0
         else:
-            padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
-            padded_shifted_gates_imag = torch.cat([gates_imag, torch.zeros_like(gates_imag[..., :1])], dim=-1)[..., 1:].contiguous()
+            d_gates_real[..., :-1] = gates.real[..., 1:]
+            d_gates_real[..., -1] = 1.0
+            d_gates_imag[..., :-1] = -gates.imag[..., 1:]
+            d_gates_imag[..., -1] = 0.0
 
+        # Determine stride based on tensor layout
+        #gates_stride = 2 if gates_real.stride()[-1] == 2 else 1
+        grad_stride = 2 if grad_tokens_real.stride()[-1] == 2 else 1  
+        output_stride = 2 if d_tokens_real.stride()[-1] == 2 else 1
+
+        # Call strided kernel
         backward_scan_bct_complex_packed[(B, C)](
-            padded_shifted_gates_real, padded_shifted_gates_imag,
+            d_gates_real, d_gates_imag,
             grad_tokens_real, grad_tokens_imag,
             d_tokens_real, d_tokens_imag,
             d_gates_real, d_gates_imag,
             SEQUENCE_LENGTH=T,
             REVERSE=reverse,
             CHANNELS=C,
+            GATES_STRIDE=2,
+            GRAD_STRIDE=grad_stride,
+            OUTPUT_STRIDE=output_stride,
         )
         
-        # grad_tokens: dL / db_t = dL / dx_t
-        d_tokens = torch.complex(d_tokens_real, d_tokens_imag)
-                
-        # Compute d_gates using padded outputs 
+        # Compute final gate gradients
         if reverse:
-            # For x_t = a_t x_{t+1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t+1}
-            padded_outputs = torch.cat(
-                [output_tokens[..., 1:], torch.zeros_like(output_tokens[..., :1])], dim=-1
-            )
-            d_gates = d_tokens * padded_outputs.conj()
+            d_gates_real[..., :-1] = (d_tokens_real[..., :-1] * output_tokens.real[..., 1:] + 
+                                      d_tokens_imag[..., :-1] * output_tokens.imag[..., 1:])
+            d_gates_imag[..., :-1] = (d_tokens_imag[..., :-1] * output_tokens.real[..., 1:] - 
+                                      d_tokens_real[..., :-1] * output_tokens.imag[..., 1:])
+            d_gates_real[..., -1] = 0.0
+            d_gates_imag[..., -1] = 0.0
         else:
-            # For x_t = a_t x_{t-1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t-1}
-            padded_outputs = torch.cat(
-                [torch.zeros_like(output_tokens[..., :1]), output_tokens], dim=-1
-            )[..., :-1]
-            d_gates = d_tokens * padded_outputs.conj()
+            d_gates_real[..., 1:] = (d_tokens_real[..., 1:] * output_tokens.real[..., :-1] + 
+                                     d_tokens_imag[..., 1:] * output_tokens.imag[..., :-1])
+            d_gates_imag[..., 1:] = (d_tokens_imag[..., 1:] * output_tokens.real[..., :-1] - 
+                                     d_tokens_real[..., 1:] * output_tokens.imag[..., :-1])
+            d_gates_real[..., 0] = 0.0
+            d_gates_imag[..., 0] = 0.0
 
         return d_gates, d_tokens, None
+
     
     @staticmethod
     def vmap(info, in_dims, gates, tokens, reverse=False):
@@ -1413,7 +1467,7 @@ class ScanBCTPacked(torch.autograd.Function):
 
 
 # this function operates directly on complex which has compilation issues
-@torch._dynamo.disable()
+#@torch.compiler.disable(recursive=True)
 def scan_bct_complex_packed(gates, tokens, reverse=False):
     return ScanBCTPacked.apply(gates, tokens, reverse)
 
@@ -1429,16 +1483,10 @@ class ScanBCTPackedSplit(torch.autograd.Function):
         assert tokens_imag.is_contiguous(), "Tokens imag tensor must be contiguous."
 
         # Allocate output tensors
-        gates_new_real = torch.zeros_like(gates_real, dtype=gates_real.dtype)
-        gates_new_imag = torch.zeros_like(gates_imag, dtype=gates_imag.dtype)
-        tokens_new_real = torch.zeros_like(tokens_real, dtype=tokens_real.dtype)
-        tokens_new_imag = torch.zeros_like(tokens_imag, dtype=tokens_imag.dtype)
-
-        # Allocate output tensors - keep them as separate real/imag tensors
-        gates_new_real = torch.zeros_like(gates_real, dtype=gates_real.dtype)
-        gates_new_imag = torch.zeros_like(gates_imag, dtype=gates_imag.dtype)
-        tokens_new_real = torch.zeros_like(tokens_real, dtype=tokens_real.dtype)
-        tokens_new_imag = torch.zeros_like(tokens_imag, dtype=tokens_imag.dtype)
+        gates_new_real = torch.empty_like(gates_real)
+        gates_new_imag = torch.empty_like(gates_imag)
+        tokens_new_real = torch.empty_like(tokens_real)
+        tokens_new_imag = torch.empty_like(tokens_imag)
  
         forward_scan_bct_complex_split[(B, C)](
             gates_real, gates_imag,           # Direct use of split inputs
@@ -1466,21 +1514,20 @@ class ScanBCTPackedSplit(torch.autograd.Function):
         B, C, T = gates_real.shape
 
         # Allocate output tensors
-        d_tokens_real = torch.zeros_like(tokens_real, dtype=tokens_real.dtype)
-        d_tokens_imag = torch.zeros_like(tokens_imag, dtype=tokens_imag.dtype)
-        d_gates_real = torch.zeros_like(gates_real, dtype=gates_real.dtype)
-        d_gates_imag = torch.zeros_like(gates_imag, dtype=gates_imag.dtype)
+        d_tokens_real = torch.empty_like(tokens_real)
+        d_tokens_imag = torch.empty_like(tokens_imag)
+        d_gates_real = torch.empty_like(gates_real)
+        d_gates_imag = torch.empty_like(gates_imag)
 
         # Apply conjugation to split tensors directly (conj flips sign of imaginary part)
-        gates_real_conj = gates_real
-        gates_imag_conj = -gates_imag
+        gates_imag_conj = gates_imag
 
         # Create shifted gates for backward pass 
         if reverse:
-            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real_conj[..., :1]), gates_real_conj], dim=-1)[..., :-1].contiguous()
+            padded_shifted_gates_real = torch.cat([torch.ones_like(gates_real[..., :1]), gates_real], dim=-1)[..., :-1].contiguous()
             padded_shifted_gates_imag = torch.cat([torch.zeros_like(gates_imag_conj[..., :1]), gates_imag_conj], dim=-1)[..., :-1].contiguous()
         else:
-            padded_shifted_gates_real = torch.cat([gates_real_conj, torch.ones_like(gates_real_conj[..., :1])], dim=-1)[..., 1:].contiguous()
+            padded_shifted_gates_real = torch.cat([gates_real, torch.ones_like(gates_real[..., :1])], dim=-1)[..., 1:].contiguous()
             padded_shifted_gates_imag = torch.cat([gates_imag_conj, torch.zeros_like(gates_imag_conj[..., :1])], dim=-1)[..., 1:].contiguous()
 
         backward_scan_bct_complex[(B, C)](
@@ -1495,7 +1542,6 @@ class ScanBCTPackedSplit(torch.autograd.Function):
            
         # Compute d_gates using split tensor operations
         if reverse:
-            # For x_t = a_t x_{t+1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t+1}
             padded_outputs_real = torch.cat(
                 [output_tokens_real[..., 1:], torch.zeros_like(output_tokens_real[..., :1])], dim=-1
             )
@@ -1503,7 +1549,6 @@ class ScanBCTPackedSplit(torch.autograd.Function):
                 [output_tokens_imag[..., 1:], torch.zeros_like(output_tokens_imag[..., :1])], dim=-1
             )
         else:
-            # For x_t = a_t x_{t-1} + b_t → ∂L/∂a_t = ∂L/∂x_t * x_{t-1}
             padded_outputs_real = torch.cat(
                 [torch.zeros_like(output_tokens_real[..., :1]), output_tokens_real], dim=-1
             )[..., :-1]
@@ -1511,10 +1556,16 @@ class ScanBCTPackedSplit(torch.autograd.Function):
                 [torch.zeros_like(output_tokens_imag[..., :1]), output_tokens_imag], dim=-1
             )[..., :-1]
 
-        # Complex multiplication: d_tokens * padded_outputs.conj()
-        # (a + bi) * (c - di) = (ac + bd) + (bc - ad)i
-        d_gates_real_final = d_tokens_real * padded_outputs_real + d_tokens_imag * padded_outputs_imag
-        d_gates_imag_final = d_tokens_imag * padded_outputs_real - d_tokens_real * padded_outputs_imag
+        # Fused complex multiplication with conjugation
+        # d_tokens * padded_outputs.conj() = d_tokens * (real - imag*i)
+        d_gates_real_final = torch.addcmul(
+            d_tokens_real * padded_outputs_real,  # Real part
+            d_tokens_imag, padded_outputs_imag    # + imag * imag
+        )
+        d_gates_imag_final = torch.addcmul(
+            d_tokens_imag * padded_outputs_real,  # Imag part  
+            d_tokens_real, padded_outputs_imag, value=-1  # - real * imag
+        )
 
         return d_gates_real_final, d_gates_imag_final, d_tokens_real, d_tokens_imag, None
 
@@ -1581,3 +1632,5 @@ def _recombine_complex(
     tr: torch.Tensor,
     ti: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     return torch.complex(gr, gi), torch.complex(tr, ti)
+
+scan_bct_complex_split_fused = scan_bct_complex_split
