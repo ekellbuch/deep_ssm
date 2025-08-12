@@ -13,20 +13,20 @@ import logging
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 except:
-    logging.warning("selective_scan_fn not implemented from mamba_ssm")
+    logging.warning("selective_scan_fn not using optimized kernel from mamba_ssm. Running time might be slow")
     from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
     from deep_ssm.mixers.utils_mamba import mamba_inner_ref as mamba_inner_fn
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except:
-    logging.warning("causal_conv1d_fn not implemented from mamba_ssm")
+    logging.warning("causal_conv1d_fn not using optimized kernel from mamba_ssm. Running time might be slow")
     from deep_ssm.mixers.utils_mamba import causal_conv1d_ref as causal_conv1d_fn
     from deep_ssm.mixers.utils_mamba import causal_conv1d_update_ref as causal_conv1d_update
 
 try:
     from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 except:
-    logging.warning("selective_state_update not implemented from mamba_ssm")
+    logging.warning("selective_state_update not implemented from mamba_ssm. Running time might be slow")
     selective_state_update = None
 
 
