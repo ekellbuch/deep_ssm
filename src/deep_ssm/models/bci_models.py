@@ -804,7 +804,7 @@ class BiTMambaDecoder(nn.Module):
             d_state=d_state,
             d_conv=d_conv,
             expand_factor=expand_factor,
-            layer_dim=layer_dim,
+            layer_dim=depth,
             bidirectional=bidirectional,
             bidirectional_strategy=bidirectional_strategy,
             mamba_bi_new=mamba_bi_new,
@@ -1081,3 +1081,252 @@ class BiTSashimiDecoder(nn.Module):
     # Forward through BiT-Sashimi model
     output = self.bit_model(neuralInput, X_len, None)
     return output
+
+
+# ============================================================================
+# UNIFIED BCI DECODER WITH CONFIGURABLE MIXER LAYERS
+# ============================================================================
+# 
+# This section contains the BiTUnifiedDecoder class, which provides a single
+# interface for instantiating different mixer architectures for BCI decoding:
+#
+# Supported Mixer Types:
+# • attention  - Multi-head self-attention (Transformer)
+# • mamba      - Selective state space model 
+# • mamba2     - Improved selective state space model
+# • s5         - Structured state space model
+# • sashimi    - S4 + U-Net architecture
+# 
+# The unified approach allows easy experimentation with different mixer types
+# while maintaining consistent preprocessing, tokenization, and output layers.
+# ============================================================================
+
+class BiTUnifiedDecoder(nn.Module):
+    """
+    Unified Brain-Computer Interface (BCI) decoder using configurable mixer layers.
+    
+    This class provides a single interface to instantiate different mixer architectures
+    (Transformer attention, Mamba, S5, etc.) for BCI speech decoding tasks. It uses
+    the BiT (Brain Transformer) patch-based approach for processing neural signals.
+    
+    Args:
+        n_classes (int): Number of output classes (phonemes/characters)
+        mixer_cfg (dict): Configuration for the mixer layer with 'type' and 'configs'
+        patch_size (int or tuple): Size of patches for tokenizing neural input
+        dim (int): Model dimension (embedding size)
+        depth (int): Number of mixer layers
+        dropout (float): Dropout rate for training regularization
+        input_dropout (float): Dropout rate applied to input embeddings
+        look_ahead (int): Number of future timesteps the model can see (for causal modeling)
+        T5_style_pos (bool): Whether to use T5-style relative positional embeddings
+        max_mask_pct (float): Maximum percentage of patches to mask for training
+        num_masks (int): Number of separate mask regions to apply
+        mask_token_zeros (bool): Whether masked tokens are zeros or learnable embeddings
+        linderman_lab (bool): Enable Linderman lab specific architectural modifications
+        gaussianSmoothWidth (float): Width for Gaussian smoothing of input signals
+        nDays (int, optional): Number of recording days (for multi-day models)
+    """
+    def __init__(
+        self,
+        n_classes,
+        mixer_cfg,
+        # BiT specific parameters
+        patch_size=4,
+        dim=512,
+        depth=8,
+        dropout=0.1,
+        input_dropout=0.1,
+        look_ahead=0,
+        T5_style_pos=True,
+        max_mask_pct=0.0,
+        num_masks=1,
+        mask_token_zeros=True,
+        linderman_lab=False,
+        # Base decoder parameters
+        gaussianSmoothWidth=0,
+        nDays=None,
+    ):
+        super().__init__()
+        
+        # === MIXER CONFIGURATION ===
+        # Extract mixer type and specific configurations from mixer_cfg
+        self.mixer_type = mixer_cfg["type"]  # e.g., "attention", "mamba", "s5", "mamba2"
+        mixer_configs = mixer_cfg.get("configs", {})  # mixer-specific parameters
+        
+        # === STORE COMMON PARAMETERS ===
+        # These parameters are shared across all mixer types
+        self.patch_size = patch_size          # Size of neural signal patches [height, width]
+        self.dim = dim                        # Model embedding dimension
+        self.depth = depth                    # Number of mixer layers in the model
+        self.dropout = dropout                # Dropout rate for regularization
+        self.input_dropout = input_dropout    # Dropout rate applied to input embeddings
+        self.look_ahead = look_ahead          # Future context window (0 = causal)
+        self.T5_style_pos = T5_style_pos      # Use T5-style relative position embeddings
+        self.max_mask_pct = max_mask_pct      # Max % of patches to mask during training
+        self.num_masks = num_masks            # Number of separate masking regions
+        self.mask_token_zeros = mask_token_zeros  # Whether masks are zeros or learnable
+        self.linderman_lab = linderman_lab    # Enable lab-specific modifications
+
+        # === MIXER INSTANTIATION ===
+        # Create the appropriate mixer model based on the specified type
+        if self.mixer_type == "attention":
+            # TRANSFORMER ATTENTION MIXER
+            # Uses standard multi-head self-attention mechanism
+            from deep_ssm.models.bci_phoneme import BiT_Phoneme
+            self.model = BiT_Phoneme(
+                patch_size=patch_size,
+                dim=dim,
+                depth=depth,
+                # Attention-specific parameters
+                heads=mixer_configs.get("num_heads", 6),              # Number of attention heads
+                mlp_dim_ratio=mixer_configs.get("mlp_dim_ratio", 4),  # MLP expansion ratio
+                dim_head=mixer_configs.get("dim_head", 64),           # Dimension per attention head
+                dropout=dropout,
+                input_dropout=input_dropout,
+                look_ahead=look_ahead,
+                gaussianSmoothWidth=gaussianSmoothWidth,
+                nClasses=n_classes,
+                T5_style_pos=T5_style_pos,
+                max_mask_pct=max_mask_pct,
+                num_masks=num_masks,
+                mask_token_zeros=mask_token_zeros,
+                num_masks_channels=0,
+                max_mask_channels=0,
+                dist_dict_path=None,
+                linderman_lab=linderman_lab,
+            )
+            
+        elif self.mixer_type == "mamba":
+            # MAMBA STATE SPACE MIXER
+            # Uses selective state space models for efficient sequence modeling
+            from deep_ssm.models.bci_phoneme import BiT_Mamba_Phoneme
+            self.model = BiT_Mamba_Phoneme(
+                patch_size=patch_size,
+                dim=dim,
+                # Mamba-specific parameters
+                d_model=mixer_configs.get("d_model", dim),                              # State space model dimension
+                d_state=mixer_configs.get("d_state", 8),                               # State dimensionality
+                d_conv=mixer_configs.get("d_conv", 2),                                 # Convolution kernel size
+                expand_factor=mixer_configs.get("expand_factor", 4),                   # Inner dimension expansion
+                layer_dim=depth,                                                       # Number of Mamba layers
+                bidirectional=mixer_configs.get("bidirectional", False),              # Enable bidirectional processing
+                bidirectional_strategy=mixer_configs.get("bidirectional_strategy", "add"),  # How to combine directions
+                mamba_bi_new=mixer_configs.get("mamba_bi_new", True),                  # Use new bidirectional implementation
+                dropout=dropout,
+                input_dropout=input_dropout,
+                look_ahead=look_ahead,
+                gaussianSmoothWidth=gaussianSmoothWidth,
+                nClasses=n_classes,
+                T5_style_pos=T5_style_pos,
+                max_mask_pct=max_mask_pct,
+                num_masks=num_masks,
+                mask_token_zeros=mask_token_zeros,
+                num_masks_channels=0,
+                max_mask_channels=0,
+                dist_dict_path=None,
+                linderman_lab=linderman_lab,
+            )
+            
+        elif self.mixer_type == "mamba2":
+            # MAMBA2 STATE SPACE MIXER
+            # Improved version of Mamba with enhanced selective state space modeling
+            from deep_ssm.models.bci_phoneme import BiT_Mamba2_Phoneme
+            self.model = BiT_Mamba2_Phoneme(
+                patch_size=patch_size,
+                dim=dim,
+                d_model=mixer_configs.get("d_model", dim),
+                d_state=mixer_configs.get("d_state", 8),
+                d_conv=mixer_configs.get("d_conv", 2),
+                expand_factor=mixer_configs.get("expand_factor", 4),
+                layer_dim=depth,
+                dropout=dropout,
+                input_dropout=input_dropout,
+                look_ahead=look_ahead,
+                gaussianSmoothWidth=gaussianSmoothWidth,
+                nClasses=n_classes,
+                T5_style_pos=T5_style_pos,
+                max_mask_pct=max_mask_pct,
+                num_masks=num_masks,
+                mask_token_zeros=mask_token_zeros,
+                num_masks_channels=0,
+                max_mask_channels=0,
+                dist_dict_path=None,
+                linderman_lab=linderman_lab,
+            )
+            
+        elif self.mixer_type == "s5":
+            # S5 STATE SPACE MIXER
+            # Structured state space model with efficient convolutional parameterization
+            from deep_ssm.models.bci_phoneme import BiT_S5_Phoneme
+            self.model = BiT_S5_Phoneme(
+                patch_size=patch_size,
+                dim=dim,
+                # S5-specific parameters
+                d_model=mixer_configs.get("d_model", dim),    # State space model dimension
+                d_state=mixer_configs.get("d_state", 8),      # State dimensionality
+                n_layers=depth,                               # Number of S5 layers
+                dropout=dropout,
+                input_dropout=input_dropout,
+                look_ahead=look_ahead,
+                gaussianSmoothWidth=gaussianSmoothWidth,
+                nClasses=n_classes,
+                T5_style_pos=T5_style_pos,
+                max_mask_pct=max_mask_pct,
+                num_masks=num_masks,
+                mask_token_zeros=mask_token_zeros,
+                num_masks_channels=0,
+                max_mask_channels=0,
+                dist_dict_path=None,
+                linderman_lab=linderman_lab,
+            )
+            
+        elif self.mixer_type == "sashimi":
+            # SASHIMI MIXER  
+            # Combines S4 state space models with U-Net architectures for long sequences
+            from deep_ssm.models.bci_phoneme import BiT_Sashimi_Phoneme
+            self.model = BiT_Sashimi_Phoneme(
+                patch_size=patch_size,
+                dim=dim,
+                d_model=mixer_configs.get("d_model", dim),
+                d_state=mixer_configs.get("d_state", 8),
+                d_conv=mixer_configs.get("d_conv", 2),
+                expand_factor=mixer_configs.get("expand_factor", 4),
+                layer_dim=depth,
+                dropout=dropout,
+                input_dropout=input_dropout,
+                look_ahead=look_ahead,
+                gaussianSmoothWidth=gaussianSmoothWidth,
+                nClasses=n_classes,
+                T5_style_pos=T5_style_pos,
+                max_mask_pct=max_mask_pct,
+                num_masks=num_masks,
+                mask_token_zeros=mask_token_zeros,
+                num_masks_channels=0,
+                max_mask_channels=0,
+                dist_dict_path=None,
+                linderman_lab=linderman_lab,
+            )
+            
+        else:
+            # ERROR HANDLING
+            # Raise an error if an unsupported mixer type is specified
+            raise ValueError(f"Unsupported mixer type: {self.mixer_type}")
+        
+        # === COMPATIBILITY LAYER ===
+        # Create alias for backward compatibility with existing code
+        # that expects a 'bit_model' attribute instead of 'model'
+        self.bit_model = self.model
+
+    def forward(self, neuralInput, X_len, dayIdx):
+        """
+        Forward pass through the unified decoder.
+        
+        Args:
+            neuralInput (torch.Tensor): Raw neural signals [batch, channels, time]
+            X_len (torch.Tensor): Sequence lengths for each batch element
+            dayIdx (torch.Tensor): Day indices for multi-day experiments
+            
+        Returns:
+            torch.Tensor: Output logits for classification [batch, time, n_classes]
+        """
+        return self.model(neuralInput, X_len, dayIdx)

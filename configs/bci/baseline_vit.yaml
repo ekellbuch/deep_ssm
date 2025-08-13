@@ -46,7 +46,7 @@ model_cfg:
     dropout: 0.35
     look_ahead: 0
     gaussianSmoothWidth: 2.0
-    max_mask_pct: 0.075
+    max_mask_pct: 0.075  # apply time masking
     num_masks: 20
     mask_token_zeros: false
     num_masks_channels: 0

@@ -76,19 +76,29 @@ def train(args):
     dataset_module = args.data_cfg.get('dataset_module', 'speech')
     datamodule = all_datasets[dataset_module](args.data_cfg)
 
-    # get module and model:
+    # Build kwargs once
+    common_kwargs = dict(**args.model_cfg.configs)
     if dataset_module in ['speech']:
-        modelito = all_models[args.model_cfg.type](**args.model_cfg.configs, nDays=datamodule.nDays)
-    else:
-        modelito = all_models[args.model_cfg.type](**args.model_cfg.configs)
+        common_kwargs['nDays'] = datamodule.nDays
 
+    # Add mixer_cfg only when using the unified model and it exists
+    if args.model_cfg.type == 'bci_bit_unified' and hasattr(args, 'mixer_cfg'):
+        common_kwargs['mixer_cfg'] = args.mixer_cfg
+
+    # Instantiate
+    model_class = all_models[args.model_cfg.type]
+    modelito = model_class(**common_kwargs)
+    
     if args.model_cfg.get("resume_ckpt_path", None):
       # Do not resume training simply load checkpoints
       weights = torch.load(args.model_cfg.resume_ckpt_path)['state_dict']
       weights = {k.replace('model.', ''): v for k, v in weights.items()}
       modelito.load_state_dict(weights)
 
+    # print model summary
+    print(modelito)
     model = all_modules[args.module_cfg.type](args, modelito)
+
 
     # set trainer:
     trainer_config = OmegaConf.to_container(args.trainer_cfg)

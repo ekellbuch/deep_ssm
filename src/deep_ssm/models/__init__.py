@@ -10,6 +10,7 @@ _all_model_paths = {
     "bci_bit_s5": ("deep_ssm.models.bci_models", "BiTS5Decoder"),
     "bci_bit_mamba2": ("deep_ssm.models.bci_models", "BiTMamba2Decoder"),
     "bci_vit_sashimi": ("deep_ssm.models.bci_models", "BiTSashimiDecoder"),
+    "bci_bit_unified": ("deep_ssm.models.bci_models", "BiTUnifiedDecoder"),
     "s5_base": ("deep_ssm.models.baseline_model", "S5Model"),
     "s4_base": ("deep_ssm.models.baseline_model", "S4Model"),
 }

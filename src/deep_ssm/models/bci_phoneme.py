@@ -17,7 +17,7 @@ from deep_ssm.models.audio_models import Sashimi
 Code adapted from Fracois Porcher: https://github.com/FrancoisPorcher/vit-pytorch
 and from bit.py in transformers_with_dietcorp
 '''
-
+from typing import Optional
        
 def pad_to_multiple(tensor, multiple, dim=1, value=0):
     """
@@ -34,16 +34,35 @@ def pad_to_multiple(tensor, multiple, dim=1, value=0):
 
 
 class FFN(nn.Module):
-    def __init__(self, dim, hidden_dim, dropout = 0.):
+    """
+    Feed-forward network
+    Args:
+        dim: (int) dimension of the input
+        hidden_dim: (int) dimension of the hidden layer
+        dropout: (float) dropout rate is pre-attention dropout
+
+    Returns:
+        Tensor: (B, N, D)
+    """
+    def __init__(self, dim, hidden_dim, dropout = 0., pre_norm=True):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, dim),
-            nn.Dropout(dropout)
-        )
+        if pre_norm:
+            self.net = nn.Sequential(
+                nn.LayerNorm(dim),
+                nn.Linear(dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, dim),
+                nn.Dropout(dropout)
+            )
+        else:
+            self.net = nn.Sequential(
+                nn.Linear(dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, dim),
+                nn.Dropout(dropout)
+            )
 
     def forward(self, x):
         return self.net(x)
@@ -59,8 +78,27 @@ def pair(t):
         t = (t, t)
     return t
 
-def get_sinusoidal_pos_emb(seq_len, dim, device=None):
+def get_sinusoidal_pos_emb(seq_len: int, dim: int, device: Optional[torch.device] = None) -> Tensor:
+    """
+    Get sinusoidal positional embeddings
+    Args:
+        seq_len: (int) length of the sequence
+        dim: (int) dimension of the embeddings
+        device: (torch.device) device to store the embeddings
+    Returns:
+        Tensor: (seq_len, dim)
+
+    # Formulation:
+    # pos_emb = sin(pos / 10000^(2i/d))
+    # pos_emb = cos(pos / 10000^(2i/d))
+    # where i is the position and d is the dimension of the embeddings.
+    # This is a sinusoidal function that is periodic with period 2pi.
+    # The embeddings are then added to the input to provide positional information.
+    
+    """
     position = torch.arange(seq_len, device=device).unsqueeze(1)
+    # exponential decay of the frequency of the sinusoidal functions
+    # exp(-2i/d * log(10000))
     div_term = torch.exp(torch.arange(0, dim, 2, device=device) * -(math.log(10000.0) / dim))
     pe = torch.zeros(seq_len, dim, device=device)
     pe[:, 0::2] = torch.sin(position * div_term)
@@ -68,6 +106,15 @@ def get_sinusoidal_pos_emb(seq_len, dim, device=None):
     return pe
 
 def create_temporal_mask(seq_len, look_ahead=0, device=None):
+    """
+    Create a temporal mask that is 1 for all positions that are within look_ahead of the current position.
+    Args:
+        seq_len: (int) length of the sequence
+        look_ahead: (int) number of steps to look ahead
+        device: (torch.device) device to store the mask
+    Returns:
+        Tensor: (1, 1, seq_len)
+    """
     i = torch.arange(seq_len, device=device).unsqueeze(1)
     j = torch.arange(seq_len, device=device).unsqueeze(0)
     mask = j <= i + look_ahead
@@ -75,7 +122,15 @@ def create_temporal_mask(seq_len, look_ahead=0, device=None):
 
 class Attention(nn.Module):
     """
-    Attenton module
+
+    Attenton module:
+    x = layer_norm(x)
+    q, k, v = W_q * x, W_k * x, W_v * x
+    dots = (q k^T) / sqrt(d_k)
+    dots = dots + rel_pos_bias
+    dots = dots.masked_fill(temporal_mask == 0, float('-inf'))
+    attn = softmax(dots)
+
     Args:
         dim: dimension of the input
         heads: number of heads
@@ -87,7 +142,12 @@ class Attention(nn.Module):
     Returns:
         Tensor: (B, N, D)
     """
-    def __init__(self, dim, heads, dim_head, dropout, max_rel_dist=200, use_relative_bias=True):
+    def __init__(self, dim: int,
+                        heads: int,
+                        dim_head: int,
+                        dropout: float,
+                        max_rel_dist: int = 200,
+                        use_relative_bias: bool = True):
         super().__init__()
         inner_dim = dim_head * heads
         project_out = not (heads == 1 and dim_head == dim)
@@ -106,7 +166,7 @@ class Attention(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-        # T5-style relative position bias
+        # T5-style relative position bias:
         self.max_rel_dist = max_rel_dist
         self.use_relative_bias = use_relative_bias
         if self.use_relative_bias:
@@ -115,10 +175,9 @@ class Attention(nn.Module):
     def forward(self, x, temporal_mask=None):
         """
         Process description mathematically:
-        q = W_q * x
-        k = W_k * x
-        v = W_v * x
-        dots = q * k.transpose(-1, -2)
+        x = layer_norm(x)
+        q, k , v = W_q * x, W_k * x, W_v * x
+        dots = (q k^T) / sqrt(d_k)
         dots = dots + rel_pos_bias
         dots = dots.masked_fill(temporal_mask == 0, float('-inf'))
         attn = softmax(dots)
@@ -128,22 +187,33 @@ class Attention(nn.Module):
         Returns:
             Tensor: (B, N, D)
         """
+
+        # Layer norm
         x = self.norm(x)
+
         # Project the input to q, k, v
         qkv = self.to_qkv(x).chunk(3, dim=-1)
+
+        # Split the q, k, v into heads
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
+        # dots = QK^T [batch, heads, seq_len, seq_len]
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale  # (b, h, n, n)
 
-        # Add relative positional bias if enabled
+        # TODO: Add relative positional bias if enabled
         if self.use_relative_bias:
             seq_len = x.size(1)
+            # Make position index grids
             i = torch.arange(seq_len, device=x.device).unsqueeze(1)
             j = torch.arange(seq_len, device=x.device).unsqueeze(0)
+            # Compute relative position indices, and clamp to max_rel_dist
             rel_pos = (i - j).clamp(-self.max_rel_dist + 1, self.max_rel_dist - 1) + self.max_rel_dist - 1
+            # Get relative position bias from embedding table
             rel_bias = self.rel_pos_bias(rel_pos).squeeze(-1).unsqueeze(0).unsqueeze(0) # shap seq_len x seq_len
+            # Add relative position bias to the QK^T product
             dots = dots + rel_bias
 
+        # Mask out positions that are not allowed to attend to:
         if temporal_mask is not None:
             dots = dots.masked_fill(temporal_mask == 0, float('-inf'))
             
@@ -156,11 +226,19 @@ class Attention(nn.Module):
         return self.to_out(out)
 
 class Transformer(nn.Module):
+    """
+    Transformer module:
+    x = layer_norm(x)
+    for attn, ffn in layers:
+        x = x + attn(x, temporal_mask=mask)
+        x = x + ffn(x)
+    x = layer_norm(x)
+    return x
+    """
     def __init__(self, dim, depth, heads, dim_head, mlp_dim_ratio, 
                  dropout=0., use_relative_bias=True):
         
         super().__init__()
-        self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
         mlp_dim = mlp_dim_ratio * dim
         for _ in range(depth):
@@ -169,6 +247,7 @@ class Transformer(nn.Module):
                           dropout=dropout, use_relative_bias=use_relative_bias),
                 FFN(dim=dim, hidden_dim=mlp_dim, dropout=dropout)
             ]))
+        self.norm = nn.LayerNorm(dim)
 
     def forward(self, x, mask=None):
         for attn, ffn in self.layers:
@@ -200,6 +279,11 @@ class BiT_Phoneme(nn.Module):
         self.dist_dict_path = dist_dict_path
         self.linderman_lab = linderman_lab
         
+        # Patch embedding:
+        # 1. Rearrange the input to be (B, C, H, W) -> (B, H*W, C*p1*p2)
+        # 2. Layer norm
+        # 3. Linear projection to dim
+        # 4. Layer norm
         self.to_patch_embedding = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', 
                     p1=patch_height, p2=patch_width),
@@ -207,7 +291,7 @@ class BiT_Phoneme(nn.Module):
             nn.Linear(self.patch_dim, dim),
             nn.LayerNorm(dim)
         )
-        
+
         # Patch embedding split from encoder
         self.to_patch = self.to_patch_embedding[0]
         self.patch_to_emb = nn.Sequential(*self.to_patch_embedding[1:])
@@ -241,7 +325,9 @@ class BiT_Phoneme(nn.Module):
                 nn.Linear(dim, dim),
                 nn.ReLU(),
             )
-            
+            # init the linear layer
+            #nn.init.xavier_uniform_(self.post_model_block[2].weight)
+            #nn.init.zeros_(self.post_model_block[2].bias)            
         else:
             
             self.post_model_block = nn.Identity()
@@ -249,34 +335,35 @@ class BiT_Phoneme(nn.Module):
     def forward(self, neuralInput, X_len, day_idx=None):
         """
         Args:
-            neuralInput: Tensor of shape (B, T, F)
-            X_len:Tensor of shape 
+            neuralInput: Tensor of shape (B, T, C)
+            X_len:Tensor of shape (B)
             dayIdx: tensor of shape (B)
         Returns:
             Tensor: (B, num_patches, dim)
         """
         
+        # Pad the input to be divisible by patch_height
         neuralInput = pad_to_multiple(neuralInput, multiple=self.patch_height)
         
         #if self.training and self.max_channels_to_mask > 0: 
         #    neuralInput, _ = self.apply_channel_mask(neuralInput)
         
+        # Permute the input to be (B, C, T)
         neuralInput = torch.permute(neuralInput, (0, 2, 1))
+        # Apply gaussian smoothing
         neuralInput = self.gaussianSmoother(neuralInput)
+        # Permute the input back to (B, T, C)
         neuralInput = torch.permute(neuralInput, (0, 2, 1))
     
-
+        # Add a channel dimension (B, 1, T, C)
         neuralInput = neuralInput.unsqueeze(1)
         
-        # add time masking
+        # TODO: add time masking
         if self.training and self.max_mask_pct > 0:
-
             x = self.to_patch(neuralInput)
             x, _ = self.apply_time_mask(x, X_len)    
             x = self.patch_to_emb(x)
-
         else:
-
             x = self.to_patch_embedding(neuralInput)
 
         # apply input level dropout. 
@@ -416,17 +503,17 @@ class BiT_Mamba_Phoneme(BiT_Phoneme):
     """BiT model that uses Mamba instead of Transformer layers"""
     
     def __init__(self, *, patch_size, dim, d_model, d_state, d_conv, expand_factor, 
-                 layer_dim, bidirectional, bidirectional_strategy, mamba_bi_new,
+                 depth,bidirectional, bidirectional_strategy, mamba_bi_new,
                  dropout, input_dropout, look_ahead, gaussianSmoothWidth, 
                  nClasses, T5_style_pos, max_mask_pct, num_masks, mask_token_zeros,
                  num_masks_channels, max_mask_channels, dist_dict_path, linderman_lab,
                  fused_add_norm=False, rms_norm=False, initialize_mixer=False,
                  # Additional transformer parameters needed for parent class
-                 depth=None, heads=None, mlp_dim_ratio=None, dim_head=None):
+                 layer_dim= None, heads=None, mlp_dim_ratio=None, dim_head=None):
         
         # Set default transformer parameters (not used but required by parent)
-        if depth is None:
-            depth = layer_dim
+        if layer_dim is None:
+            layer_dim = depth
         if heads is None:
             heads = 8
         if mlp_dim_ratio is None:
@@ -476,6 +563,10 @@ class BiT_Mamba_Phoneme(BiT_Phoneme):
         else:
             self.dim_projection = nn.Identity()
             
+        # Use same mlp_cls as in the parent class
+        mlp_dim = mlp_dim_ratio * dim
+        mlp_cls =  lambda dim : FFN(dim=dim, hidden_dim=mlp_dim, dropout=dropout, pre_norm=False)
+
         # Mamba backbone
         self.mamba_backbone = MixerModel(
             d_model=d_model,
@@ -489,20 +580,20 @@ class BiT_Mamba_Phoneme(BiT_Phoneme):
             mamba_bi_new=mamba_bi_new,
             initialize_mixer=initialize_mixer,
             bidirectional_strategy=bidirectional_strategy,
+            mlp_cls=mlp_cls,
             #residual_in_fp32=residual_in_fp32,
         )
         
+        # FFN adds a pre-norm layer before the mlp, which is duplicatd inside the mixer.
+        
         # Output projection
-        if bidirectional and bidirectional_strategy == "concatenate":
+        if self.bidirectional and self.bidirectional_strategy == "concatenate":
             d_output = d_model * 2
-        else:
-            d_output = d_model
-            
-        if d_output != dim:
             self.output_projection = nn.Linear(d_output, dim)
         else:
+            d_output = d_model
             self.output_projection = nn.Identity()
-    
+               
     def forward(self, neuralInput, X_len, day_idx=None):
         """
         Args:
@@ -545,7 +636,7 @@ class BiT_Mamba_Phoneme(BiT_Phoneme):
         # Pass through mamba backbone (no temporal mask needed for mamba)
         x = self.mamba_backbone(x)  # (B, seq_len, d_model or d_model*2)
         
-        # Project back to dim
+        # Project back to dim (this to account for bidirectional Mamba)
         x = self.output_projection(x)  # (B, seq_len, dim)
         
         # Apply post-model block

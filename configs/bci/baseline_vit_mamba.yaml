@@ -1,6 +1,6 @@
 Comment: >
   # This trains the baseline ViT with Mamba model instead of transformer
-  python run.py --config-name="baseline_vit_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.d_model=384 model_cfg.configs.layer_dim=7
+  python run.py --config-name="baseline_vit_mamba" trainer_cfg.fast_dev_run=1 model_cfg.configs.d_model=384 model_cfg.configs.depth=4
 
 
 project_name: "speech_bci"
@@ -51,17 +51,17 @@ model_cfg:
     dist_dict_path: null
     linderman_lab: true
     # Mamba-specific parameters
-    d_model: 384
-    d_state: 8
+    d_model: 384 # Mamba hidden width
+    d_state: 8  # SSM state size (try 8/16/32)
     d_conv: 2
-    expand_factor: 4
-    layer_dim: 7  # number of mamba layers (equivalent to depth in transformer)
+    expand_factor: 4 # Mamba expansion (match mlp_dim_ratio)
+    depth: 7  # number of mamba layers (equivalent to depth in transformer)
     bidirectional: false
     bidirectional_strategy: "add"
     mamba_bi_new: true
     # Additional transformer parameters (defaults for parent class)
     heads: 1 # ignore 
-    mlp_dim_ratio: 4 # ignore 
+    mlp_dim_ratio: 4  
     dim_head: 64 # ignore
     
 
