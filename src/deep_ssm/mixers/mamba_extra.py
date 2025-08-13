@@ -5,24 +5,17 @@ from functools import partial
 import math
 import torch.nn.functional as F
 from einops import rearrange, repeat
+import logging 
 
-try:
-  from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
-except:
-  from deep_ssm.mixers.utils_mamba import causal_conv1d_ref as causal_conv1d_fn
-  from deep_ssm.mixers.utils_mamba import causal_conv1d_update_ref as causal_conv1d_update
 
 try:
   from mamba_ssm.modules.block import Block
-  from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
-  from mamba_ssm.ops.triton.selective_state_update import selective_state_update
-  from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn
+  from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn
 except:
-  from deep_ssm.mixers.utils_mamba import selective_scan_ref as selective_scan_fn
+  logging.warning("Not using optimized Block from mamba_ssm. Running time might be slow")
   from deep_ssm.mixers.utils_mamba import Block_ref as Block
   from deep_ssm.mixers.utils_mamba import RMSNorm_ref as RMSNorm
   from deep_ssm.mixers.utils_mamba import layer_norm_ref as layer_norm_fn
-  from deep_ssm.mixers.utils_mamba import rms_norm_ref as rms_norm_fn
   selective_state_update = None
 
 from typing import Optional
@@ -44,7 +37,8 @@ def create_block(
   mamba_bi_new=False,
   bidirectional_strategy=None,
   d_out=None,
-  mamba2=False
+  mamba2=False,
+  mlp_cls=None,
 ):
   if mamba_bi_new:
     model = MambaWrapper
@@ -67,7 +61,8 @@ def create_block(
     nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon
   )
   # TODO: check if mlp_cls was in previous version
-  mlp_cls = nn.Identity
+  if mlp_cls is None:
+    mlp_cls = nn.Identity
 
   block = Block(
     d_model,
@@ -183,6 +178,28 @@ def _init_weights(
 
 
 class MixerModel(nn.Module):
+    """
+    MixerModel:
+    r = None
+    for layer in layers:    
+        x = norm(x + r)
+        x = mixer(x)
+        r = x + r
+        
+        # MLP branch
+        x = norm2(x + r)
+        x = mlp(x)
+    r = x + r
+    x = norm_f(x)
+
+    where norm_f is layer_norm
+
+    Differences from naive implementation:
+    - added bidirectional strategy
+    - added mlp_cls
+    - added mamba2
+
+    """
     def __init__(
         self,
         d_model,
@@ -199,6 +216,7 @@ class MixerModel(nn.Module):
         initialize_mixer=False,
         bidirectional_strategy=None,
         mamba2=False,
+        mlp_cls=None,
     ):
         super().__init__()
 
@@ -237,7 +255,8 @@ class MixerModel(nn.Module):
                     rms_norm=rms_norm,
                     bidirectional_strategy=bidirectional_strategy,
                     d_out=d_outputs[i],
-                    mamba2=mamba2
+                    mamba2=mamba2,
+                    mlp_cls=mlp_cls,
                 )
                 for i in range(n_layer)
             ]
