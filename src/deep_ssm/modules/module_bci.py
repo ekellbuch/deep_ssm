@@ -56,94 +56,120 @@ class BCIDecoder(L.LightningModule):
 
 
   def configure_optimizers(self):
-    if self.args.optimizer_cfg.type == "adam":
-      optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
-    elif self.args.optimizer_cfg.type == "adamw":
-      optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
-    else:
-      raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
-
-    # Define Warm-Up Scheduler
-    warmup_epochs = self.args.scheduler_cfg.get("warmup_epochs", 0)
-
-    def warmup_lambda(epoch):
-      # Warm-up function: linearly increase LR for first 'warmup_epochs' epochs
-      if epoch < warmup_epochs:
-        return float(epoch) / float(warmup_epochs)
+      # ---------- OPTIMIZER ----------
+      if self.args.optimizer_cfg.type == "adam":
+          optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
+      elif self.args.optimizer_cfg.type == "adamw":
+          optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
       else:
-        return 1.0  # After warm-up, learning rate stays constant
+          raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
 
-    # Warm-Up Scheduler
-    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
-                                                         lr_lambda=warmup_lambda)
+      # ---------- MAIN SCHEDULER ----------
+      scheduler_type = self.args.scheduler_cfg.type
+      scheduler_configs = dict(self.args.scheduler_cfg.configs)  # copy to mutate safely
+      interval = self.args.scheduler_cfg.get("interval", "epoch")
+      frequency = self.args.scheduler_cfg.get("frequency", 1)
+      monitor = self.args.scheduler_cfg.get("monitor", "ctc_loss_validation")
 
-    # Main scheduler
-    scheduler_type = self.args.scheduler_cfg.type
-    scheduler_configs = self.args.scheduler_cfg.configs
+      # We’ll create the "main" scheduler first; warmup will wrap it via SequentialLR if requested.
+      def make_main_scheduler():
+          if scheduler_type == "linear":
+              return torch.optim.lr_scheduler.LinearLR(optimizer, **scheduler_configs)
+          elif scheduler_type == "stepLR":
+              return torch.optim.lr_scheduler.StepLR(optimizer, **scheduler_configs)
+          elif scheduler_type == "cosine_annealing":
+              # If interval=="step" and T_max not provided, compute from remaining steps after warmup.
+              return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **scheduler_configs)
+          elif scheduler_type == "reduce_on_plateau":
+              return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **scheduler_configs)
+          elif scheduler_type == "cosine_annealing_warm_restarts":
+              return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **scheduler_configs)
+          elif scheduler_type == "cyclic_lr":
+              return torch.optim.lr_scheduler.CyclicLR(optimizer, **scheduler_configs)
+          elif scheduler_type == "multistep":
+              return torch.optim.lr_scheduler.MultiStepLR(optimizer, **scheduler_configs)
+          else:
+              raise NotImplementedError(f"Scheduler {scheduler_type} not implemented")
 
-    if scheduler_type == "linear":
-      main_scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer,
-        **scheduler_configs
-      )
-    elif scheduler_type == "stepLR":
-      main_scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer,
-        **scheduler_configs,
-      )
-    elif scheduler_type == "cosine_annealing":
-      main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        **scheduler_configs,
-      )
-    elif scheduler_type == 'reduce_on_plateau':
-      main_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        **scheduler_configs,
-      )
-    elif scheduler_type == 'cosine_annealing_warm_restarts':
-      main_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        **scheduler_configs,
-      )
-    elif scheduler_type == 'cyclic_lr':
-      main_scheduler = torch.optim.lr_scheduler.CyclicLR(
-        optimizer,
-        **scheduler_configs,
-      )
-    elif scheduler_type == 'multistep':
-      main_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer,
-        **scheduler_configs,
-      )
-    else:
-      raise NotImplementedError(f"Scheduler {scheduler_type} not implemented")
+      # ---------- WARMUP (epoch- or step-based) ----------
+      # Choose ONE of:
+      #  - warmup_epochs (int)       -> epoch-based warmup (keeps your current behavior)
+      #  - warmup_steps (int)        -> step-based warmup
+      #  - warmup_frac (0..1)        -> step-based warmup as a fraction of total steps
+      warmup_epochs = self.args.scheduler_cfg.get("warmup_epochs", 0)
+      warmup_steps  = self.args.scheduler_cfg.get("warmup_steps", 0)
+      warmup_frac   = self.args.scheduler_cfg.get("warmup_frac", 0.0)
 
-    # Copy all scheduler except 'configs' and 'type'
-    scheduler_cfg_copy = {k: v for k, v in self.args.scheduler_cfg.items() if k not in ['configs', 'type']}
+      # Compute total/remaining steps if we are step-based
+      total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+      if total_steps is None or total_steps == 0:
+          # fallback (e.g., fast_dev_run); doesn’t need to be exact
+          total_steps = self.trainer.max_epochs * max(1, getattr(self.trainer, "num_training_batches", 1))
 
-    # Wrap with SequentialLR if warmup is used
-    if warmup_epochs > 0:
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
-            optimizer,
-            schedulers=[warmup_scheduler, main_scheduler],
-            milestones=[warmup_epochs],
-        )
-    else:
-        scheduler = main_scheduler
+      if warmup_steps == 0 and warmup_frac > 0:
+          warmup_steps = max(1, int(warmup_frac * total_steps))
 
-    # Lightning expects these fields
-    scheduler_dict = {
-        "scheduler": scheduler,
-        "interval": self.args.scheduler_cfg.get("interval", "epoch"),
-        "frequency": self.args.scheduler_cfg.get("frequency", 1),
-    }
+      use_step_warmup = (interval == "step") and (warmup_steps > 0)
+      use_epoch_warmup = (interval == "epoch") and (warmup_epochs > 0)
 
-    # Only add 'monitor' if needed
-    if scheduler_type == "reduce_on_plateau":
-        scheduler_dict["monitor"] = self.args.scheduler_cfg.get("monitor", "ctc_loss_validation")
+      if use_step_warmup:
+          # LinearLR truly ramps each step. Start small but non-zero.
+          scheduler_warm = torch.optim.lr_scheduler.LinearLR(
+              optimizer,
+              start_factor=1e-3,  # start at 0.1% of base LR; make 1e-2 if ramp is too slow
+              end_factor=1.0,
+              total_iters=warmup_steps,
+          )
 
-    return [optimizer], [scheduler_dict]
+          # If cosine_annealing and T_max not provided, set it to the remaining steps
+          if scheduler_type == "cosine_annealing" and "T_max" not in scheduler_configs:
+              scheduler_configs["T_max"] = max(1, total_steps - warmup_steps)
+          main_scheduler = make_main_scheduler()
+
+          scheduler = torch.optim.lr_scheduler.SequentialLR(
+              optimizer,
+              schedulers=[scheduler_warm, main_scheduler],
+              milestones=[warmup_steps],
+          )
+          milestones_for_return = warmup_steps  # just for clarity below
+
+      elif use_epoch_warmup:
+          # Epoch-based warmup: scale LR linearly over first warmup_epochs
+          # Start at a tiny factor on epoch 0 to avoid zero LR in the first epoch.
+          def warmup_lambda(epoch):
+              if epoch < warmup_epochs:
+                  # from ~0 to 1 over warmup_epochs
+                  return max(1e-3, float(epoch + 1) / float(warmup_epochs))
+              return 1.0
+
+          scheduler_warm = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warmup_lambda)
+
+          main_scheduler = make_main_scheduler()
+          scheduler = torch.optim.lr_scheduler.SequentialLR(
+              optimizer,
+              schedulers=[scheduler_warm, main_scheduler],
+              milestones=[warmup_epochs],
+          )
+          milestones_for_return = warmup_epochs
+      else:
+          # No warmup; just the main scheduler
+          # If cosine_annealing with step interval and no T_max, set it now.
+          if interval == "step" and scheduler_type == "cosine_annealing" and "T_max" not in scheduler_configs:
+              scheduler_configs["T_max"] = total_steps
+          scheduler = make_main_scheduler()
+          milestones_for_return = None
+
+      # ---------- RETURN FOR LIGHTNING ----------
+      scheduler_dict = {
+          "scheduler": scheduler,
+          "interval": interval,        # "step" for step-wise schedules, "epoch" otherwise
+          "frequency": frequency,
+      }
+      if scheduler_type == "reduce_on_plateau":
+          scheduler_dict["monitor"] = monitor
+
+      return [optimizer], [scheduler_dict]
+
   
 
 class BCIEncoder(BCIDecoder):
