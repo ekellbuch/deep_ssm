@@ -294,7 +294,8 @@ class BiT_Phoneme(nn.Module):
 
         # Patch embedding split from encoder
         self.to_patch = self.to_patch_embedding[0]
-        self.patch_to_emb = nn.Sequential(*self.to_patch_embedding[1:])
+        # Create a view of the existing parameters to avoid duplication
+        self.patch_to_emb = self.to_patch_embedding[1:]
 
                 
         self.gaussianSmoother = GaussianSmoothing(
@@ -510,7 +511,7 @@ class BiT_Mamba_Phoneme(BiT_Phoneme):
                  fused_add_norm=False, rms_norm=False, initialize_mixer=False,
                  # Additional transformer parameters needed for parent class
                  layer_dim= None, heads=None, mlp_dim_ratio=None, dim_head=None):
-        
+
         # Set default transformer parameters (not used but required by parent)
         if layer_dim is None:
             layer_dim = depth

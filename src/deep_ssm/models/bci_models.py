@@ -1178,7 +1178,7 @@ class BiTUnifiedDecoder(nn.Module):
                 dim=dim,
                 depth=depth,
                 # Attention-specific parameters
-                heads=mixer_configs.get("num_heads", 6),              # Number of attention heads
+                heads=mixer_configs.get("heads", 6),              # Number of attention heads
                 mlp_dim_ratio=mixer_configs.get("mlp_dim_ratio", 4),  # MLP expansion ratio
                 dim_head=mixer_configs.get("dim_head", 64),           # Dimension per attention head
                 dropout=dropout,
@@ -1208,7 +1208,7 @@ class BiTUnifiedDecoder(nn.Module):
                 d_state=mixer_configs.get("d_state", 8),                               # State dimensionality
                 d_conv=mixer_configs.get("d_conv", 2),                                 # Convolution kernel size
                 expand_factor=mixer_configs.get("expand_factor", 4),                   # Inner dimension expansion
-                layer_dim=depth,                                                       # Number of Mamba layers
+                depth=depth,                                                           # Number of Mamba layers
                 bidirectional=mixer_configs.get("bidirectional", False),              # Enable bidirectional processing
                 bidirectional_strategy=mixer_configs.get("bidirectional_strategy", "add"),  # How to combine directions
                 mamba_bi_new=mixer_configs.get("mamba_bi_new", True),                  # Use new bidirectional implementation
@@ -1225,6 +1225,10 @@ class BiTUnifiedDecoder(nn.Module):
                 max_mask_channels=0,
                 dist_dict_path=None,
                 linderman_lab=linderman_lab,
+                # Add transformer params for compatibility (same as BiTMambaDecoder)
+                heads = mixer_configs.get("heads", 1),
+                mlp_dim_ratio=mixer_configs.get("mlp_dim_ratio", 4),
+                #dim_head=64,
             )
             
         elif self.mixer_type == "mamba2":
@@ -1313,9 +1317,14 @@ class BiTUnifiedDecoder(nn.Module):
             raise ValueError(f"Unsupported mixer type: {self.mixer_type}")
         
         # === COMPATIBILITY LAYER ===
-        # Create alias for backward compatibility with existing code
-        # that expects a 'bit_model' attribute instead of 'model'
-        self.bit_model = self.model
+        # Note: bit_model access is handled via property to avoid duplicate model instances
+
+    @property
+    def bit_model(self):
+        """Property to access the model for backward compatibility."""
+        return self.model
+
+    # The forward method only uses self.model
 
     def forward(self, neuralInput, X_len, dayIdx):
         """
