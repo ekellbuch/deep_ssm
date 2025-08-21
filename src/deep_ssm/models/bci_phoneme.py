@@ -13,11 +13,12 @@ from deep_ssm.mixers.mamba_extra import MixerModel
 from deep_ssm.mixers.s5 import S5Model
 from deep_ssm.mixers.mamba2_simple import Mamba2Simple
 from deep_ssm.models.audio_models import Sashimi
+from deep_ssm.mixers.s5_fjax.ssm import S5
 '''
 Code adapted from Fracois Porcher: https://github.com/FrancoisPorcher/vit-pytorch
 and from bit.py in transformers_with_dietcorp
 '''
-from typing import Optional
+from typing import Optional, List, Tuple
        
 def pad_to_multiple(tensor, multiple, dim=1, value=0):
     """
@@ -727,25 +728,39 @@ class BiT_S5_Phoneme(BiT_Phoneme):
         else:
             self.dim_projection = nn.Identity()
             
-        # S5 backbone
-        self.s5_backbone = S5Model(
-            d_model=d_model,
-            ssm_size=ssm_size,
-            n_layers=n_layers,
-            blocks=blocks,
-            bidirectional=bidirectional,
-            conj_sym=conj_sym,
-            clip_eigs=clip_eigs,
-            step_rescale=step_rescale,
-            dropout=dropout,
-            activation=activation,
-            prenorm=prenorm,
-            batchnorm=batchnorm,
-            bn_momentum=bn_momentum,
-            bandlimit=bandlimit,
-            add_residual=add_residual,
-            C_init=C_init,
-        )
+        # Create S5 layers with integrated MLP (similar to Transformer layers)
+        self.s5_layers = nn.ModuleList()
+        for _ in range(n_layers):
+            # S5 layer
+            s5_layer = S5(
+                d_model=d_model,
+                ssm_size=ssm_size,
+                blocks=blocks,
+                dt_min=0.001,
+                dt_max=0.1,
+                bidirectional=bidirectional,
+                C_init=C_init,
+                conj_sym=conj_sym,
+                clip_eigs=clip_eigs,
+                step_rescale=step_rescale,
+                discretization="bilinear",
+                bandlimit=bandlimit,
+            )
+            
+            # MLP layer (similar to other mixer types)
+            mlp_dim = mlp_dim_ratio * d_model
+            mlp_layer = FFN(dim=d_model, hidden_dim=mlp_dim, dropout=dropout, pre_norm=False)
+            
+            # Layer normalization
+            norm1 = nn.LayerNorm(d_model, eps=norm_epsilon)
+            norm2 = nn.LayerNorm(d_model, eps=norm_epsilon)
+            
+            self.s5_layers.append(nn.ModuleDict({
+                'norm1': norm1,
+                's5': s5_layer,
+                'norm2': norm2,
+                'mlp': mlp_layer,
+            }))
         
         # Final normalization
         if rms_norm:
@@ -802,8 +817,24 @@ class BiT_S5_Phoneme(BiT_Phoneme):
         # Project to S5 dimension
         x = self.dim_projection(x)  # (B, seq_len, d_model)
         
-        # Pass through S5 backbone (no temporal mask needed for S5)
-        x, _ = self.s5_backbone(x)  # (B, seq_len, d_model)
+        # Pass through S5 layers (similar to Transformer layers)
+        states = []
+        for layer in self.s5_layers:
+            # Initialize state for each S5 layer
+            states.append(layer['s5'].initial_state(x.shape[0]))
+        
+        for i, layer in enumerate(self.s5_layers):
+            # Residual connection around S5 layer
+            residual = x
+            x = layer['norm1'](x)
+            x, states[i] = layer['s5'](x, states[i])
+            x = x + residual
+            
+            # Residual connection around MLP layer
+            residual = x
+            x = layer['norm2'](x)
+            x = layer['mlp'](x)
+            x = x + residual
         
         # Apply final normalization
         x = self.norm_f(x)
@@ -879,8 +910,11 @@ class BiT_Mamba2_Phoneme(BiT_Phoneme):
         else:
             self.dim_projection = nn.Identity()
             
+        # Use same mlp_cls as in the parent class
+        mlp_dim = mlp_dim_ratio * d_model
+        mlp_cls = lambda dim: FFN(dim=dim, hidden_dim=mlp_dim, dropout=dropout, pre_norm=False)
+
         # Mamba2 backbone
-        from deep_ssm.mixers.mamba_extra import MixerModel
         self.mamba2_backbone = MixerModel(
             d_model=d_model,
             d_state=d_state,
@@ -889,6 +923,7 @@ class BiT_Mamba2_Phoneme(BiT_Phoneme):
             n_layer=layer_dim,
             mamba_bi_new=True,
             mamba2=True,
+            mlp_cls=mlp_cls,
         )
         
         # Output projection
