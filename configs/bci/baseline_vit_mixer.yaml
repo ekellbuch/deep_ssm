@@ -1,0 +1,219 @@
+Comment: >
+  # This trains the baseline ViT with configurable mixer layers (mamba, attention, s5, mamba2)
+  # Examples:
+  python scripts/run.py --config-name="baseline_vit_mixer" trainer_cfg.fast_dev_run=1 mixer_cfg.type=mamba
+  python scripts/run.py --config-name="baseline_vit_mixer" trainer_cfg.fast_dev_run=1 mixer_cfg.type=attention
+  python scripts/run.py --config-name="baseline_vit_mixer" trainer_cfg.fast_dev_run=1 mixer_cfg.type=s5
+  python scripts/run.py --config-name="baseline_vit_mixer" trainer_cfg.fast_dev_run=1 mixer_cfg.type=mamba2
+
+# ============================================================================
+# EXPERIMENT CONFIGURATION
+# ============================================================================
+
+project_name: "speech_bci"        # WandB project name for logging and tracking
+experiment_name: "baseline_vit_${mixer_cfg.type}"  # Experiment identifier for mixer variant
+
+seed: 0                           # Random seed for reproducible results
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+
+data_cfg:
+  batchSize: 64                   # Number of samples per training batch
+  num_workers: 0                  # Number of parallel data loading workers (0=main thread)
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc_both"  # Path to BCI dataset
+  train_split: 1.0                # Fraction of training data to use (1.0 = 100%)
+  
+  # Data augmentation transformations:
+  whiteNoiseSD: 0.2               # Standard deviation of white noise to add to signals
+  constantOffsetSD: 0.05          # Standard deviation of constant offset applied to channels
+  
+  # Masking augmentation parameters:
+  mask_value: 0.0                 # Value to use for masked regions (0.0 = zero out)
+  speckled_mask_p: 0              # Probability of speckled/random masking (disabled)
+  feature_mask_p: 0               # Probability of feature/channel masking (disabled)
+  temporal_mask_n: 0              # Number of temporal mask regions (disabled)
+  temporal_mask_len: 0            # Length of each temporal mask (disabled)
+  renormalize_masking: false      # Whether to renormalize after masking
+  #ventral_6v_only: false         # Use only ventral 6v recording region (commented out)
+
+# ============================================================================
+# MODULE CONFIGURATION
+# ============================================================================
+
+module_cfg:
+  type: "bci_encoder"             # Type of Lightning module to use for training
+
+# ============================================================================
+# MODEL CONFIGURATION (UNIFIED MIXER)
+# ============================================================================
+
+model_cfg:
+  type: "bci_bit_unified"         # Unified BiT decoder with configurable mixer layers
+  resume_ckpt_path:               # Path to checkpoint for loading weights (empty = train from scratch)
+  configs:
+    n_classes: 40                 # Number of output classes (phonemes/characters to predict)
+    
+    # Neural signal tokenization parameters:
+    patch_size: [5, 256]          # Patch dimensions [height, width] for neural signal patches  
+    dim: 384                      # Model embedding dimension
+    depth: 7                      # Number of mixer layers in the model
+    T5_style_pos: false           # Disable T5-style positional embeddings (Mamba doesn't need them)
+    
+    # Regularization and training parameters:
+    input_dropout: 0.2            # Dropout rate applied to input embeddings
+    dropout: 0.35                 # Dropout rate for internal layers
+    look_ahead: 0                 # Number of future timesteps visible (0 = causal)
+    gaussianSmoothWidth: 2.0      # Width of Gaussian smoothing kernel for input signals
+    
+    # Training masking parameters:
+    max_mask_pct: 0.075           # Maximum percentage of patches to mask during training
+    num_masks: 20                 # Number of separate masking regions to apply
+    mask_token_zeros: false       # Whether masked tokens are zeros (false = learnable embeddings)
+    
+    # Architecture modifications:
+    linderman_lab: true           # Enable Linderman lab specific architectural modifications
+    
+# ============================================================================
+# TOKENIZER CONFIGURATION
+# ============================================================================
+
+tokenizer_cfg:
+  type: "bci_tokenizer"           # Type of tokenizer for processing BCI data
+  configs:
+    n_classes: 40                 # Number of classes the tokenizer should handle
+    n_channels: 1                 # Number of input channels (1 = single stream)
+    n_samples: 256                # Number of samples per processing window
+    sample_rate: 16000            # Sampling rate of the neural signals (Hz)
+
+# ============================================================================
+# MIXER CONFIGURATION (CONFIGURABLE MIXER LAYERS)
+# ============================================================================
+
+mixer_cfg:
+  type: "mamba"                   # Type of mixer layer: mamba, attention, s5, mamba2
+  configs: ${oc.select:${mixer_cfg.type}_config,{}}  # Dynamically select config based on type
+
+# Mamba mixer configuration
+mamba_config:
+  d_model: 384                    # Model dimension
+  d_state: 8                      # Hidden state dimensionality for state space model
+  d_conv: 2                       # Convolution kernel size for input processing
+  expand_factor: 4                # Inner dimension expansion factor (4x d_model)
+  bidirectional: false            # Whether to process sequences bidirectionally
+  bidirectional_strategy: "add"   # How to combine forward/backward passes ("add" or "concat")
+  mamba_bi_new: true              # Use new implementation of bidirectional Mamba
+  mlp_dim_ratio: 4                # MLP dimension ratio (1 = no expansion)
+
+# Attention mixer configuration
+attention_config:
+  d_model: 384                    # Model dimension
+  heads: 6                        # Number of attention heads for multi-head attention
+  dim_head: 64                    # Dimension of each attention head
+  mlp_dim_ratio: 4                # MLP dimension ratio (1 = no expansion)
+
+# S5 mixer configuration
+s5_config:
+  d_model: 384                    # Model dimension
+  mlp_dim_ratio: 4                # MLP dimension ratio (1 = no expansion)
+  ssm_cfg:
+    measure: "legs"               # S5 measure type
+    rank: 2                       # S5 rank
+    dt_min: 0.001                 # Minimum dt
+    dt_max: 0.1                   # Maximum dt
+    dt_init: "random"             # dt initialization
+    dt_scale: 1.0                 # dt scaling
+    dt_train: true                # Whether to train dt
+    A_init: "normal"              # A initialization
+    A_real_init: 0.5              # Real part of A initialization
+    A_imag_init: 0.5              # Imaginary part of A initialization
+    A_train: true                 # Whether to train A
+    B_init: "normal"              # B initialization
+    B_train: true                 # Whether to train B
+    C_init: "normal"              # C initialization
+    C_train: true                 # Whether to train C
+    discretization: "zoh"         # Discretization method
+    step_rescale: 1.0             # Step rescaling
+
+# Mamba2 mixer configuration
+mamba2_config:
+  d_model: 384                    # Model dimension
+  d_state: 8                      # Hidden state dimensionality for state space model
+  d_conv: 2                       # Convolution kernel size for input processing
+  expand_factor: 4                # Inner dimension expansion factor (4x d_model)
+  bidirectional: false            # Whether to process sequences bidirectionally
+  bidirectional_strategy: "add"   # How to combine forward/backward passes ("add" or "concat")
+  mamba_bi_new: true              # Use new implementation of bidirectional Mamba
+  mlp_dim_ratio: 4                # MLP dimension ratio (1 = no expansion)
+
+# ============================================================================
+# OPTIMIZER CONFIGURATION
+# ============================================================================
+
+optimizer_cfg:
+  type: "adamw"                   # AdamW optimizer with weight decay
+  configs:
+    lr: 0.001                     # Initial learning rate
+    betas: [0.9, 0.999]          # Adam momentum parameters [beta1, beta2]
+    weight_decay: 1e-5            # L2 weight decay for regularization
+
+# ============================================================================
+# LEARNING RATE SCHEDULER CONFIGURATION
+# ============================================================================
+
+scheduler_cfg:
+  type: "cosine_annealing"  # Main scheduler: cosine annealing with warmup
+  interval: "epoch"         # Step-wise updates for cosine annealing
+  frequency: 1
+  configs:
+    T_max: ${trainer_cfg.max_epochs}           # Total steps for cosine annealing (longer training)
+    eta_min: 1e-6          # Minimum LR
+  warmup_epochs: 1       # Linear warmup for first 1000 steps (more gradual)
+
+# ============================================================================
+# CALLBACK CONFIGURATION
+# ============================================================================
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+  grad_norm:
+    type:
+  early_stopping:
+    monitor: "ctc_loss_train"
+    min_delta: 1e-4
+    patience: 30
+    verbose: false
+    mode: "min"
+  validation_lr_reduction:  # Custom callback for LR reduction on validation loss increase
+    monitor: "ctc_loss_validation"
+    patience: 8             # Reduced patience for faster LR reduction
+    factor: 0.5             # Reduce LR by half
+    min_lr: 1e-7            # Minimum LR
+    verbose: true           # Print messages when LR is reduced
+  masking_scheduler: false
+  eigen_track: false
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_epochs: 600
+  log_every_n_steps: 100
+  gradient_clip_val: 0
+  gradient_clip_algorithm: "norm"
+  limit_test_batches: 
+  limit_train_batches: 
+  limit_val_batches: 
+  
+
+checkpoint_cfg:
+  every_n_train_steps: 1000
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}
