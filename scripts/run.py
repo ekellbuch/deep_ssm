@@ -124,6 +124,8 @@ def train(args):
         local_callbacks.append(all_callbacks["cer"])
       if args.callbacks.get("freeze_params", None):
         local_callbacks.append(all_callbacks["freeze_params"](**args.callbacks.freeze_params))
+      if args.callbacks.get("validation_lr_reduction", None):
+        local_callbacks.append(all_callbacks["validation_lr_reduction"](**args.callbacks.validation_lr_reduction))
 
     trainer = L.Trainer(**trainer_config, callbacks=local_callbacks)
 

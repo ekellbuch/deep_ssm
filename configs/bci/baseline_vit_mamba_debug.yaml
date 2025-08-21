@@ -1,0 +1,127 @@
+Comment: >
+  # This trains the baseline ViT with Mamba model instead of transformer
+  # Modified to address overfitting with linear warmup and validation-based LR reduction
+  python run.py --config-name="baseline_vit_mamba_debug" trainer_cfg.fast_dev_run=1 model_cfg.configs.d_model=384 model_cfg.configs.depth=4
+
+
+project_name: "speech_bci"
+experiment_name: "baseline_vit_mamba"
+
+seed: 0
+
+data_cfg:
+  batchSize: 64
+  num_workers: 0
+  datasetPath: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/competitionData/ptDecoder_ctc_both"
+  train_split: 0.9    # % of training data assigned to train_loader 1=100%
+  # transformations:
+  whiteNoiseSD: 0.2
+  constantOffsetSD: 0.05
+  # masking
+  mask_value: 0.0
+  speckled_mask_p: 0
+  feature_mask_p: 0
+  temporal_mask_n: 0
+  temporal_mask_len: 0
+  renormalize_masking: false
+  #ventral_6v_only: false
+
+module_cfg:
+  type: "bci_encoder"
+
+model_cfg:
+  type: "bci_bit_mamba"
+  resume_ckpt_path:   # load weights from ckpt but not parameters.
+  configs:
+    # mixer parameters:
+    patch_size: [5, 256] # ignore
+    # other
+    n_classes: 40 #nClasses
+    # BiT-specific parameters (for patch embedding)
+    dim: 384
+    dropout: 0.35
+    input_dropout: 0.2
+    look_ahead: 0
+    gaussianSmoothWidth: 2.0
+    T5_style_pos: false
+    max_mask_pct: 0.075
+    num_masks: 20
+    mask_token_zeros: false
+    num_masks_channels: 0
+    max_mask_channels: 0
+    dist_dict_path: null
+    linderman_lab: true
+    # Mamba-specific parameters
+    d_model: 384 # Mamba hidden width
+    d_state: 8  # SSM state size (try 8/16/32)
+    d_conv: 2
+    expand_factor: 4 # Mamba expansion (match mlp_dim_ratio)
+    depth: 7  # number of mamba layers (equivalent to depth in transformer)
+    bidirectional: false
+    bidirectional_strategy: "add"
+    mamba_bi_new: true
+    # Additional transformer parameters (defaults for parent class)
+    heads: 1 # ignore 
+    mlp_dim_ratio: 4  
+    dim_head: 64 # ignore
+    
+
+optimizer_cfg:
+  type: "adamw"
+  configs:
+    lr: 0.001 # lrStart
+    betas: [0.9, 0.999]
+    weight_decay: 1e-5  #l2_decay
+
+scheduler_cfg:
+  type: "cosine_annealing"  # Main scheduler: cosine annealing with warmup
+  interval: "epoch"         # Step-wise updates for cosine annealing
+  frequency: 1
+  configs:
+    T_max: ${trainer_cfg.max_epochs}           # Total steps for cosine annealing (longer training)
+    eta_min: 1e-6          # Minimum LR
+  warmup_epochs: 1       # Linear warmup for first 1000 steps (more gradual)
+
+callbacks:
+  lr_monitor:
+    logging_interval: "step"
+  grad_norm:
+    type:
+  early_stopping:
+    monitor: "ctc_loss_validation"
+    min_delta: 1e-4
+    patience: 20            # Increased patience to allow for LR reductions
+    verbose: false
+    mode: "min"
+  validation_lr_reduction:  # Custom callback for LR reduction on validation loss increase
+    monitor: "ctc_loss_validation"
+    patience: 8             # Reduced patience for faster LR reduction
+    factor: 0.5             # Reduce LR by half
+    min_lr: 1e-7            # Minimum LR
+    verbose: true           # Print messages when LR is reduced
+  masking_scheduler: false
+  eigen_track: false
+
+trainer_cfg:
+  fast_dev_run: false
+  logger: "wandb"
+  accelerator: "auto"
+  max_epochs: 600
+  log_every_n_steps: 100
+  gradient_clip_val: 0
+  gradient_clip_algorithm: "norm"
+  limit_test_batches: 
+  limit_train_batches: 
+  limit_val_batches: 
+  
+
+checkpoint_cfg:
+  every_n_train_steps: 1000
+
+
+eval_cfg:
+  eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+
+hydra:
+  run:
+    dir: ./outputs/${now:%y-%m-%d}/${now:%H-%M-%S}

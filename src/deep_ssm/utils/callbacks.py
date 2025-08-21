@@ -272,20 +272,83 @@ class FreezeParamsCallback(Callback):
         self.freeze_epochs = freeze_epochs
         self.params_to_freeze = params_to_freeze
 
-    def on_train_start(self, trainer, pl_module):
-        # Freeze all D parameters
-        for name, param in pl_module.named_parameters():
-            if any(param_name in name for param_name in self.params_to_freeze):
-                param.requires_grad = False
-                print(f"[FreezeParamsCallback] Freezing {name}")
-
     def on_train_epoch_start(self, trainer, pl_module):
-        # Unfreeze D after `freeze_epochs`
-        if trainer.current_epoch == self.freeze_epochs:
-            for name, param in pl_module.named_parameters():
-                if any(param_name in name for param_name in self.params_to_freeze):
-                    param.requires_grad = True
-                    print(f"[FreezeParamsCallback] Unfreezing {name}")
+        epoch = trainer.current_epoch
+        if epoch < self.freeze_epochs:
+            # Freeze specified parameters
+            for name, param in pl_module.model.named_parameters():
+                if any(freeze_param in name for freeze_param in self.params_to_freeze):
+                    param.requires_grad = False
+        else:
+            # Unfreeze all parameters
+            for param in pl_module.model.parameters():
+                param.requires_grad = True
+
+
+class ValidationLRReductionCallback(Callback):
+    """
+    Custom callback to reduce learning rate by half when validation loss increases
+    for a specified number of consecutive epochs.
+    """
+    def __init__(self, monitor="ctc_loss_validation", patience=10, factor=0.5, min_lr=1e-8, verbose=True):
+        """
+        Args:
+            monitor: Metric to monitor for LR reduction
+            patience: Number of epochs to wait before reducing LR when loss increases
+            factor: Factor by which to multiply the learning rate (0.5 = halve it)
+            min_lr: Minimum learning rate below which we won't reduce further
+            verbose: Whether to print messages when LR is reduced
+        """
+        self.monitor = monitor
+        self.patience = patience
+        self.factor = factor
+        self.min_lr = min_lr
+        self.verbose = verbose
+        
+        # State tracking
+        self.best_loss = float('inf')
+        self.epochs_without_improvement = 0
+        self.last_lr_reduction_epoch = -1
+        
+    def on_validation_epoch_end(self, trainer, pl_module):
+        """Called at the end of each validation epoch"""
+        current_loss = trainer.callback_metrics.get(self.monitor, None)
+        
+        if current_loss is None:
+            return
+            
+        # Check if loss improved
+        if current_loss < self.best_loss:
+            self.best_loss = current_loss
+            self.epochs_without_improvement = 0
+        else:
+            self.epochs_without_improvement += 1
+            
+        # Check if we should reduce learning rate
+        if (self.epochs_without_improvement >= self.patience and 
+            trainer.current_epoch > self.last_lr_reduction_epoch):
+            
+            # Get current learning rate
+            current_lr = trainer.optimizers[0].param_groups[0]['lr']
+            
+            # Calculate new learning rate
+            new_lr = max(current_lr * self.factor, self.min_lr)
+            
+            # Only reduce if we're not already at minimum
+            if new_lr < current_lr:
+                # Update learning rate for all parameter groups
+                for param_group in trainer.optimizers[0].param_groups:
+                    param_group['lr'] = new_lr
+                
+                self.last_lr_reduction_epoch = trainer.current_epoch
+                self.epochs_without_improvement = 0  # Reset counter
+                
+                if self.verbose:
+                    print(f"Epoch {trainer.current_epoch}: Reducing learning rate from {current_lr:.2e} to {new_lr:.2e}")
+                
+                # Log the learning rate change
+                pl_module.log('lr_reduction', new_lr, on_epoch=True)
+                pl_module.log('lr_reduction_epoch', trainer.current_epoch, on_epoch=True)
 
 all_callbacks = {
     "model_pbatch": GradNormCallback(),
@@ -296,4 +359,5 @@ all_callbacks = {
     "eigen_track": EigenValTracking_pbatch(),
     "cer" : CERCallback(),
     "freeze_params": FreezeParamsCallback,
+    "validation_lr_reduction": ValidationLRReductionCallback,
 }
