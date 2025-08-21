@@ -93,7 +93,8 @@ try:
         z = _c2r(z)
         w = _c2r(w)
 
-        r = 2*cauchy_mult(v, z, w, backend='GPU')
+        backend = 'GPU' if device == 'cuda' else 'CPU'
+        r = 2*cauchy_mult(v, z, w, backend=backend)
         return _r2c(r)
 
     def log_vandermonde_keops(v, x, L):
@@ -115,7 +116,8 @@ try:
         x = _c2r(x)
         l = _c2r(l)
 
-        r = vandermonde_mult(v, x, l, backend='GPU')
+        backend = 'GPU' if device == 'cuda' else 'CPU'
+        r = vandermonde_mult(v, x, l, backend=backend)
         return 2*_r2c(r).real
 
     def log_vandermonde_transpose_keops(u, v, x, L):
