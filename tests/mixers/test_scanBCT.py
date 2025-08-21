@@ -318,11 +318,12 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims, reverse)
     assert torch.allclose(seq_gates_grad, vmap2_gates_grad, atol=atol), print(f"Vmap forward 2 gate gradients {vmap2_gates_grad} do not match standard {seq_gates_grad}")
     assert torch.allclose(seq_tokens_grad, vmap2_tokens_grad, atol=atol), print(f"Vmap forward 2 token gradients {vmap2_tokens_grad} do not match standard {seq_tokens_grad}")
 
-    if not outputs_seq_token.is_cuda:
-        pytest.skip("CUDA not available, skipping triton test")
-
     # -------------------------------------
     # Vmap triton scan_BTC_complex:
+    # Skip Triton tests if CUDA is not available
+    if not torch.cuda.is_available():
+        pytest.skip("Triton tests require CUDA to be available")
+
     gates.grad = None
     tokens.grad = None
     vmap_forward3 = torch.vmap(lambda g, t: scan_bct_complex(g,t, reverse), in_dims=in_dims, out_dims=out_dims)

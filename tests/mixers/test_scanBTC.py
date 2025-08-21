@@ -110,6 +110,10 @@ def test_scan_functions(only_real, complexity, batch, dim, seq_len, reverse):
     tokens.grad = None  # Reset gradients
     gates.grad = None
 
+    # Skip Triton tests if CUDA is not available
+    if not torch.cuda.is_available():
+        pytest.skip("Triton tests require CUDA to be available")
+
     new_g, new_t = scan_btc_complex(gates, tokens, reverse)
 
     # Compute a loss
@@ -231,6 +235,10 @@ def test_scan_vmap(only_real, complexity, batch, dim, seq_len, in_dims, reverse)
 
     # -------------------------------------
     # Vmap triton scan_BTC_complex:
+    # Skip Triton tests if CUDA is not available
+    if not torch.cuda.is_available():
+        pytest.skip("Triton tests require CUDA to be available")
+
     gates.grad = None
     tokens.grad = None
     vmap_forward3 = torch.vmap(lambda g, t: scan_btc_complex(g, t, reverse), in_dims=in_dims, out_dims=out_dims)
