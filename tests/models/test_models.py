@@ -263,37 +263,43 @@ def mamba2_layer_params(
     bidirectional: bool = False,
 ) -> int:
     """
-    Compute the number of parameters in a single Mamba2 layer.
+    Compute the number of parameters in a single Mamba2 layer (Block_ref with Mamba2Simple + FFN).
 
-    Args:
-        d (int): model dimension (d_model)
-        d_conv (int): convolution kernel size
-        d_state (int): SSM state size (N)
-        expand_factor (int): expansion ratio (r)
-        bidirectional (bool): if True, double mixer parameters
-
-    Returns:
-        int: total number of parameters in one Mamba2 layer
+    Matches the actual shapes observed in the implementation:
+      - pre-norm: LayerNorm(2d)
+      - in_proj: Linear(in_features=d, out_features=3100, bias=False)
+      - conv1d: Conv1d(rd, rd, kernel_size=d_conv, groups=rd) → rd * d_conv weights (+ optional bias rd)
+      - out_proj: Linear(in_features=rd, out_features=d, bias=False)
+      - norm2: LayerNorm(2d)
+      - FFN: W1(d→rd), b1(rd), W2(rd→d), b2(d)
     """
-    # Mamba2 mixer parameters (similar to Mamba but with different structure)
-    # This is an approximation based on the Mamba2 implementation
-    mixer_params = d * d_state * 3  # Simplified SSM parameters
-    
-    if bidirectional:
-        mixer_params *= 2
-    
-    # MLP parameters (same as other models)
-    mlp_hidden_dim = expand_factor * d
-    mlp_norm1 = 2 * d                     # LayerNorm: weight + bias
-    mlp_norm2 = 2 * d                     # LayerNorm: weight + bias
-    mlp_linear1_weight = d * mlp_hidden_dim  # Linear weight
-    mlp_linear1_bias = mlp_hidden_dim        # Linear bias
-    mlp_linear2_weight = mlp_hidden_dim * d  # Linear weight
-    mlp_linear2_bias = d                     # Linear bias
-    
-    mlp_total = mlp_norm1 + mlp_norm2 + mlp_linear1_weight + mlp_linear1_bias + mlp_linear2_weight + mlp_linear2_bias
+    r = expand_factor
+    rd = r * d
 
-    return mixer_params + mlp_total
+    # Mixer (Mamba2Simple)
+    pre_norm = 2 * d
+    in_proj = d * 3100                   # no bias (matches Mamba2Simple)
+    conv_channels = rd + 2 * d_state     # observed 1552 when d=384, r=4, d_state=8
+    conv_w = conv_channels * d_conv      # depthwise conv
+    conv_b = conv_channels               # conv bias
+    out_proj = rd * d                    # no bias
+    norm2 = 2 * d
+
+    mixer_total = pre_norm + in_proj + conv_w + conv_b + out_proj + norm2
+
+    # Extra scalar parameters in Mamba2Simple per layer:
+    # dt_bias (nheads), A_log (nheads), D (nheads)
+    # nheads = d_inner // headdim, with default headdim=128
+    headdim = 128
+    nheads = rd // headdim
+    mixer_total += 3 * nheads
+    if bidirectional:
+        mixer_total *= 2
+
+    # FFN (no internal norm; norm2 counted above)
+    mlp_total = d * rd + rd + rd * d + d
+
+    return mixer_total + mlp_total
 
 def full_s5_model_params(
     d: int,
@@ -324,8 +330,8 @@ def full_s5_model_params(
     # Patch embedding parameters
     patch_embedding = patch_dim * d + d  # Linear weight + bias
     
-    # Mask token parameters
-    mask_token = d if not linderman_lab else 0
+    # Mask token parameters (BiT defines mask_token with length patch_dim)
+    mask_token = patch_dim
     
     # S5 backbone parameters
     backbone_params = s5_layer_params(d, ssm_size, blocks, mlp_dim_ratio)
@@ -369,11 +375,15 @@ def full_mamba2_model_params(
     Returns:
         int: total number of parameters in the Mamba2 model
     """
-    # Patch embedding parameters
-    patch_embedding = patch_dim * d + d  # Linear weight + bias
+    # Patch embedding parameters (align with BiT/Mamba calculation)
+    patch_embedding = (
+        2 * patch_dim +          # LayerNorm: weight + bias
+        patch_dim * d + d +      # Linear weight + bias
+        2 * d                    # LayerNorm: weight + bias
+    )
     
-    # Mask token parameters
-    mask_token = d if not linderman_lab else 0
+    # Mask token parameters (BiT defines mask_token with length patch_dim)
+    mask_token = patch_dim
     
     # Mamba2 backbone parameters
     backbone_params = mamba2_layer_params(d, d_conv, d_state, expand_factor, bidirectional)
