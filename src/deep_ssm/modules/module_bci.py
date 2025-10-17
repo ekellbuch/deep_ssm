@@ -61,6 +61,9 @@ class BCIDecoder(L.LightningModule):
           optimizer = torch.optim.Adam(self.parameters(), **self.args.optimizer_cfg.configs)
       elif self.args.optimizer_cfg.type == "adamw":
           optimizer = torch.optim.AdamW(self.parameters(), **self.args.optimizer_cfg.configs)
+      elif self.args.optimizer_cfg.type == "soap":
+          from heavyball import SOAP
+          optimizer = SOAP(self.parameters(), **self.args.optimizer_cfg.configs)
       else:
           raise NotImplementedError(f"Optimizer {self.args.optimizer_cfg.type} not implemented")
 

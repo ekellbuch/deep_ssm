@@ -51,7 +51,7 @@ module_cfg:
 
 model_cfg:
   type: "bci_bit_unified"         # Unified BiT decoder with configurable mixer layers
-  resume_ckpt_path:               # Path to checkpoint for loading weights (empty = train from scratch)
+  resume_ckpt_path: "/Users/ekb/Downloads/epoch=244-step=23275.ckpt" # Path to checkpoint for loading weights (empty = train from scratch)
   configs:
     n_classes: 40                 # Number of output classes (phonemes/characters to predict)
     
@@ -92,7 +92,7 @@ tokenizer_cfg:
 # ============================================================================
 
 mixer_cfg:
-  type: "mamba"                   # Type of mixer layer: mamba, attention, s5, mamba2
+  type: "s5"                   # Type of mixer layer: mamba, attention, s5, mamba2
   configs: ${oc.select:${mixer_cfg.type}_config,{}}  # Dynamically select config based on type
 
 # Mamba mixer configuration
@@ -152,11 +152,19 @@ mamba2_config:
 # ============================================================================
 
 optimizer_cfg:
-  type: "adamw"                   # AdamW optimizer with weight decay
-  configs:
-    lr: 0.001                     # Initial learning rate
-    betas: [0.9, 0.999]          # Adam momentum parameters [beta1, beta2]
-    weight_decay: 1e-5            # L2 weight decay for regularization
+  type: "adamw"                    # SOAP optimizer from heavyball package
+  configs: ${oc.select:${optimizer_cfg.type}_config,{}}  # Dynamically select config based on type
+
+adamw_config:
+  lr: 0.001                     # Initial learning rate
+  betas: [0.9, 0.999]          # Momentum parameters [beta1, beta2]
+  weight_decay: 1e-5            # L2 weight decay for regularization
+
+soap_config:
+  lr: 0.001                     # Initial learning rate
+  betas: [0.9, 0.999]          # Momentum parameters [beta1, beta2]
+  weight_decay: 1e-5            # L2 weight decay for regularization
+  shampoo_beta: 0.999          # Shampoo beta parameter for preconditioner momentum
 
 # ============================================================================
 # LEARNING RATE SCHEDULER CONFIGURATION
@@ -203,16 +211,21 @@ trainer_cfg:
   log_every_n_steps: 100
   gradient_clip_val: 0
   gradient_clip_algorithm: "norm"
-  limit_test_batches: 
-  limit_train_batches: 
-  limit_val_batches: 
-  
+  limit_test_batches:
+  limit_train_batches:
+  limit_val_batches:
+  default_root_dir: "${oc.env:DEEP_SSM_DATA}/SpeechBCI/outputs"
+
 
 checkpoint_cfg:
   every_n_train_steps: 1000
+  save_last: true
+  save_top_k: 5
+
 
 eval_cfg:
   eval_only: 0 # set checkpoint path from which to resume job (reloads parameters)
+  ckpt_path:
 
 hydra:
   run:

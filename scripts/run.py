@@ -34,8 +34,28 @@ def print_memory_usage(device="cuda"):
         print("No GPU available or specified device is not supported.")
 
 
+import re
+def remap_patch_to_emb_keys(state_dict):
+    """
+    Shifts patch_to_emb layer indices by +1 to fix the mismatch:
+      patch_to_emb.0.* → patch_to_emb.1.*
+      patch_to_emb.1.* → patch_to_emb.2.*
+      patch_to_emb.2.* → patch_to_emb.3.*
+    """
+    pattern = re.compile(r"(patch_to_emb)\.(\d+)\.")
+    new_state = {}
+    for k, v in state_dict.items():
+        m = pattern.search(k)
+        if m:
+            old_idx = int(m.group(2))
+            new_k = pattern.sub(f"{m.group(1)}.{old_idx + 1}.", k)
+            new_state[new_k] = v
+        else:
+            new_state[k] = v
+    return new_state
 
-@hydra.main(config_path="../configs/bci", config_name="baseline_gru", version_base=None)
+
+@hydra.main(config_path="../configs/bci", config_name="baseline_vit_mixer", version_base=None)
 def main(args: DictConfig) -> None:
     train(args)
     return
@@ -90,10 +110,26 @@ def train(args):
     modelito = model_class(**common_kwargs)
     
     if args.model_cfg.get("resume_ckpt_path", None):
-      # Do not resume training simply load checkpoints
-      weights = torch.load(args.model_cfg.resume_ckpt_path)['state_dict']
-      weights = {k.replace('model.', ''): v for k, v in weights.items()}
-      modelito.load_state_dict(weights)
+      ckpt = torch.load(args.model_cfg.resume_ckpt_path, map_location=DEVICE, weights_only=False)
+      state_dict = ckpt.get("state_dict", ckpt)
+      
+      # --- Auto-handle prefix mismatches ---
+      first_key = next(iter(state_dict.keys()))
+      if first_key.startswith("model."):
+          # Case 1: checkpoint has prefix but model doesn’t
+          state_dict = {k.replace("model.", "", 1): v for k, v in state_dict.items()}
+      elif not any(k.startswith("model.") for k in state_dict.keys()):
+          # Case 2: model expects prefix but checkpoint doesn’t
+          state_dict = {f"model.{k}": v for k, v in state_dict.items()}
+
+      if args.model_cfg.type == "bci_bit":
+        state_dict = remap_patch_to_emb_keys(state_dict)
+    
+      modelito.load_state_dict(state_dict)
+      #ckpt_path = args.model_cfg.resume_ckpt_path
+    #else:
+    #  ckpt_path = None
+
 
     # print model summary
     print(modelito)
